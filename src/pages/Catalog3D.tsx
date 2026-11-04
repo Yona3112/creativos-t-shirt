@@ -803,7 +803,7 @@ export function CustomerCatalogView({
               <span className="rounded-md bg-slate-950 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
                 Modo Prueba
               </span>
-              <span>Así ven tus clientes la Tienda Boutique Ranchera (#tienda)</span>
+              <span>Así ven tus clientes la Tienda (#tienda)</span>
             </div>
             <button
               type="button"
@@ -816,13 +816,13 @@ export function CustomerCatalogView({
         </div>
       )}
 
-      {/* CABECERA BOUTIQUE RANCHERA EXCLUSIVA DE LA TIENDA DEL CLIENTE */}
+      {/* CABECERA EXCLUSIVA DE LA TIENDA DEL CLIENTE */}
       <header className="border-b border-amber-500/30 bg-gradient-to-r from-[#2b1407] via-[#3e1d0a] to-[#1f0e05] px-4 py-4 shadow-lg">
         <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-amber-300 ring-1 ring-amber-400/40">
-                🤠 Boutique Oficial 3D
+                👕 Catálogo Oficial 3D
               </span>
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300 ring-1 ring-emerald-400/30">
                 <span

@@ -12,7 +12,6 @@ const BOUTIQUE_THEMES: Record<
     stageClass: string;
     galleryClass: string;
     auraColor: string;
-    badgeText: string;
   }
 > = {
   ranchero: {
@@ -21,8 +20,7 @@ const BOUTIQUE_THEMES: Record<
       'border-2 border-amber-500/45 bg-gradient-to-b from-[#2b1407] via-[#4d2611] to-[#1c0c04] text-amber-50 shadow-[inset_0_0_60px_rgba(245,158,11,0.18)]',
     galleryClass:
       'border-2 border-amber-500/40 bg-gradient-to-br from-[#2b1407] via-[#3d1e0d] to-[#1c0c04] text-amber-50',
-    auraColor: '#f59e0b55',
-    badgeText: '🤠 Ambiente Ranchero · Edición Western'
+    auraColor: '#f59e0b55'
   },
   establo: {
     label: '🪵 Establo',
@@ -30,8 +28,7 @@ const BOUTIQUE_THEMES: Record<
       'border-2 border-yellow-700/50 bg-[radial-gradient(ellipse_at_top,#5c3a21_0%,#2e1a0c_65%,#170c05_100%)] text-amber-50',
     galleryClass:
       'border-2 border-yellow-700/45 bg-gradient-to-br from-[#362010] via-[#261509] to-[#170c05] text-amber-50',
-    auraColor: '#d9770655',
-    badgeText: '🪵 Ambiente Talabartería & Establo'
+    auraColor: '#d9770655'
   },
   nocturno: {
     label: '✨ Nocturno',
@@ -39,8 +36,7 @@ const BOUTIQUE_THEMES: Record<
       'border border-slate-200/30 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-950 text-white',
     galleryClass:
       'border-2 border-indigo-950/30 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white',
-    auraColor: '#38bdf833',
-    badgeText: '✨ Probador Boutique Nocturno'
+    auraColor: '#38bdf833'
   },
   arena: {
     label: '☀️ Rodeo Arena',
@@ -48,8 +44,7 @@ const BOUTIQUE_THEMES: Record<
       'border-2 border-amber-400/50 bg-gradient-to-b from-[#59371c] via-[#784b27] to-[#361f0d] text-amber-50',
     galleryClass:
       'border-2 border-amber-400/40 bg-gradient-to-br from-[#4a2c15] via-[#361f0d] to-[#241307] text-amber-50',
-    auraColor: '#fbbf2466',
-    badgeText: '☀️ Ambiente Sol de Rodeo'
+    auraColor: '#fbbf2466'
   }
 };
 
@@ -672,11 +667,11 @@ export function InteractiveShirt3D({
           </div>
         </div>
 
-        {/* ESCENARIO SHOWROOM DEL CLIENTE CON FONDO RANCHERO PERSONALIZABLE */}
+        {/* ESCENARIO SHOWROOM DEL CLIENTE */}
         <div className={`relative overflow-hidden rounded-3xl p-4 shadow-inner transition-colors duration-500 ${themeStyle.stageClass}`}>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-black/35 px-3 py-1 text-[11px] font-extrabold text-amber-300 ring-1 ring-amber-400/30 backdrop-blur-sm">
-              {themeStyle.badgeText}
+              👕 {brandName || 'Camisa'} · Vista 360°
             </span>
             {stockBadge && (
               <span
