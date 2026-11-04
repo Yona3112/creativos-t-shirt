@@ -56,13 +56,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         if (!item.photoId) continue;
         const data = await fetchSharedPhoto(item.photoId);
         if (data) {
-          try {
-            // Garantizar que cualquier diseño previamente guardado limpie huecos internos (A, B, O) y bordes negros
-            const cleaned = await applyBackgroundRemoval(data, true, 36);
-            next[item.photoId] = cleaned;
-          } catch {
-            next[item.photoId] = data;
-          }
+          next[item.photoId] = data;
         }
       }
       if (!cancelled) {
@@ -119,8 +113,8 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
   ): Promise<number> => {
     const list = Array.from(files);
     if (!list.length) return 0;
-    const shouldRemove = opts?.removeBg ?? true;
-    const tol = opts?.tolerance ?? 34;
+    const shouldRemove = opts?.removeBg ?? false;
+    const tol = opts?.tolerance ?? 32;
     let added = 0;
 
     for (const file of list) {

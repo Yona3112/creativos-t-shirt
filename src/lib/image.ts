@@ -10,8 +10,8 @@ export async function compressImage(
   file: File,
   maxSide = 1400,
   quality = 0.92,
-  removeBg = true,
-  tolerance = 36
+  removeBg = false,
+  tolerance = 32
 ): Promise<string> {
   const url = URL.createObjectURL(file);
   try {
@@ -301,50 +301,43 @@ function floodFillExteriorBackground(
     tryPush(cx, cy - 1);
   }
 
-  // Paso B: Limpiar también los huecos de fondo encerrados (centro de letras A, B, O, escudos y poros grunge)
-  // y aplicar Descontaminación de Color (Un-Matting) en todos los bordes para eliminar el halo negro
-  const innerHoleTol = bgIsDark ? tol * 1.18 : tol * 0.92;
-  const unmatteRange = bgIsDark ? tol * 2.15 + 28 : tol * 1.75 + 22;
+  // Paso B: Eliminar ÚNICAMENTE el fondo exterior conectado (visited === 1)
+  // y suavizar únicamente los píxeles del borde que tocan directamente al fondo exterior,
+  // respetando al 100% toda la tinta negra, sombras y colores internos del diseño original.
+  const edgeRange = tol * 1.45 + 14;
 
-  for (let i = 0; i < totalPixels; i++) {
-    const p4 = i * 4;
-    const a = d[p4 + 3];
-    if (a === 0) continue;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const p4 = i * 4;
+      const a = d[p4 + 3];
+      if (a === 0) continue;
 
-    if (visited[i] === 1) {
-      d[p4 + 3] = 0;
-      continue;
-    }
-
-    const r = d[p4];
-    const g = d[p4 + 1];
-    const b = d[p4 + 2];
-    const dist = colorDist(r, g, b);
-
-    // Si es un hueco interno del mismo color del fondo (ej. el centro negro de la A, B, O o poros del diseño grunge)
-    if (dist <= innerHoleTol) {
-      d[p4 + 3] = 0;
-      continue;
-    }
-
-    // Zona de transición / borde suavizado (Alpha Un-Matting: quita el tinte negro del borde de las letras y rayas)
-    if (dist < unmatteRange) {
-      const normAlpha = Math.max(
-        0,
-        Math.min(1, (dist - innerHoleTol) / Math.max(1, unmatteRange - innerHoleTol))
-      );
-      // Curva suave para que los bordes queden nítidos y sin residuos oscuros
-      const cleanAlpha = normAlpha * normAlpha * (3 - 2 * normAlpha);
-      const newA = Math.round(a * cleanAlpha);
-
-      if (newA < 18) {
+      if (visited[i] === 1) {
         d[p4 + 3] = 0;
-      } else {
-        const af = Math.max(0.18, cleanAlpha);
-        // Descontaminar matemáticamente el color de fondo (Remove Matte)
-        const cleanR = Math.round(Math.max(0, Math.min(255, (r - (1 - af) * bgR) / af)));
-        const cleanG = Math.round(Math.max(0, Math.min(255, (g - (1 - af) * bgG) / af)));
-        const cleanB = Math.round(Math.max(0, Math.min(255, (b - (1 - af) * bgB) / af)));
+        continue;
+      }
+
+      // Solo desmanchar si este píxel toca directamente el fondo exterior eliminado
+      const touchesExterior =
+        (x > 0 && visited[i - 1] === 1) ||
+        (x + 1 < w && visited[i + 1] === 1) ||
+        (y > 0 && visited[i - w] === 1) ||
+        (y + 1 < h && visited[i + w] === 1);
+
+      if (!touchesExterior) continue;
+
+      const r = d[p4];
+      const g = d[p4 + 1];
+      const b = d[p4 + 2];
+      const dist = colorDist(r, g, b);
+
+      if (dist < edgeRange) {
+        const cleanAlpha = Math.max(0.15, Math.min(1, dist / Math.max(1, edgeRange)));
+        const newA = Math.round(a * cleanAlpha);
+        const cleanR = Math.round(Math.max(0, Math.min(255, (r - (1 - cleanAlpha) * bgR) / cleanAlpha)));
+        const cleanG = Math.round(Math.max(0, Math.min(255, (g - (1 - cleanAlpha) * bgG) / cleanAlpha)));
+        const cleanB = Math.round(Math.max(0, Math.min(255, (b - (1 - cleanAlpha) * bgB) / cleanAlpha)));
         d[p4] = cleanR;
         d[p4 + 1] = cleanG;
         d[p4 + 2] = cleanB;

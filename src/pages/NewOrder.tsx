@@ -40,7 +40,7 @@ function emptyDraft(): Draft {
     lines: [],
     photo: null,
     rawPhoto: null,
-    removeBg: true,
+    removeBg: false,
     placement: 'center',
     designScale: 2.75,
     designOffsetX: 0,
@@ -166,9 +166,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
     try {
-      const shouldRemoveBg = draft.removeBg ?? true;
+      const shouldRemoveBg = draft.removeBg ?? false;
       const raw = await compressImage(f, 1400, 0.92, false);
-      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 34) : raw;
+      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 32) : raw;
       set({
         rawPhoto: raw,
         photo: processed,
@@ -316,7 +316,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             }}
             onUploadFile={(file) => void onPhoto(file)}
             onClearDesign={() => set({ photo: null, rawPhoto: null })}
-            removeBg={draft.removeBg ?? true}
+            removeBg={draft.removeBg ?? false}
             onToggleRemoveBg={(next) => void toggleRemoveBg(next)}
             onAiRemoveBg={() => void handleAiBgNewOrder()}
             onUpscale4K={() => void handleUpscale4KNewOrder()}
@@ -362,8 +362,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             onUploadCatalogFiles={(files) => {
               setProcMsg('Agregando diseños al catálogo...');
               void uploadFilesToCatalog(files, {
-                removeBg: draft.removeBg ?? true,
-                tolerance: 34,
+                removeBg: draft.removeBg ?? false,
+                tolerance: 32,
                 placement: draft.placement || 'center'
               })
                 .then((n) => {

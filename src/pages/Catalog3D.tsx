@@ -87,8 +87,8 @@ export default function Catalog3D() {
   const [enabledColorIds, setEnabledColorIds] = useState<string[]>(() => colors.map((c) => c.id));
   const [rawDesignUrl, setRawDesignUrl] = useState<string | null>(null);
   const [designUrl, setDesignUrl] = useState<string | null>(null);
-  const [removeBg, setRemoveBg] = useState(true);
-  const [bgTolerance, setBgTolerance] = useState(34);
+  const [removeBg, setRemoveBg] = useState(false);
+  const [bgTolerance, setBgTolerance] = useState(32);
   const [processingMsg, setProcessingMsg] = useState<string | null>(null);
   const [photoId, setPhotoId] = useState<string | null>(null);
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);

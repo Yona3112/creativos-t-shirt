@@ -568,7 +568,7 @@ export function InteractiveShirt3D({
         <input
           ref={uploadInputRef}
           type="file"
-          accept="image/*"
+          accept="image/png,image/*"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -917,7 +917,7 @@ export function InteractiveShirt3D({
             {onUploadFile && (
               <div className="w-full border-b border-slate-100 pb-2">
                 <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                  Imagen / Diseño
+                  Diseño (PNG sin fondo)
                 </div>
                 <div className="flex items-center gap-1">
                   <button
@@ -926,7 +926,7 @@ export function InteractiveShirt3D({
                     className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
                   >
                     <span>📸</span>
-                    <span>{designUrl ? 'Cambiar Imagen' : 'Subir Imagen'}</span>
+                    <span>{designUrl ? 'Cambiar PNG' : 'Subir PNG'}</span>
                   </button>
                   {designUrl && onClearDesign && (
                     <button
