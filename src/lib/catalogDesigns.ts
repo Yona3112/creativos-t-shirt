@@ -6,13 +6,9 @@ import { fetchSharedPhoto, uploadPhotoNow } from './sync';
 import { applyBackgroundRemoval, compressImage } from './image';
 import { uid } from './ids';
 import type { CatalogQuickDesign, DecalPlacement } from '../components/Shirt';
+import type { SharedCatalogDesignRef } from './publicCatalog';
 
-export interface SharedCatalogDesignRef {
-  id: string;
-  name: string;
-  photoId: string;
-  placement: DecalPlacement;
-}
+export type { SharedCatalogDesignRef };
 
 export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
   const state = useAppState();
@@ -37,6 +33,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         map.set(ref.id, {
           id: ref.id,
           name: ref.name,
+          code: ref.code,
           photoId: ref.photoId,
           placement: ref.placement || 'back',
           clientVisible: true,
@@ -74,6 +71,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       rawList.map((d) => ({
         id: d.id,
         name: d.name,
+        code: d.code,
         photoId: d.photoId,
         imageUrl: urlMap[d.photoId] || null,
         placement: d.placement || 'back',
@@ -90,6 +88,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
   const saveCurrentToCatalog = async (opts: {
     dataUrl: string;
     name?: string;
+    code?: string;
     placement?: DecalPlacement;
     existingPhotoId?: string | null;
   }) => {
@@ -99,8 +98,15 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     notifyPhotos();
     setUrlMap((prev) => ({ ...prev, [pId]: opts.dataUrl }));
     const count = (state.catalogDesigns || []).filter((x) => !x.deleted).length + 1;
+    const defaultName = opts.name?.trim() || `Diseño #${count}`;
+    const defaultCode = opts.code?.trim().toUpperCase() || `D-${String(count).padStart(3, '0')}`;
+    const promptedName = window.prompt('Nombre del diseño (para identificar en pedidos y reportes):', defaultName);
+    const finalName = promptedName !== null && promptedName.trim() ? promptedName.trim() : defaultName;
+    const promptedCode = window.prompt('Código del diseño (ej. D-001, TORO-01):', defaultCode);
+    const finalCode = promptedCode !== null && promptedCode.trim() ? promptedCode.trim().toUpperCase() : defaultCode;
     return addCatalogDesign({
-      name: opts.name?.trim() || `Diseño #${count}`,
+      name: finalName,
+      code: finalCode,
       photoId: pId,
       clientVisible: true,
       placement: opts.placement || 'back'
@@ -146,6 +152,8 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     uploadFilesToCatalog,
     toggleVisible: (id: string, nextVisible: boolean) =>
       updateCatalogDesign(id, { clientVisible: nextVisible }),
+    renameDesign: (id: string, name: string, code: string) =>
+      updateCatalogDesign(id, { name: name.trim() || 'Diseño', code: code.trim().toUpperCase() }),
     deleteDesign: (id: string) => deleteCatalogDesign(id)
   };
 }

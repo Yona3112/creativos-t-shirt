@@ -5,6 +5,7 @@ import { updateSettings } from '../lib/actions';
 import { getConfig, pairingLink, saveConfig } from '../lib/sync';
 import { activeBrands, brandColors, skuOf, vkey } from '../lib/inventory';
 import { copyText, downloadText, toCSV } from '../lib/csv';
+import { authenticateBoxful, getBoxfulConfig, saveBoxfulConfig, type BoxfulConfig } from '../lib/boxful';
 import { dayKey } from '../lib/time';
 import { MoneyInput, toast } from '../components/ui';
 
@@ -19,9 +20,48 @@ export default function SettingsPage() {
   const [supaKey, setSupaKey] = useState(initialCfg?.key || '');
   const [testing, setTesting] = useState(false);
 
+  const initialBoxful = getBoxfulConfig();
+  const [bxEnv, setBxEnv] = useState<'prod' | 'dev'>(initialBoxful?.env || 'prod');
+  const [bxEmail, setBxEmail] = useState(initialBoxful?.email || '');
+  const [bxPass, setBxPass] = useState('');
+  const [bxToken, setBxToken] = useState(initialBoxful?.accessToken || '');
+  const [bxCourier, setBxCourier] = useState(initialBoxful?.courierId || '');
+  const [testingBoxful, setTestingBoxful] = useState(false);
+
   const [newSize, setNewSize] = useState('');
   const [newCarrier, setNewCarrier] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleSaveBoxful = async () => {
+    const cfg: BoxfulConfig = {
+      env: bxEnv,
+      email: bxEmail.trim(),
+      password: bxPass.trim() || undefined,
+      accessToken: bxToken.trim() || undefined,
+      courierId: bxCourier.trim() || undefined
+    };
+    if (!cfg.email && !cfg.accessToken) {
+      saveBoxfulConfig(null);
+      return toast('Credenciales de Boxful eliminadas de este dispositivo', 'info');
+    }
+    setTestingBoxful(true);
+    try {
+      if (cfg.email && cfg.password) {
+        const token = await authenticateBoxful(cfg);
+        setBxToken(token);
+        setBxPass('');
+        toast('📦 Conectado a Boxful API correctamente (Token guardado localmente)');
+      } else {
+        saveBoxfulConfig(cfg);
+        toast('📦 Configuración de Boxful guardada en este dispositivo');
+      }
+    } catch (e) {
+      saveBoxfulConfig(cfg);
+      toast((e as Error).message, 'error');
+    } finally {
+      setTestingBoxful(false);
+    }
+  };
 
   const connectSupabase = async () => {
     const url = supaUrl.trim().replace(/\/+$/, '');
@@ -297,6 +337,119 @@ export default function SettingsPage() {
             + Agregar
           </button>
         </div>
+      </section>
+
+      {/* Integración Boxful API (Honduras / El Salvador) */}
+      <section className="card space-y-3 border-2 border-indigo-200">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="section-title mb-0">📦 Integración Boxful API (Guías Automáticas)</h2>
+            <p className="text-xs text-slate-500">
+              Conecta tu cuenta de Boxful (`api.goboxful.com`) para generar guías en 1 clic desde Pedidos. Las credenciales se guardan solo en este dispositivo.
+            </p>
+          </div>
+          <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-extrabold text-indigo-900">
+            {bxToken || bxEmail ? 'CONFIGURADO' : 'OPCIONAL'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">Entorno Boxful</label>
+            <select
+              className="input"
+              value={bxEnv}
+              onChange={(e) => setBxEnv(e.target.value as 'prod' | 'dev')}
+            >
+              <option value="prod">Producción (api.goboxful.com)</option>
+              <option value="dev">Sandbox / Pruebas (devapi.goboxful.com)</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">ID de Paquetería (Opcional)</label>
+            <input
+              className="input"
+              placeholder="Automático (mejor tarifa)"
+              value={bxCourier}
+              onChange={(e) => setBxCourier(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Correo de cuenta Boxful</label>
+            <input
+              type="email"
+              className="input"
+              placeholder="tucorreo@negocio.com"
+              value={bxEmail}
+              onChange={(e) => setBxEmail(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className="label">Contraseña Boxful (para obtener Token)</label>
+            <input
+              type="password"
+              className="input"
+              placeholder="••••••••"
+              value={bxPass}
+              onChange={(e) => setBxPass(e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">O pega directamente tu Bearer Access Token de Boxful</label>
+          <input
+            className="input font-mono text-xs"
+            placeholder="eyJhbGciOi..."
+            value={bxToken}
+            onChange={(e) => setBxToken(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-primary bg-indigo-600 hover:bg-indigo-700"
+            disabled={testingBoxful}
+            onClick={() => void handleSaveBoxful()}
+          >
+            {testingBoxful ? 'Autenticando con Boxful...' : '📦 Guardar / Conectar Boxful'}
+          </button>
+          {(bxEmail || bxToken) && (
+            <button
+              type="button"
+              className="btn-ghost text-xs text-red-600"
+              onClick={() => {
+                setBxEmail('');
+                setBxPass('');
+                setBxToken('');
+                setBxCourier('');
+                saveBoxfulConfig(null);
+                toast('Conexión Boxful desconectada');
+              }}
+            >
+              Desconectar Boxful
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* Auditoría de Seguridad y Privacidad */}
+      <section className="card space-y-2 border border-emerald-200 bg-emerald-50/40">
+        <div className="flex items-center justify-between">
+          <h2 className="section-title mb-0 text-emerald-950">🛡️ Blindaje de Seguridad y Privacidad Activo</h2>
+          <span className="rounded-full bg-emerald-600 px-2.5 py-0.5 text-[11px] font-extrabold text-white">
+            PROTEGIDO
+          </span>
+        </div>
+        <ul className="space-y-1 text-xs font-medium text-slate-700">
+          <li>• <strong>Aislamiento de Tienda Pública (`#tienda`):</strong> Los clientes que abren el catálogo 3D nunca descargan la base de datos de pedidos, teléfonos, direcciones ni costos (`app_state_sync`); solo reciben la vitrina pública (`cat_live`).</li>
+          <li>• <strong>Fondo Boutique bloqueado para clientes:</strong> Solo el administrador puede cambiar el ambiente (`🤠 Ranchero`, `🪵 Establo`, `✨ Nocturno`, `☀️ Rodeo Arena`).</li>
+          <li>• <strong>Credenciales locales:</strong> Las llaves de Boxful y emparejamiento se guardan únicamente en este dispositivo y jamás se exponen en enlaces públicos.</li>
+        </ul>
       </section>
 
       {/* Plantillas de WhatsApp */}

@@ -1,5 +1,5 @@
-import type { AppState, Entity, Movement, Order, Settings } from './types';
-import { DEFAULT_SETTINGS, createInitialState } from './seed';
+import type { AppState, CatalogDesign, Color, Entity, Movement, Order, Settings } from './types';
+import { DEFAULT_SETTINGS, LEGACY_COLOR_HEX, createInitialState } from './seed';
 
 function newer<T extends Entity>(a: T, b: T): T {
   if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt ? a : b;
@@ -48,18 +48,56 @@ function mergeSettings(a: Settings, b: Settings): Settings {
 export function normalize(s: Partial<AppState> | null | undefined): AppState {
   const base = createInitialState();
   if (!s || typeof s !== 'object') return base;
+  const settings = upgradeSettings({ ...DEFAULT_SETTINGS, ...(s.settings || {}) });
   return {
     version: 1,
-    settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) },
+    settings,
     brands: mergeEntities(base.brands, Array.isArray(s.brands) ? s.brands : []),
-    colors: mergeEntities(base.colors, Array.isArray(s.colors) ? s.colors : []),
+    colors: upgradeColors(mergeEntities(base.colors, Array.isArray(s.colors) ? s.colors : [])),
     customers: Array.isArray(s.customers) ? s.customers : [],
     orders: Array.isArray(s.orders) ? s.orders : [],
     movements: Array.isArray(s.movements) ? s.movements : [],
-    catalogDesigns: Array.isArray(s.catalogDesigns) ? s.catalogDesigns : [],
+    catalogDesigns: assignDesignCodes(Array.isArray(s.catalogDesigns) ? s.catalogDesigns : []),
     _by: s._by,
     _at: s._at
   };
+}
+
+/** Reemplaza los tonos genéricos anteriores por colores reales de tela (determinista). */
+function upgradeColors(colors: Color[]): Color[] {
+  return colors.map((c) => {
+    const next = LEGACY_COLOR_HEX[(c.hex || '').toUpperCase()];
+    return next ? { ...c, hex: next } : c;
+  });
+}
+
+/** Asegura opciones nuevas sin borrar las personalizadas del usuario. */
+function upgradeSettings(st: Settings): Settings {
+  let workTypes = Array.isArray(st.workTypes) ? st.workTypes : DEFAULT_SETTINGS.workTypes;
+  if (!workTypes.some((w) => w.trim().toLowerCase() === 'dtf espalda')) workTypes = ['DTF Espalda', ...workTypes];
+  let carriers = Array.isArray(st.carriers) ? st.carriers : DEFAULT_SETTINGS.carriers;
+  if (!carriers.some((c) => c.trim().toLowerCase() === 'boxful')) carriers = ['Boxful', ...carriers];
+  return { ...st, workTypes, carriers, storeTheme: st.storeTheme || 'ranchero' };
+}
+
+/** Asigna códigos D-001, D-002… a los diseños que aún no tienen (orden estable por fecha). */
+function assignDesignCodes(list: CatalogDesign[]): CatalogDesign[] {
+  if (list.every((d) => d.code)) return list;
+  const used = new Set(list.map((d) => d.code).filter(Boolean) as string[]);
+  let n = 0;
+  const nextCode = () => {
+    let code = '';
+    do {
+      n += 1;
+      code = `D-${String(n).padStart(3, '0')}`;
+    } while (used.has(code));
+    used.add(code);
+    return code;
+  };
+  const order = [...list].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+  const codes = new Map<string, string>();
+  for (const d of order) if (!d.code) codes.set(d.id, nextCode());
+  return list.map((d) => (d.code ? d : { ...d, code: codes.get(d.id) }));
 }
 
 export function mergeStates(local: AppState, remote: AppState): AppState {

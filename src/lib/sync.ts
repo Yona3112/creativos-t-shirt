@@ -3,6 +3,18 @@ import type { AppState, SyncStatus } from './types';
 import { contentSignature, mergeStates, normalize } from './merge';
 import { db } from './db';
 import { getDeviceId } from './ids';
+import { buildPublicCatalog, LIVE_CATALOG_KEY } from './publicCatalog';
+
+/**
+ * Devuelve true cuando la URL es de la Tienda Pública (#tienda / #catalogo).
+ * En modo cliente público NO se descarga ni sincroniza `app_state_sync` para proteger
+ * los datos privados de clientes, teléfonos, direcciones, pedidos y costos.
+ */
+export function isPublicStorefrontHash(): boolean {
+  const h = location.hash.replace(/^#\/?/, '').trim();
+  if (!h) return false;
+  return h === 'tienda' || h === 'catalogo' || h.startsWith('c=') || h.startsWith('catalogo=');
+}
 
 export interface SupaConfig {
   url: string;
@@ -250,6 +262,13 @@ export class SyncEngine {
     const payload: AppState = { ...state, _by: this.device, _at: Date.now() };
     const { error } = await this.client.from('app_state_sync').upsert({ id: 1, payload, updated_at: now });
     if (error) throw new Error(error.message);
+    // Publicar vitrina saneada (sin datos de clientes ni pedidos) para la Tienda 3D (#tienda)
+    try {
+      const publicSnap = JSON.stringify(buildPublicCatalog(state));
+      await this.client.from('design_photos').upsert({ id: LIVE_CATALOG_KEY, data: publicSnap });
+    } catch {
+      /* ignorar si falla vitrina secundaria */
+    }
     this.lastSeenAt = ts(now);
     this.setStatus(this.live ? 'live' : 'syncing');
   }
@@ -270,10 +289,10 @@ export class SyncEngine {
   private async fetchMissingPhotos(state: AppState) {
     if (!this.client || !navigator.onLine) return;
     const orderPhotos = state.orders
-      .filter((o) => o.photoId && !o.deleted)
+      .filter((o) => !o.deleted && (o.photoId || o.guidePhotoId))
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 60)
-      .map((o) => o.photoId as string);
+      .flatMap((o) => [o.photoId, o.guidePhotoId].filter(Boolean) as string[]);
     const catalogPhotos = (state.catalogDesigns || [])
       .filter((d) => d.photoId && !d.deleted)
       .map((d) => d.photoId);

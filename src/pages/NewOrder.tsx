@@ -13,6 +13,7 @@ import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
+import { sanitizeWebOrder } from '../lib/publicCatalog';
 import { WEB_ORDER_LATEST_KEY, readWebOrderImportHash, type CustomerWebOrderPayload } from './Catalog3D';
 
 const LS_CART = 'cgs_cart_v1';
@@ -27,6 +28,9 @@ interface Draft {
   designScale?: number;
   designOffsetX?: number;
   designOffsetY?: number;
+  designId?: string | null;
+  designName?: string | null;
+  designCode?: string | null;
   customerId: string | null;
   addressId: string | null;
   withShipping: boolean;
@@ -163,6 +167,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     saveCurrentToCatalog,
     uploadFilesToCatalog,
     toggleVisible,
+    renameDesign,
     deleteDesign
   } = useCatalogDesigns();
 
@@ -172,10 +177,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       const shouldRemoveBg = draft.removeBg ?? false;
       const raw = await compressImage(f, 1400, 0.92, false);
       const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 32) : raw;
+      const cleanFileName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
       set({
         rawPhoto: raw,
         photo: processed,
         removeBg: shouldRemoveBg,
+        designId: null,
+        designName: cleanFileName ? cleanFileName.slice(0, 32) : 'Diseño personalizado',
+        designCode: draft.designCode || 'CUSTOM',
         designScale: 2.75,
         designOffsetX: 0,
         designOffsetY: 2
@@ -308,9 +317,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               }
             : null;
 
+        const codeTag = webOrder.designCode ? `[${webOrder.designCode}] ` : '';
         const noteParts = [
           webOrder.designName
-            ? `Diseño: ${webOrder.designName} · Ubicación: ${sideExplicit}`
+            ? `Diseño: ${codeTag}${webOrder.designName} · Ubicación: ${sideExplicit}`
             : `Camisa lisa (sin diseño estampado)`,
           webOrder.customerAddress ? `Nota/Dirección cliente: ${webOrder.customerAddress}` : ''
         ].filter(Boolean);
@@ -325,6 +335,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           designScale: webOrder.scale || 2.75,
           designOffsetX: 0,
           designOffsetY: 2,
+          designId: webOrder.designId || null,
+          designName: webOrder.designName || null,
+          designCode: webOrder.designCode || null,
           workType: matchedWorkType,
           customerId: existingCustomer ? existingCustomer.id : null,
           addressId: existingCustomer ? (existingCustomer.addresses.find((a) => a.isDefault) || existingCustomer.addresses[0])?.id || null : null,
@@ -358,10 +371,12 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           (await fetchSharedPhoto(WEB_ORDER_LATEST_KEY));
         if (!cancelled && raw) {
           try {
-            const parsed = JSON.parse(raw) as CustomerWebOrderPayload;
-            history.replaceState({ section: 'vender' }, '', location.pathname);
-            await importCustomerWebOrder(parsed);
-            return;
+            const parsed = sanitizeWebOrder(JSON.parse(raw));
+            if (parsed) {
+              history.replaceState({ section: 'vender' }, '', location.pathname);
+              await importCustomerWebOrder(parsed);
+              return;
+            }
           } catch {
             /* ignorar */
           }
@@ -372,7 +387,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       const latestRaw = await fetchSharedPhoto(WEB_ORDER_LATEST_KEY);
       if (!cancelled && latestRaw) {
         try {
-          const parsed = JSON.parse(latestRaw) as CustomerWebOrderPayload;
+          const parsed = sanitizeWebOrder(JSON.parse(latestRaw));
           const lastImported = localStorage.getItem(LS_LAST_IMPORTED_WEB_ORDER);
           if (parsed && parsed.id && parsed.id !== lastImported) {
             setLatestWebOrder(parsed);
@@ -426,7 +441,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       workType: draft.workType,
       notes: finalNotes,
       photoId,
-      status
+      status,
+      designId: draft.photo ? draft.designId || null : null,
+      designName: draft.photo ? draft.designName || 'Diseño personalizado' : null,
+      designCode: draft.photo ? draft.designCode || 'CUSTOM' : null,
+      placement: draft.photo ? draft.placement || 'back' : null
     });
     const keep = { paymentMethod: draft.paymentMethod, workType: draft.workType };
     setDraft({ ...emptyDraft(), ...keep });
@@ -523,7 +542,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               set(next);
             }}
             onUploadFile={(file) => void onPhoto(file)}
-            onClearDesign={() => set({ photo: null, rawPhoto: null })}
+            onClearDesign={() => set({ photo: null, rawPhoto: null, designId: null, designName: null, designCode: null })}
             removeBg={draft.removeBg ?? false}
             onToggleRemoveBg={(next) => void toggleRemoveBg(next)}
             onAiRemoveBg={() => void handleAiBgNewOrder()}
@@ -546,24 +565,38 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             onAddNewColor={() => setColorModal(true)}
             isStoreOwner
             catalogDesigns={allDesigns}
+            activeCatalogDesignId={draft.designId || null}
             onSelectCatalogDesign={(d) => {
               if (!d.imageUrl) return;
               set({
                 photo: d.imageUrl,
                 rawPhoto: d.imageUrl,
+                designId: d.id,
+                designName: d.name,
+                designCode: d.code || 'D-001',
                 placement: 'back',
                 designScale: 2.75,
                 designOffsetX: 0,
                 designOffsetY: 2
               });
-              toast(`"${d.name}" colocado en ESPALDA (Tamaño A3)`);
+              toast(`"${d.code ? `[${d.code}] ` : ''}${d.name}" colocado en ESPALDA (Tamaño A3)`);
+            }}
+            onRenameCatalogDesign={(id, name, code) => {
+              renameDesign(id, name, code);
+              if (draft.designId === id) {
+                set({ designName: name, designCode: code });
+              }
+              toast('Nombre y código del diseño actualizados');
             }}
             onSaveCurrentToCatalog={() => {
               if (!draft.photo) return;
               void saveCurrentToCatalog({
                 dataUrl: draft.photo,
+                name: draft.designName || undefined,
+                code: draft.designCode || undefined,
                 placement: draft.placement || 'back'
               }).then((saved) => {
+                set({ designId: saved.id, designName: saved.name, designCode: saved.code });
                 toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
               });
             }}
@@ -604,6 +637,29 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             }
           />
         </div>
+
+        {draft.photo && (
+          <div className="grid grid-cols-1 gap-2 rounded-xl border border-amber-200 bg-amber-50/70 p-2.5 sm:grid-cols-3">
+            <div>
+              <label className="label text-xs">Código de Diseño (Reporte)</label>
+              <input
+                className="input font-mono font-bold uppercase"
+                placeholder="Ej. D-001, TORO-01"
+                value={draft.designCode || ''}
+                onChange={(e) => set({ designCode: e.target.value.toUpperCase() })}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label text-xs">Nombre del Diseño / Estilo de Camisa (Reporte)</label>
+              <input
+                className="input font-bold"
+                placeholder="Ej. Establo Silla, Toro Honduras..."
+                value={draft.designName || ''}
+                onChange={(e) => set({ designName: e.target.value })}
+              />
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="label" htmlFor="wt">

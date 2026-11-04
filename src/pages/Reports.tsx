@@ -57,13 +57,48 @@ export default function Reports() {
     const bySize = new Map<string, number>();
     const byColor = new Map<string, { name: string; hex: string; qty: number }>();
     const byBrand = new Map<string, number>();
+    const byDesign = new Map<
+      string,
+      { key: string; code: string; name: string; qty: number; ordersCount: number; revenue: number }
+    >();
+
+    const catalogMap = new Map(
+      (state.catalogDesigns || []).map((d) => [d.id, d])
+    );
 
     for (const o of orders) {
       total += o.total;
       collected += o.deposit;
       pending += o.balance;
+
+      // Resolver código y nombre del diseño/estilo vendido
+      const cat = o.designId ? catalogMap.get(o.designId) : undefined;
+      let dCode = o.designCode || cat?.code || '';
+      let dName = o.designName || cat?.name || '';
+      if (!dName && o.notes) {
+        const m = /Diseño:\s*(?:\[([^\]]+)\]\s*)?([^·|]+)/i.exec(o.notes);
+        if (m) {
+          if (m[1] && !dCode) dCode = m[1].trim();
+          dName = m[2].trim();
+        }
+      }
+      if (!dName) {
+        if (!o.photoId || o.workType.toLowerCase().includes('lisa')) {
+          dCode = dCode || 'LISA';
+          dName = 'Camisa Lisa (Sin estampado)';
+        } else {
+          dCode = dCode || 'CUSTOM';
+          dName = `Diseño Personalizado (${o.workType})`;
+        }
+      }
+      const designKey = `${dCode}|${dName}`.toLowerCase();
+      let orderQty = 0;
+      let orderLineRev = 0;
+
       for (const it of o.items) {
         units += it.qty;
+        orderQty += it.qty;
+        orderLineRev += it.qty * it.unitPrice;
         bySize.set(it.size, (bySize.get(it.size) || 0) + it.qty);
         byBrand.set(it.brandName, (byBrand.get(it.brandName) || 0) + it.qty);
         const prev = byColor.get(it.colorName);
@@ -73,6 +108,16 @@ export default function Reports() {
           qty: (prev?.qty || 0) + it.qty
         });
       }
+
+      const prevDesign = byDesign.get(designKey);
+      byDesign.set(designKey, {
+        key: designKey,
+        code: dCode || 'S/C',
+        name: dName,
+        qty: (prevDesign?.qty || 0) + orderQty,
+        ordersCount: (prevDesign?.ordersCount || 0) + 1,
+        revenue: (prevDesign?.revenue || 0) + orderLineRev
+      });
     }
 
     return {
@@ -83,9 +128,10 @@ export default function Reports() {
       count: orders.length,
       bySize: Array.from(bySize.entries()),
       byColor: Array.from(byColor.values()).sort((a, b) => b.qty - a.qty),
-      byBrand: Array.from(byBrand.entries()).sort((a, b) => b[1] - a[1])
+      byBrand: Array.from(byBrand.entries()).sort((a, b) => b[1] - a[1]),
+      byDesign: Array.from(byDesign.values()).sort((a, b) => b.qty - a.qty || b.revenue - a.revenue)
     };
-  }, [orders]);
+  }, [orders, state.catalogDesigns]);
 
   const exportCsv = () => {
     const rows: (string | number)[][] = [
@@ -95,6 +141,8 @@ export default function Reports() {
         'Estado',
         'Cliente',
         'Teléfono',
+        'Código Diseño',
+        'Nombre Diseño / Estilo',
         'Trabajo',
         'Marca',
         'Color',
@@ -119,6 +167,8 @@ export default function Reports() {
           STATUS_LABEL[o.status],
           o.shipTo.name,
           o.shipTo.phone,
+          o.designCode || (o.photoId ? 'CUSTOM' : 'LISA'),
+          o.designName || (o.photoId ? 'Diseño personalizado' : 'Camisa Lisa'),
           o.workType,
           it.brandName,
           it.colorName,
@@ -215,7 +265,54 @@ export default function Reports() {
       {orders.length === 0 ? (
         <Empty icon="📈" text="Sin ventas en este período" />
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <>
+          {/* Ranking de Diseños / Estilos de Camisa más vendidos por Código y Nombre */}
+          <section className="card space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="section-title mb-0">🎨 Diseños / Estilos de Camisa Más Vendidos (Por Código y Nombre)</h2>
+              <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-extrabold text-amber-900">
+                Ranking de estilos
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-bold uppercase text-slate-500">
+                    <th className="py-2 pr-2">#</th>
+                    <th className="py-2 pr-2">Código</th>
+                    <th className="py-2 pr-2">Diseño / Estilo</th>
+                    <th className="py-2 pr-2 text-center">Pedidos</th>
+                    <th className="py-2 pr-2 text-center">Unidades</th>
+                    <th className="py-2 text-right">Ventas</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {summary.byDesign.map((d, idx) => (
+                    <tr key={d.key} className="hover:bg-slate-50">
+                      <td className="py-2.5 pr-2 font-extrabold text-slate-400">
+                        {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : idx + 1}
+                      </td>
+                      <td className="py-2.5 pr-2">
+                        <span className="rounded-md bg-slate-900 px-2 py-0.5 font-mono text-xs font-extrabold text-amber-300">
+                          {d.code}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-2 font-extrabold text-slate-900">{d.name}</td>
+                      <td className="py-2.5 pr-2 text-center font-semibold text-slate-600">{d.ordersCount}</td>
+                      <td className="py-2.5 pr-2 text-center">
+                        <span className="rounded-lg bg-emerald-100 px-2.5 py-1 font-extrabold text-emerald-900">
+                          {d.qty} uds
+                        </span>
+                      </td>
+                      <td className="py-2.5 text-right font-extrabold text-slate-900">{money(d.revenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <section className="card space-y-2">
             <h2 className="section-title">Unidades por Talla</h2>
             <ul className="divide-y divide-slate-100">
@@ -263,7 +360,8 @@ export default function Reports() {
               ))}
             </ul>
           </section>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

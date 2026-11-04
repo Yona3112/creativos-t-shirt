@@ -159,6 +159,10 @@ export interface NewOrderInput {
   notes: string;
   photoId: string | null;
   status: OrderStatus;
+  designId?: string | null;
+  designName?: string | null;
+  designCode?: string | null;
+  placement?: Order['placement'];
 }
 
 export function nextFolio(s: AppState): number {
@@ -178,7 +182,7 @@ export function createOrder(input: NewOrderInput): Order {
       const color = s.colors.find((c) => c.id === l.colorId);
       const key = vkey(l.brandId, l.colorId, l.size);
       const avail = Math.max(0, (stock.get(key) || 0) - (used.get(key) || 0));
-      const fromStock = Math.min(avail, l.qty);
+      const fromStock = input.status === 'borrador' ? 0 : Math.min(avail, l.qty);
       used.set(key, (used.get(key) || 0) + fromStock);
       const itemId = uid();
       if (fromStock > 0) {
@@ -231,7 +235,12 @@ export function createOrder(input: NewOrderInput): Order {
       whatsappSentAt: null,
       createdAt: t,
       updatedAt: t,
-      history: [{ status: input.status, at: t }]
+      history: [{ status: input.status, at: t }],
+      designId: input.designId || null,
+      designName: input.photoId ? input.designName?.trim() || 'Diseño personalizado' : null,
+      designCode: input.photoId ? input.designCode?.trim() || null : null,
+      placement: input.photoId ? input.placement || 'back' : null,
+      guidePhotoId: null
     };
     return { ...s, orders: [...s.orders, created], movements: [...s.movements, ...movements] };
   });
@@ -261,6 +270,7 @@ export function setOrderStatus(id: string, status: OrderStatus): string | null {
   update((s) => {
     const t = now();
     const movements = [...s.movements];
+    let items = o.items;
     if (status === 'cancelado') {
       for (const it of o.items) {
         if (it.fromStock > 0) {
@@ -274,13 +284,37 @@ export function setOrderStatus(id: string, status: OrderStatus): string | null {
           });
         }
       }
+    } else if (status !== 'borrador') {
+      // Unidades que se vendieron "bajo pedido": al llegar inventario y avanzar el pedido,
+      // se descuentan del stock para que el inventario no quede inflado.
+      const { stock } = computeStock({ ...s, movements });
+      const used = new Map<string, number>();
+      items = o.items.map((it) => {
+        const pending = it.qty - (it.fromStock || 0);
+        if (pending <= 0) return it;
+        const key = vkey(it.brandId, it.colorId, it.size);
+        const avail = Math.max(0, (stock.get(key) || 0) - (used.get(key) || 0));
+        const take = Math.min(avail, pending);
+        if (take <= 0) return it;
+        used.set(key, (used.get(key) || 0) + take);
+        movements.push({
+          id: `venta-${o.id}-${it.id}-extra-${t}`,
+          key,
+          delta: -take,
+          reason: 'venta',
+          orderId: o.id,
+          note: 'Descuento de unidades bajo pedido',
+          at: t
+        });
+        return { ...it, fromStock: (it.fromStock || 0) + take };
+      });
     }
     const dedup = Array.from(new Map(movements.map((m) => [m.id, m])).values());
     return {
       ...s,
       movements: dedup,
       orders: s.orders.map((x) =>
-        x.id === id ? { ...x, status, updatedAt: t, history: [...(x.history || []), { status, at: t }] } : x
+        x.id === id ? { ...x, items, status, updatedAt: t, history: [...(x.history || []), { status, at: t }] } : x
       )
     };
   });
@@ -306,14 +340,21 @@ export function addCatalogDesign(input: {
   photoId: string;
   clientVisible?: boolean;
   placement?: CatalogDesign['placement'];
+  code?: string;
 }): CatalogDesign {
   const t = now();
+  const existing = getState().catalogDesigns || [];
+  const maxN = existing.reduce((m, d) => {
+    const mm = /^D-(\d+)$/.exec(d.code || '');
+    return mm ? Math.max(m, Number(mm[1])) : m;
+  }, 0);
   const design: CatalogDesign = {
     id: `cd-${uid()}`,
     name: input.name.trim() || 'Diseño',
+    code: input.code?.trim().toUpperCase() || `D-${String(maxN + 1).padStart(3, '0')}`,
     photoId: input.photoId,
     clientVisible: input.clientVisible ?? true,
-    placement: input.placement || 'center',
+    placement: input.placement || 'back',
     createdAt: t,
     updatedAt: t
   };

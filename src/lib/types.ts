@@ -90,6 +90,14 @@ export interface Order extends Entity {
   whatsappSentAt: number | null;
   createdAt: number;
   history: { status: OrderStatus; at: number }[];
+  /** Diseño del catálogo vendido (para reportes de estilos más vendidos) */
+  designId?: string | null;
+  designName?: string | null;
+  designCode?: string | null;
+  /** Ubicación del estampado */
+  placement?: 'center' | 'pocket' | 'full' | 'back' | null;
+  /** Foto / PDF de la guía de envío subida por la tienda */
+  guidePhotoId?: string | null;
 }
 
 export interface Movement {
@@ -120,10 +128,17 @@ export interface Settings {
   waConfirm: string;
   waShipped: string;
   waReady: string;
+  /** Fondo de la Tienda 3D que ve el cliente (solo lo cambia el administrador) */
+  storeTheme?: 'ranchero' | 'establo' | 'nocturno' | 'arena';
+  /** Marca y colores que se muestran en la Tienda 3D pública */
+  storeBrandId?: string;
+  storeColorIds?: string[];
 }
 
 export interface CatalogDesign extends Entity {
   name: string;
+  /** Código corto para reportes (ej. D-001) */
+  code?: string;
   photoId: string;
   /** Si es true, el cliente lo ve disponible al editar la camisa 3D */
   clientVisible: boolean;

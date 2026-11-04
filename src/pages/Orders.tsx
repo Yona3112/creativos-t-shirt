@@ -1,11 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Order, OrderStatus, Settings } from '../lib/types';
-import { useAppState } from '../lib/store';
-import { folioLabel } from '../lib/ids';
+import { notifyPhotos, useAppState } from '../lib/store';
+import { folioLabel, uid } from '../lib/ids';
 import { money } from '../lib/money';
 import { fmtDateTime } from '../lib/time';
 import { markPaid, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
 import { shareLabel } from '../lib/pdf';
+import { compressImage } from '../lib/image';
+import { savePhoto } from '../lib/db';
+import { uploadPhotoNow } from '../lib/sync';
+import { copyText } from '../lib/csv';
+import { buildBoxfulClipboardSummary, createBoxfulShipment, getBoxfulConfig } from '../lib/boxful';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
 import { ColorDot, Confirm, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
 
@@ -46,7 +51,9 @@ export default function Orders() {
           String(o.folio).includes(q) ||
           o.shipTo.name.toLowerCase().includes(q) ||
           o.shipTo.phone.toLowerCase().includes(q) ||
-          o.trackingNumber.toLowerCase().includes(q)
+          o.trackingNumber.toLowerCase().includes(q) ||
+          (o.designCode || '').toLowerCase().includes(q) ||
+          (o.designName || '').toLowerCase().includes(q)
         );
       })
       .sort((a, b) => b.folio - a.folio);
@@ -126,10 +133,13 @@ function OrderCard({
   onAskCancel: () => void;
 }) {
   const photo = usePhoto(order.photoId);
+  const guidePhoto = usePhoto(order.guidePhotoId || null);
+  const guideInputRef = useRef<HTMLInputElement>(null);
   const [carrier, setCarrier] = useState(order.carrier || settings.carriers[0] || '');
   const [tracking, setTracking] = useState(order.trackingNumber || '');
   const [trackingUrl, setTrackingUrl] = useState(order.trackingUrl || '');
   const [busyPdf, setBusyPdf] = useState(false);
+  const [busyBoxful, setBusyBoxful] = useState(false);
 
   const saveTracking = (nextCarrier = carrier, nextTracking = tracking, nextUrl = trackingUrl) => {
     patchOrder(order.id, {
@@ -137,6 +147,88 @@ function OrderCard({
       trackingNumber: nextTracking.trim(),
       trackingUrl: nextUrl.trim()
     });
+  };
+
+  const handleUploadGuidePhoto = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const dataUrl = await compressImage(file, 1400, 0.88, true);
+      const gId = `guia-${order.id}-${uid().slice(0, 6)}`;
+      await savePhoto(gId, dataUrl, 0);
+      void uploadPhotoNow(gId, dataUrl);
+      notifyPhotos();
+      patchOrder(order.id, {
+        guidePhotoId: gId,
+        carrier: carrier || settings.carriers[0] || 'Boxful',
+        trackingNumber: tracking.trim() || `GUIA-${order.folio}`
+      });
+      if (!tracking.trim()) setTracking(`GUIA-${order.folio}`);
+      toast('Foto de guía de envío guardada');
+    } catch (e) {
+      toast((e as Error).message || 'Error al subir foto de guía', 'error');
+    }
+  };
+
+  const handleBoxfulAction = async () => {
+    setBusyBoxful(true);
+    try {
+      const cfg = getBoxfulConfig();
+      if (cfg && (cfg.email || cfg.accessToken)) {
+        const res = await createBoxfulShipment(order, settings);
+        setCarrier(res.carrier);
+        setTracking(res.trackingNumber);
+        setTrackingUrl(res.trackingUrl);
+        saveTracking(res.carrier, res.trackingNumber, res.trackingUrl);
+        toast(`📦 Guía Boxful generada: ${res.trackingNumber}`);
+        return;
+      }
+      // Modo asistido 1-clic: copia datos del destinatario y abre Boxful
+      await copyText(buildBoxfulClipboardSummary(order));
+      setCarrier('Boxful');
+      saveTracking('Boxful', tracking, trackingUrl);
+      toast('Datos copiados para Boxful (pégalos en tu panel o configura tu API en Ajustes)');
+      window.open('https://app.goboxful.com', '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setBusyBoxful(false);
+    }
+  };
+
+  const handleQuickSendGuideWsp = async () => {
+    saveTracking();
+    patchOrder(order.id, { whatsappSentAt: Date.now() });
+    const msg = fillTemplate(
+      order.status === 'enviado' || tracking.trim() || guidePhoto ? settings.waShipped : settings.waReady,
+      {
+        ...order,
+        carrier,
+        trackingNumber: tracking.trim() || (guidePhoto ? `Adjunta (${folioLabel(order.folio)})` : ''),
+        trackingUrl: trackingUrl.trim()
+      },
+      settings
+    );
+
+    // Si hay foto de la guía subida y el dispositivo soporta compartir archivos nativos (móvil), ofrecer compartir imagen + texto
+    if (guidePhoto && navigator.share) {
+      try {
+        const blob = await (await fetch(guidePhoto)).blob();
+        const file = new File([blob], `guia-${order.folio}.jpg`, { type: blob.type || 'image/jpeg' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: `Guía ${folioLabel(order.folio)}`,
+            text: msg,
+            files: [file]
+          });
+          return;
+        }
+      } catch {
+        /* fallback a WhatsApp directo */
+      }
+    }
+
+    const href = whatsappUrl(order.shipTo.phone, msg);
+    window.open(href, '_blank', 'noopener,noreferrer');
   };
 
   const changeStatus = (nextStatus: OrderStatus) => {
@@ -184,12 +276,22 @@ function OrderCard({
   return (
     <article className="card space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-lg font-extrabold text-brand-900">{folioLabel(order.folio)}</span>
           <StatusBadge status={order.status} />
           <span className="rounded-lg bg-slate-100 px-2.5 py-0.5 text-xs font-bold text-slate-700">
             {order.workType}
           </span>
+          {(order.designCode || order.designName) && (
+            <span className="inline-flex items-center gap-1 rounded-lg bg-amber-100 px-2 py-0.5 text-xs font-extrabold text-amber-950">
+              {order.designCode && (
+                <span className="rounded bg-slate-900 px-1 py-px font-mono text-[10px] text-amber-300">
+                  {order.designCode}
+                </span>
+              )}
+              <span>{order.designName}</span>
+            </span>
+          )}
         </div>
         <span className="text-xs font-semibold text-slate-500">{fmtDateTime(order.createdAt)}</span>
       </div>
@@ -248,11 +350,24 @@ function OrderCard({
         <ul className="flex-1 divide-y divide-slate-100 rounded-xl border border-slate-200">
           {order.items.map((it) => (
             <li key={it.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <ColorDot hex={it.colorHex} size={18} />
                 <span className="font-semibold">
                   {it.brandName} · {it.colorName} · {it.size}
                 </span>
+                {order.status !== 'cancelado' && (
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                      it.fromStock >= it.qty
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-amber-50 text-amber-700'
+                    }`}
+                  >
+                    {it.fromStock >= it.qty
+                      ? `✓ Stock descontado (${it.fromStock})`
+                      : `Stock: ${it.fromStock}/${it.qty} · Bajo pedido: ${it.qty - it.fromStock}`}
+                  </span>
+                )}
               </div>
               <span className="font-bold">
                 {it.qty} × {money(it.unitPrice)}
@@ -262,45 +377,116 @@ function OrderCard({
         </ul>
       </div>
 
-      {/* Transportista y Guía */}
+      {/* Transportista, Subida de Guía, Boxful y Botón Pequeño Enviar por WSP */}
       {order.status !== 'cancelado' && (
-        <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:grid-cols-3">
-          <div>
-            <label className="label">Transportista</label>
-            <select
-              className="input"
-              value={carrier}
-              onChange={(e) => {
-                setCarrier(e.target.value);
-                saveTracking(e.target.value, tracking, trackingUrl);
-              }}
-            >
-              {settings.carriers.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
+        <div className="space-y-2.5 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-600">
+              🚚 Guía de Envío y Rastreo
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <input
+                ref={guideInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  void handleUploadGuidePhoto(f);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => guideInputRef.current?.click()}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-extrabold text-slate-800 shadow-sm transition hover:bg-slate-100"
+                title="Subir foto o captura de la guía de envío"
+              >
+                📷 {guidePhoto ? 'Cambiar foto de guía' : 'Subir guía'}
+              </button>
+              <button
+                type="button"
+                disabled={busyBoxful}
+                onClick={() => void handleBoxfulAction()}
+                className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-50"
+                title="Generar guía con Boxful API o copiar datos para Boxful"
+              >
+                📦 {busyBoxful ? 'Boxful...' : 'Boxful'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleQuickSendGuideWsp()}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#25D366] px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#1ebe5b]"
+                title="Enviar guía y datos de rastreo al cliente por WhatsApp"
+              >
+                💬 Enviar por WSP
+              </button>
+            </div>
           </div>
-          <div>
-            <label className="label">Número de guía</label>
-            <input
-              className="input"
-              placeholder="Ej. CE-998877"
-              value={tracking}
-              onChange={(e) => setTracking(e.target.value)}
-              onBlur={() => saveTracking(carrier, tracking, trackingUrl)}
-            />
-          </div>
-          <div>
-            <label className="label">URL de rastreo (opcional)</label>
-            <input
-              className="input"
-              placeholder="https://..."
-              value={trackingUrl}
-              onChange={(e) => setTrackingUrl(e.target.value)}
-              onBlur={() => saveTracking(carrier, tracking, trackingUrl)}
-            />
+
+          {guidePhoto && (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-2">
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onZoom(guidePhoto)}
+                  className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-emerald-300 bg-white"
+                >
+                  <img src={guidePhoto} alt="Guía de envío" className="h-full w-full object-cover" />
+                </button>
+                <div className="text-xs">
+                  <div className="font-extrabold text-emerald-950">✓ Guía de envío adjunta</div>
+                  <div className="text-emerald-700">Toca la miniatura para ver en pantalla completa</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleQuickSendGuideWsp()}
+                className="rounded-lg bg-[#25D366] px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm hover:bg-[#1ebe5b]"
+              >
+                💬 Enviar por WSP
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div>
+              <label className="label">Transportista</label>
+              <select
+                className="input"
+                value={carrier}
+                onChange={(e) => {
+                  setCarrier(e.target.value);
+                  saveTracking(e.target.value, tracking, trackingUrl);
+                }}
+              >
+                {settings.carriers.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Número de guía</label>
+              <input
+                className="input"
+                placeholder="Ej. CE-998877 / BX-102"
+                value={tracking}
+                onChange={(e) => setTracking(e.target.value)}
+                onBlur={() => saveTracking(carrier, tracking, trackingUrl)}
+              />
+            </div>
+            <div>
+              <label className="label">URL de rastreo (opcional)</label>
+              <input
+                className="input"
+                placeholder="https://..."
+                value={trackingUrl}
+                onChange={(e) => setTrackingUrl(e.target.value)}
+                onBlur={() => saveTracking(carrier, tracking, trackingUrl)}
+              />
+            </div>
           </div>
         </div>
       )}

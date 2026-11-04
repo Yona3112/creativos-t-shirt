@@ -3,7 +3,7 @@ import type { AppState, SyncStatus } from './types';
 import { createInitialState } from './seed';
 import { normalize } from './merge';
 import { loadState, saveState } from './db';
-import { SyncEngine, getConfig } from './sync';
+import { SyncEngine, getConfig, isPublicStorefrontHash } from './sync';
 import { computeStock } from './inventory';
 import { getDeviceId } from './ids';
 
@@ -52,6 +52,14 @@ export const engine = new SyncEngine({
 });
 
 export async function initStore(): Promise<void> {
+  if (isPublicStorefrontHash()) {
+    // Seguridad: en la Tienda 3D del cliente (#tienda) NO cargamos ni sincronizamos
+    // la base de datos privada de pedidos, clientes, teléfonos ni costos.
+    state = createInitialState();
+    ready = true;
+    emit();
+    return;
+  }
   const saved = await loadState();
   state = normalize(saved);
   ready = true;

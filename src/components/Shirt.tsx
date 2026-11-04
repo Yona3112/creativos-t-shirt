@@ -467,6 +467,8 @@ export function ShirtPreview({
 export interface CatalogQuickDesign {
   id: string;
   name: string;
+  /** Código corto del diseño (ej. D-001) para reportes de ventas */
+  code?: string;
   photoId: string;
   imageUrl: string | null;
   placement: DecalPlacement;
@@ -519,6 +521,7 @@ export function InteractiveShirt3D({
   onUploadCatalogFiles,
   onToggleCatalogDesignVisible,
   onDeleteCatalogDesign,
+  onRenameCatalogDesign,
   boutiqueTheme = 'ranchero',
   onChangeBoutiqueTheme,
   autoMotion = true,
@@ -560,6 +563,7 @@ export function InteractiveShirt3D({
   onUploadCatalogFiles?: (files: FileList) => void;
   onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
   onDeleteCatalogDesign?: (designId: string) => void;
+  onRenameCatalogDesign?: (designId: string, name: string, code: string) => void;
   boutiqueTheme?: BoutiqueTheme;
   onChangeBoutiqueTheme?: (theme: BoutiqueTheme) => void;
   autoMotion?: boolean;
@@ -571,7 +575,7 @@ export function InteractiveShirt3D({
   const [zoom, setZoom] = useState<number>(1);
   const [showcaseActive, setShowcaseActive] = useState<boolean>(false);
   const [localTheme, setLocalTheme] = useState<BoutiqueTheme>(boutiqueTheme);
-  const activeTheme = onChangeBoutiqueTheme ? boutiqueTheme : localTheme;
+  const activeTheme = onChangeBoutiqueTheme || !isStoreOwner ? boutiqueTheme : localTheme;
   const setTheme = (t: BoutiqueTheme) => {
     setLocalTheme(t);
     onChangeBoutiqueTheme?.(t);
@@ -628,25 +632,10 @@ export function InteractiveShirt3D({
       <div className="relative select-none space-y-3">
         {/* BARRA SUPERIOR DE AMBIENTE (FONDO RANCHERO / ESTABLO) + VISTA 3D */}
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/30 bg-[#1f0f06]/95 px-3 py-2 text-white shadow-md backdrop-blur-md">
-          <div className="flex flex-wrap items-center gap-1">
-            <span className="mr-1 text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
-              Fondo:
-            </span>
-            {(Object.keys(BOUTIQUE_THEMES) as BoutiqueTheme[]).map((tKey) => (
-              <button
-                key={tKey}
-                type="button"
-                onClick={() => setTheme(tKey)}
-                className={`rounded-xl px-2 py-1 text-[11px] font-extrabold transition ${
-                  activeTheme === tKey
-                    ? 'bg-amber-400 text-slate-950 shadow-sm'
-                    : 'bg-white/10 text-amber-100 hover:bg-white/20'
-                }`}
-              >
-                {BOUTIQUE_THEMES[tKey].label}
-              </button>
-            ))}
-          </div>
+          {/* El cliente NO puede cambiar el fondo: lo define el administrador */}
+          <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+            Vista de la camisa
+          </span>
 
           <div className="flex items-center gap-1">
             {(
@@ -1744,9 +1733,31 @@ export function InteractiveShirt3D({
                         )}
                       </div>
                       <div className="mt-1 w-full truncate text-center text-[11px] font-extrabold text-slate-800">
+                        {d.code && (
+                          <span className="mr-1 rounded bg-slate-900 px-1 py-px font-mono text-[9px] text-amber-300">
+                            {d.code}
+                          </span>
+                        )}
                         {d.name}
                       </div>
                     </button>
+
+                    {isStoreOwner && onRenameCatalogDesign && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextName = window.prompt('Nombre del diseño (para reportes de ventas):', d.name);
+                          if (nextName === null) return;
+                          const nextCode = window.prompt('Código del diseño (ej. D-001, TORO-01):', d.code || '');
+                          if (nextCode === null) return;
+                          onRenameCatalogDesign(d.id, nextName.trim() || d.name, nextCode.trim().toUpperCase());
+                        }}
+                        className="mt-1 flex min-h-[24px] w-full items-center justify-center rounded-lg bg-amber-50 px-1.5 py-0.5 text-[10px] font-extrabold text-amber-900 hover:bg-amber-100"
+                        title="Cambiar nombre y código del diseño"
+                      >
+                        ✏️ Nombre / Código
+                      </button>
+                    )}
 
                     {isStoreOwner && onToggleCatalogDesignVisible && (
                       <button

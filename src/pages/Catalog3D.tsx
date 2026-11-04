@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getState, useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
+import { updateSettings } from '../lib/actions';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
@@ -11,56 +12,25 @@ import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { Stepper, toast } from '../components/ui';
-import { useCatalogDesigns, type SharedCatalogDesignRef } from '../lib/catalogDesigns';
+import { useCatalogDesigns } from '../lib/catalogDesigns';
+import {
+  buildPublicCatalog,
+  LIVE_CATALOG_KEY,
+  WEB_ORDER_LATEST_KEY,
+  type CustomerWebOrderPayload,
+  type SharedCatalogColor,
+  type SharedCatalogDesignRef,
+  type SharedCatalogPayload
+} from '../lib/publicCatalog';
 
-export interface SharedCatalogColor {
-  id?: string;
-  name: string;
-  hex: string;
-}
-
-export interface SharedCatalogPayload {
-  storeName: string;
-  storePhone: string;
-  brandId?: string;
-  brandName: string;
-  colors: SharedCatalogColor[];
-  sizes: string[];
-  priceNormal: number;
-  priceWholesale: number;
-  wholesaleMin: number;
-  photoId: string | null;
-  placement: DecalPlacement;
-  scale: number;
-  offsetX?: number;
-  offsetY: number;
-  boutiqueTheme?: BoutiqueTheme;
-  designs?: SharedCatalogDesignRef[];
-}
-
-export interface CustomerWebOrderPayload {
-  id: string;
-  createdAt: number;
-  customerName: string;
-  customerPhone: string;
-  customerAddress: string;
-  brandId?: string;
-  brandName: string;
-  colorId?: string;
-  colorName: string;
-  colorHex: string;
-  size: string;
-  qty: number;
-  unitPrice: number;
-  designId?: string | null;
-  designName?: string | null;
-  photoId?: string | null;
-  placement: DecalPlacement;
-  scale: number;
-}
-
-export const LIVE_CATALOG_KEY = 'cat_live';
-export const WEB_ORDER_LATEST_KEY = 'weborder_latest';
+export {
+  LIVE_CATALOG_KEY,
+  WEB_ORDER_LATEST_KEY,
+  type CustomerWebOrderPayload,
+  type SharedCatalogColor,
+  type SharedCatalogDesignRef,
+  type SharedCatalogPayload
+};
 
 export function readWebOrderImportHash(): string | null {
   const m = location.hash.match(/pedido=([A-Za-z0-9_-]+)/);
@@ -68,30 +38,7 @@ export function readWebOrderImportHash(): string | null {
 }
 
 function buildDefaultLivePayload(): SharedCatalogPayload {
-  const st = getState();
-  const brands = activeBrands(st);
-  const brand = brands[0];
-  const colors = brand ? brandColors(st, brand.id) : [];
-  return {
-    storeName: st.settings.storeName,
-    storePhone: st.settings.storePhone,
-    brandId: brand?.id,
-    brandName: brand?.name || 'Camisa',
-    colors:
-      colors.length > 0
-        ? colors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
-        : [{ name: 'Negro', hex: '#111827' }],
-    sizes: st.settings.sizes,
-    priceNormal: normalPrice(st.settings, brand),
-    priceWholesale: st.settings.priceWholesale,
-    wholesaleMin: st.settings.wholesaleMin,
-    photoId: null,
-    placement: 'back',
-    scale: 2.75,
-    offsetX: 0,
-    offsetY: 2,
-    boutiqueTheme: 'ranchero'
-  };
+  return buildPublicCatalog(getState());
 }
 
 function decodeCatalog(token: string): SharedCatalogPayload | null {
@@ -146,7 +93,7 @@ export default function Catalog3D() {
   const [scale, setScale] = useState(2.75);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(2);
-  const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>('ranchero');
+  const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(settings.storeTheme || 'ranchero');
   const [autoMotion, setAutoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
   const [previewClient, setPreviewClient] = useState<SharedCatalogPayload | null>(null);
@@ -157,6 +104,7 @@ export default function Catalog3D() {
     saveCurrentToCatalog,
     uploadFilesToCatalog,
     toggleVisible,
+    renameDesign,
     deleteDesign
   } = useCatalogDesigns();
 
@@ -275,15 +223,26 @@ export default function Catalog3D() {
     const selectedColors = colors
       .filter((c) => enabledColorIds.includes(c.id))
       .map((c) => ({ id: c.id, name: c.name, hex: c.hex }));
+    const finalColors =
+      selectedColors.length > 0
+        ? selectedColors
+        : colors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }));
+    const stockMap: Record<string, number> = {};
+    if (brand) {
+      for (const c of finalColors) {
+        if (!c.id) continue;
+        for (const sz of settings.sizes) {
+          const n = stock.get(vkey(brand.id, c.id, sz)) || 0;
+          if (n > 0) stockMap[`${c.id}|${sz}`] = n;
+        }
+      }
+    }
     return {
       storeName: settings.storeName,
       storePhone: settings.storePhone,
       brandId: brand?.id,
       brandName: brand?.name || 'Camisa',
-      colors:
-        selectedColors.length > 0
-          ? selectedColors
-          : colors.map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
+      colors: finalColors,
       sizes: settings.sizes,
       priceNormal: normalPrice(settings, brand),
       priceWholesale: settings.priceWholesale,
@@ -297,9 +256,12 @@ export default function Catalog3D() {
       designs: clientDesigns.map((d) => ({
         id: d.id,
         name: d.name,
+        code: d.code,
         photoId: d.photoId,
         placement: d.placement
-      }))
+      })),
+      stock: stockMap,
+      publishedAt: Date.now()
     };
   };
 
@@ -455,7 +417,14 @@ export default function Catalog3D() {
             toast(`"${d.name}" aplicado en la Espalda (Tamaño A3)`);
           }}
           boutiqueTheme={boutiqueTheme}
-          onChangeBoutiqueTheme={(t) => setBoutiqueTheme(t)}
+          onChangeBoutiqueTheme={(t) => {
+            setBoutiqueTheme(t);
+            updateSettings({ storeTheme: t });
+          }}
+          onRenameCatalogDesign={(id, name, code) => {
+            renameDesign(id, name, code);
+            toast('Nombre y código del diseño actualizados');
+          }}
           onSaveCurrentToCatalog={() => {
             if (!designUrl) return;
             void saveCurrentToCatalog({
@@ -654,6 +623,7 @@ export function CustomerCatalogView({
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
   const [selectedDesignName, setSelectedDesignName] = useState<string | null>(null);
+  const [selectedDesignCode, setSelectedDesignCode] = useState<string | null>(null);
   const [selectedDesignPhotoId, setSelectedDesignPhotoId] = useState<string | null>(
     payload.photoId || null
   );
@@ -661,9 +631,7 @@ export function CustomerCatalogView({
   const [scale, setScale] = useState(payload.scale || 2.75);
   const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
   const [offsetY, setOffsetY] = useState(payload.offsetY ?? 2);
-  const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(
-    payload.boutiqueTheme || 'ranchero'
-  );
+  const boutiqueTheme: BoutiqueTheme = payload.boutiqueTheme || 'ranchero';
   const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
   const [qty, setQty] = useState(1);
   const [customerName, setCustomerName] = useState('');
@@ -671,10 +639,6 @@ export function CustomerCatalogView({
   const [customerAddress, setCustomerAddress] = useState('');
 
   const { clientDesigns } = useCatalogDesigns(payload.designs);
-
-  useEffect(() => {
-    if (payload.boutiqueTheme) setBoutiqueTheme(payload.boutiqueTheme);
-  }, [payload.boutiqueTheme]);
 
   useEffect(() => {
     if (!payload.colors.some((c) => c.name === selectedColor?.name)) {
@@ -702,6 +666,7 @@ export function CustomerCatalogView({
       setDesignUrl(first.imageUrl);
       setActiveCatalogDesignId(first.id);
       setSelectedDesignName(first.name);
+      setSelectedDesignCode(first.code || null);
       setSelectedDesignPhotoId(first.photoId);
       setPlacement('back');
       setScale(2.75);
@@ -732,7 +697,12 @@ export function CustomerCatalogView({
     return found?.id || null;
   };
 
-  const getSizeStock = (c: SharedCatalogColor, sz: string): number => {
+  const getSizeStock = (c: SharedCatalogColor | undefined, sz: string): number => {
+    if (!c) return 0;
+    // En la vitrina pública usamos el snapshot saneado (sin exponer la base de datos privada)
+    if (payload.stock && c.id && !onExitPreview) {
+      return payload.stock[`${c.id}|${sz}`] || 0;
+    }
     const cId = resolveColorId(c);
     if (!liveBrand || !cId) return 0;
     return stock.get(vkey(liveBrand.id, cId, sz)) || 0;
@@ -769,23 +739,27 @@ export function CustomerCatalogView({
       : 'Bajo pedido (Disponible pronto)';
 
   const handleSendOrderWhatsApp = async () => {
-    const orderId = uid().slice(0, 8);
+    const orderId = uid().slice(0, 12);
+    const cleanName = customerName.trim().slice(0, 80) || 'Cliente Tienda 3D';
+    const cleanPhone = customerPhone.trim().slice(0, 24);
+    const cleanAddr = customerAddress.trim().slice(0, 300);
     const webOrder: CustomerWebOrderPayload = {
       id: orderId,
       createdAt: Date.now(),
-      customerName: customerName.trim() || 'Cliente Tienda 3D',
-      customerPhone: customerPhone.trim(),
-      customerAddress: customerAddress.trim(),
+      customerName: cleanName,
+      customerPhone: cleanPhone,
+      customerAddress: cleanAddr,
       brandId: liveBrand?.id || payload.brandId,
       brandName: payload.brandName,
       colorId: resolveColorId(selectedColor) || selectedColor?.id,
       colorName: selectedColor?.name || 'Negro',
-      colorHex: selectedColor?.hex || '#111827',
+      colorHex: selectedColor?.hex || '#1A1A1C',
       size,
       qty,
       unitPrice,
       designId: activeCatalogDesignId,
       designName: designUrl ? selectedDesignName || 'Diseño personalizado' : null,
+      designCode: designUrl ? selectedDesignCode : null,
       photoId: designUrl ? selectedDesignPhotoId : null,
       placement,
       scale
@@ -799,14 +773,15 @@ export function CustomerCatalogView({
 
     const importUrl = `${location.origin}${location.pathname}#pedido=${orderId}`;
     const clientHeader =
-      customerName.trim() || customerPhone.trim() || customerAddress.trim()
-        ? `\n👤 *DATOS DEL CLIENTE:*\n• Nombre: ${customerName.trim() || 'Por confirmar'}${
-            customerPhone.trim() ? `\n• Teléfono: ${customerPhone.trim()}` : ''
-          }${customerAddress.trim() ? `\n• Dirección / Nota: ${customerAddress.trim()}` : ''}\n`
+      cleanName || cleanPhone || cleanAddr
+        ? `\n👤 *DATOS DEL CLIENTE:*\n• Nombre: ${cleanName}${
+            cleanPhone ? `\n• Teléfono: ${cleanPhone}` : ''
+          }${cleanAddr ? `\n• Dirección / Nota: ${cleanAddr}` : ''}\n`
         : '';
 
+    const codePrefix = selectedDesignCode ? `[${selectedDesignCode}] ` : '';
     const designBlock = designUrl
-      ? `\n• Diseño elegido: *${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
+      ? `\n• Diseño elegido: *${codePrefix}${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
       : `\n• Estilo: *Camisa Lisa (Sin estampado)*`;
 
     const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designBlock}\n• Total estimado: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
@@ -908,10 +883,10 @@ export function CustomerCatalogView({
               setDesignUrl(null);
               setActiveCatalogDesignId(null);
               setSelectedDesignName(null);
+              setSelectedDesignCode(null);
               setSelectedDesignPhotoId(null);
             }}
             boutiqueTheme={boutiqueTheme}
-            onChangeBoutiqueTheme={(t) => setBoutiqueTheme(t)}
             colorOptions={payload.colors.map((c) => {
               const totalC = getColorTotalStock(c);
               return {
@@ -935,6 +910,7 @@ export function CustomerCatalogView({
               setDesignUrl(d.imageUrl);
               setActiveCatalogDesignId(d.id);
               setSelectedDesignName(d.name);
+              setSelectedDesignCode(d.code || null);
               setSelectedDesignPhotoId(d.photoId);
               setPlacement('back');
               setScale(2.75);
@@ -1029,6 +1005,7 @@ export function CustomerCatalogView({
               </label>
               <input
                 type="text"
+                maxLength={80}
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
                 placeholder="Ej. Juan Pérez"
@@ -1041,6 +1018,7 @@ export function CustomerCatalogView({
               </label>
               <input
                 type="tel"
+                maxLength={24}
                 value={customerPhone}
                 onChange={(e) => setCustomerPhone(e.target.value)}
                 placeholder="Ej. 9999-8888"
@@ -1053,6 +1031,7 @@ export function CustomerCatalogView({
               </label>
               <input
                 type="text"
+                maxLength={300}
                 value={customerAddress}
                 onChange={(e) => setCustomerAddress(e.target.value)}
                 placeholder="Barrio / Colonia / Ciudad"

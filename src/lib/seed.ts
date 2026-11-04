@@ -1,30 +1,49 @@
 import type { AppState, Brand, Color, Settings } from './types';
 import { colorCode, slug } from './ids';
 
+/**
+ * Colores reales de tela (referencia Bella+Canvas 3001 / Next Level 3600),
+ * en lugar de los tonos genéricos de pantalla.
+ */
 export const BASE_COLORS: { name: string; hex: string }[] = [
-  { name: 'Negro', hex: '#111827' },
-  { name: 'Blanco', hex: '#F9FAFB' },
-  { name: 'Azul Marino', hex: '#1E3A8A' },
-  { name: 'Gris Jaspe', hex: '#6B7280' },
-  { name: 'Rojo', hex: '#DC2626' },
-  { name: 'Verde Militar', hex: '#3F6212' },
-  { name: 'Beige Arena', hex: '#E5D3B3' },
-  { name: 'Vino', hex: '#7F1D1D' }
+  { name: 'Negro', hex: '#1A1A1C' },
+  { name: 'Blanco', hex: '#F4F3EE' },
+  { name: 'Azul Marino', hex: '#232B3E' },
+  { name: 'Gris Jaspe', hex: '#A3A4A6' },
+  { name: 'Rojo', hex: '#B5172E' },
+  { name: 'Verde Militar', hex: '#585C3B' },
+  { name: 'Beige Arena', hex: '#D9C4A1' },
+  { name: 'Vino', hex: '#5A1F2C' }
 ];
 
+/** Tonos genéricos anteriores → se reemplazan automáticamente por los colores reales. */
+export const LEGACY_COLOR_HEX: Record<string, string> = {
+  '#111827': '#1A1A1C',
+  '#F9FAFB': '#F4F3EE',
+  '#1E3A8A': '#232B3E',
+  '#6B7280': '#A3A4A6',
+  '#DC2626': '#B5172E',
+  '#3F6212': '#585C3B',
+  '#E5D3B3': '#D9C4A1',
+  '#7F1D1D': '#5A1F2C'
+};
+
 export const QUICK_PALETTE: { name: string; hex: string }[] = [
-  { name: 'Naranja', hex: '#EA580C' },
-  { name: 'Rojo', hex: '#DC2626' },
-  { name: 'Mostaza', hex: '#CA8A04' },
-  { name: 'Amarillo', hex: '#FACC15' },
-  { name: 'Azul Rey', hex: '#2563EB' },
-  { name: 'Celeste', hex: '#38BDF8' },
-  { name: 'Turquesa', hex: '#0D9488' },
-  { name: 'Verde Botella', hex: '#064E3B' },
-  { name: 'Rosado', hex: '#F472B6' },
-  { name: 'Morado', hex: '#7C3AED' },
-  { name: 'Café', hex: '#78350F' },
-  { name: 'Gris Carbón', hex: '#374151' }
+  { name: 'Naranja Atardecer', hex: '#E0602A' },
+  { name: 'Mostaza', hex: '#C9962E' },
+  { name: 'Amarillo Maíz', hex: '#EDC14F' },
+  { name: 'Azul Rey', hex: '#1F4C9A' },
+  { name: 'Celeste Bebé', hex: '#9CBFDE' },
+  { name: 'Turquesa Profundo', hex: '#0E6E73' },
+  { name: 'Verde Bosque', hex: '#24402F' },
+  { name: 'Verde Olivo', hex: '#6B6B3A' },
+  { name: 'Rosa Palo', hex: '#E9B3BF' },
+  { name: 'Morado Uva', hex: '#45306E' },
+  { name: 'Café Cuero', hex: '#6F4428' },
+  { name: 'Chocolate', hex: '#3E2A20' },
+  { name: 'Terracota', hex: '#A6513A' },
+  { name: 'Hueso / Crema', hex: '#EBE3D0' },
+  { name: 'Gris Carbón', hex: '#3C3C3F' }
 ];
 
 const BASE_BRANDS: { code: string; name: string; cost: number }[] = [
@@ -46,9 +65,10 @@ export const DEFAULT_SETTINGS: Settings = {
   wholesaleMin: 24,
   shipping: 11000,
   lowStock: 5,
-  carriers: ['Cargo Expreso', 'C807 Express', 'Forza Delivery', 'Rápido Cargo', '504 Express', 'Entrega Local (Copán)'],
+  carriers: ['Boxful', 'Cargo Expreso', 'C807 Express', 'Forza Delivery', 'Rápido Cargo', '504 Express', 'Entrega Local (Copán)'],
   paymentMethods: ['Transferencia BAC', 'Transferencia Atlántida', 'Transferencia Ficohsa', 'Efectivo', 'Contra Entrega'],
-  workTypes: ['DTF Frontal', 'DTF Frente y Espalda', 'Camisa Lisa', 'Bordado', 'Vinil / Sublimación'],
+  workTypes: ['DTF Espalda', 'DTF Frontal', 'DTF Frente y Espalda', 'Camisa Lisa', 'Bordado', 'Vinil / Sublimación'],
+  storeTheme: 'ranchero',
   waConfirm:
     '¡Hola {cliente}! 👋 Recibimos tu pedido {folio} en {tienda}.\n\nPrendas: {unidades}\nTotal: {total}\nSaldo pendiente: {saldo}\n\n¡Gracias por tu compra! 🙌',
   waShipped:
