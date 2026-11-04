@@ -41,6 +41,20 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
         </button>
       </div>
 
+      <button
+        className="flex min-h-[54px] w-full items-center justify-between rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-900 to-slate-800 px-4 py-3 text-left text-white shadow-sm transition active:scale-[0.99]"
+        onClick={() => navigate('catalogo')}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">✨</span>
+          <div>
+            <div className="text-sm font-extrabold">Catálogo 3D Interactivo y Probador de Diseño</div>
+            <div className="text-xs text-sky-200">Elige colores permitidos, prueba logos en 3D y compártelo por WhatsApp</div>
+          </div>
+        </div>
+        <span className="text-lg font-bold">→</span>
+      </button>
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Kpi label="Vendido Hoy" value={money(kpi.sold)} tone="text-emerald-700" />
         <Kpi label="Unidades Vendidas Hoy" value={String(kpi.units)} tone="text-brand-800" />

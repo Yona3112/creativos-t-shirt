@@ -5,6 +5,7 @@ import { Drawer, Header, SECTIONS } from './components/Shell';
 import { Toasts } from './components/ui';
 import Home from './pages/Home';
 import NewOrder from './pages/NewOrder';
+import Catalog3D, { CustomerCatalogView, readSharedCatalogHash } from './pages/Catalog3D';
 import Workshop from './pages/Workshop';
 import Inventory from './pages/Inventory';
 import Brands from './pages/Brands';
@@ -25,6 +26,13 @@ export default function App() {
   const state = useAppState();
   const [section, setSection] = useState<Section>(initialSection);
   const [menu, setMenu] = useState(false);
+  const [sharedCatalog, setSharedCatalog] = useState(readSharedCatalogHash);
+
+  useEffect(() => {
+    const onHash = () => setSharedCatalog(readSharedCatalogHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const navigate = useCallback((s: Section) => {
     setSection(s);
@@ -35,6 +43,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (sharedCatalog) return;
     history.replaceState({ section }, '');
     const onPop = (e: PopStateEvent) => {
       const s = (e.state?.section as Section) || 'inicio';
@@ -45,7 +54,7 @@ export default function App() {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sharedCatalog]);
 
   const badges = useMemo(
     () => ({
@@ -53,6 +62,15 @@ export default function App() {
     }),
     [state.orders]
   );
+
+  if (sharedCatalog) {
+    return (
+      <>
+        <CustomerCatalogView payload={sharedCatalog} />
+        <Toasts />
+      </>
+    );
+  }
 
   if (!ready) {
     return <div className="flex h-screen items-center justify-center text-4xl">👕</div>;
@@ -65,6 +83,7 @@ export default function App() {
       <main className="safe-bottom mx-auto max-w-5xl px-3 pt-3">
         {section === 'inicio' && <Home navigate={navigate} />}
         {section === 'vender' && <NewOrder navigate={navigate} />}
+        {section === 'catalogo' && <Catalog3D />}
         {section === 'taller' && <Workshop />}
         {section === 'inventario' && <Inventory />}
         {section === 'marcas' && <Brands />}

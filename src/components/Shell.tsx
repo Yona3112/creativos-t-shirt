@@ -5,6 +5,7 @@ import { useSyncStatus } from '../lib/store';
 export const SECTIONS: { id: Section; icon: string; label: string }[] = [
   { id: 'inicio', icon: '📊', label: 'Inicio' },
   { id: 'vender', icon: '🛒', label: 'Nuevo Pedido' },
+  { id: 'catalogo', icon: '✨', label: 'Catálogo 3D Interactivo' },
   { id: 'taller', icon: '🔨', label: 'Cola de Taller' },
   { id: 'inventario', icon: '👕', label: 'Inventario y Matriz' },
   { id: 'marcas', icon: '🎨', label: 'Marcas, Colores y Stock' },

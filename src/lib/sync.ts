@@ -289,3 +289,33 @@ export class SyncEngine {
     }
   }
 }
+
+export async function uploadPhotoNow(id: string, data: string): Promise<void> {
+  const cfg = getConfig();
+  if (!cfg || !navigator.onLine) return;
+  try {
+    const c = createClient(cfg.url, cfg.key, { auth: { persistSession: false } });
+    const { error } = await c.from('design_photos').upsert({ id, data });
+    if (!error) await db.photos.update(id, { synced: 1 });
+  } catch {
+    /* ignorar */
+  }
+}
+
+export async function fetchSharedPhoto(id: string): Promise<string | null> {
+  const local = await db.photos.get(id);
+  if (local?.data) return local.data;
+  const cfg = getConfig();
+  if (!cfg || !navigator.onLine) return null;
+  try {
+    const c = createClient(cfg.url, cfg.key, { auth: { persistSession: false } });
+    const { data } = await c.from('design_photos').select('data').eq('id', id).maybeSingle();
+    if (data?.data) {
+      await db.photos.put({ id, data: data.data as string, synced: 1, createdAt: Date.now() });
+      return data.data as string;
+    }
+  } catch {
+    /* ignorar */
+  }
+  return null;
+}

@@ -150,6 +150,7 @@ export type SyncStatus = 'local' | 'connecting' | 'live' | 'syncing' | 'offline'
 export type Section =
   | 'inicio'
   | 'vender'
+  | 'catalogo'
   | 'taller'
   | 'inventario'
   | 'marcas'

@@ -93,11 +93,11 @@ export async function buildLabel(o: Order, settings: Settings): Promise<File> {
     ops.push('ET');
   };
 
-  // Encabezado morado
-  rectFill(0, 0, W, 52, 76, 29, 149);
+  // Encabezado ejecutivo Slate Navy
+  rectFill(0, 0, W, 52, 15, 23, 42);
   drawText(settings.storeName, M, 24, 14, true, [255, 255, 255]);
   const sub = [settings.storeAddress, settings.storeCity, settings.storePhone].filter(Boolean).join(' · ');
-  drawText(sub, M, 40, 8, false, [221, 214, 254]);
+  drawText(sub, M, 40, 8, false, [186, 230, 253]);
   drawText(folioLabel(o.folio), W - M - 72, 24, 13, true, [255, 255, 255]);
 
   let y = 72;
