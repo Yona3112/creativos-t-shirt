@@ -1,0 +1,113 @@
+import { useMemo, useState } from 'react';
+import type { Order } from '../lib/types';
+import { useAppState } from '../lib/store';
+import { folioLabel } from '../lib/ids';
+import { money } from '../lib/money';
+import { setOrderStatus } from '../lib/actions';
+import { ColorDot, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
+
+export default function Workshop() {
+  const state = useAppState();
+  const [viewer, setViewer] = useState<string | null>(null);
+
+  const queue = useMemo(
+    () =>
+      state.orders
+        .filter((o) => !o.deleted && o.status === 'en_produccion')
+        .sort((a, b) => a.folio - b.folio),
+    [state.orders]
+  );
+
+  if (queue.length === 0) {
+    return <Empty icon="🔨" text="Sin pedidos en producción" />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {queue.map((order) => (
+        <WorkshopCard key={order.id} order={order} onZoom={setViewer} />
+      ))}
+      <PhotoViewer src={viewer} onClose={() => setViewer(null)} />
+    </div>
+  );
+}
+
+function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) => void }) {
+  const photo = usePhoto(order.photoId);
+
+  const finish = () => {
+    const err = setOrderStatus(order.id, 'enviado');
+    if (err) return toast(err, 'error');
+    toast(`${folioLabel(order.folio)} enviado a despacho`);
+  };
+
+  return (
+    <article className="card space-y-3 border-2 border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xl font-extrabold text-brand-900">{folioLabel(order.folio)}</span>
+          <span className="rounded-lg bg-brand-100 px-3 py-1 text-sm font-bold text-brand-900">{order.workType}</span>
+        </div>
+        {order.balance > 0 ? (
+          <span className="rounded-xl bg-red-600 px-3 py-1.5 text-sm font-extrabold text-white">
+            ⚠️ Resta cobrar: {money(order.balance)}
+          </span>
+        ) : (
+          <span className="rounded-xl bg-emerald-100 px-3 py-1.5 text-sm font-extrabold text-emerald-800">
+            ✓ Pagado 100%
+          </span>
+        )}
+      </div>
+
+      {order.shipTo.name && (
+        <div className="text-sm font-semibold text-slate-600">
+          Cliente: <span className="text-slate-900">{order.shipTo.name}</span>
+        </div>
+      )}
+
+      {photo && (
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+          <img
+            src={photo}
+            alt={`Diseño ${folioLabel(order.folio)}`}
+            className="max-h-72 w-full cursor-zoom-in object-contain"
+            onClick={() => onZoom(photo)}
+          />
+          <div className="border-t border-slate-200 p-2">
+            <button className="btn-soft w-full" onClick={() => onZoom(photo)}>
+              🔍 Ver Diseño
+            </button>
+          </div>
+        </div>
+      )}
+
+      {order.notes && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-950">
+          📝 {order.notes}
+        </div>
+      )}
+
+      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/60">
+        {order.items.map((it) => (
+          <li key={it.id} className="flex items-center justify-between gap-2 px-3 py-2.5">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <ColorDot hex={it.colorHex} size={24} />
+              <div className="min-w-0">
+                <div className="truncate font-bold text-slate-900">
+                  {it.brandName} · {it.colorName}
+                </div>
+              </div>
+            </div>
+            <span className="shrink-0 rounded-lg bg-white px-3 py-1 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
+              {it.size} × {it.qty}
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <button className="btn-success w-full text-base" onClick={finish}>
+        ✅ Terminado en Taller → Pasar a Envío
+      </button>
+    </article>
+  );
+}

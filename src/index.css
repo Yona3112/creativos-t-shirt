@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-slate-100 text-slate-900 antialiased;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    overscroll-behavior-y: contain;
+  }
+  /* iOS: 16px mínimo evita el zoom automático */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  button {
+    touch-action: manipulation;
+  }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-[48px] select-none items-center justify-center gap-2 rounded-xl px-4 font-semibold transition active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply btn bg-brand-700 text-white shadow-sm hover:bg-brand-800;
+  }
+  .btn-success {
+    @apply btn bg-emerald-600 text-white shadow-sm hover:bg-emerald-700;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .btn-soft {
+    @apply btn bg-brand-50 text-brand-800 hover:bg-brand-100;
+  }
+  .btn-ghost {
+    @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50;
+  }
+  .btn-icon {
+    @apply inline-flex h-12 w-12 shrink-0 select-none items-center justify-center rounded-xl text-xl font-bold transition active:scale-95 disabled:opacity-40;
+  }
+  .input {
+    @apply block min-h-[48px] w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-200;
+  }
+  .label {
+    @apply mb-1 block text-sm font-semibold text-slate-600;
+  }
+  .card {
+    @apply rounded-2xl border border-slate-200 bg-white p-4 shadow-sm;
+  }
+  .chip {
+    @apply inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border-2 px-3 font-semibold transition active:scale-[0.98];
+  }
+  .chip-on {
+    @apply border-brand-700 bg-brand-700 text-white;
+  }
+  .chip-off {
+    @apply border-slate-200 bg-white text-slate-700;
+  }
+  .section-title {
+    @apply mb-2 text-sm font-bold uppercase tracking-wide text-slate-500;
+  }
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
+}
