@@ -491,6 +491,7 @@ export function InteractiveShirt3D({
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
   const [targetAngleY, setTargetAngleY] = useState<number | null>(0);
   const [zoom, setZoom] = useState<number>(1);
+  const [showcaseActive, setShowcaseActive] = useState<boolean>(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
 
@@ -498,6 +499,27 @@ export function InteractiveShirt3D({
     if (placement === 'back') setTargetAngleY(180);
     else setTargetAngleY(0);
   }, [placement]);
+
+  // Modo "Desfile Automático": recorre suavemente los diseños del catálogo en la camisa 3D
+  useEffect(() => {
+    if (!showcaseActive || !catalogDesigns || catalogDesigns.length < 2 || !onSelectCatalogDesign) {
+      return;
+    }
+    const readyDesigns = catalogDesigns.filter((d) => !!d.imageUrl);
+    if (readyDesigns.length < 2) return;
+
+    const timer = window.setInterval(() => {
+      const currentIdx = readyDesigns.findIndex(
+        (d) =>
+          (activeCatalogDesignId && d.id === activeCatalogDesignId) ||
+          (designUrl && d.imageUrl === designUrl)
+      );
+      const nextIdx = (currentIdx + 1) % readyDesigns.length;
+      onSelectCatalogDesign(readyDesigns[nextIdx]);
+    }, 3200);
+
+    return () => window.clearInterval(timer);
+  }, [showcaseActive, catalogDesigns, activeCatalogDesignId, designUrl, onSelectCatalogDesign]);
 
   const adjustScale = (delta: number) => {
     const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.30, 3.00);
@@ -643,12 +665,22 @@ export function InteractiveShirt3D({
           </div>
         </div>
 
-        {/* ESCENARIO CENTRAL: Proporción 1:1 exacta (nunca se estira ni deforma) */}
+        {/* ESCENARIO CENTRAL: Proporción 1:1 exacta con Halo de Estudio y Sombra Flotante */}
         <div className="order-1 flex flex-col items-center justify-center md:order-2">
           <div
-            className="relative mx-auto w-full max-w-[380px]"
+            className="relative mx-auto flex w-full max-w-[380px] items-center justify-center"
             style={{ aspectRatio: '1 / 1' }}
           >
+            {/* Halo ambiental dinámico que toma el color de la camisa */}
+            <div
+              className="studio-aura-pulse pointer-events-none absolute inset-6 rounded-full blur-2xl transition-colors duration-700"
+              style={{
+                background: `radial-gradient(circle, ${hex}55 0%, #38bdf825 55%, transparent 75%)`
+              }}
+            />
+            {/* Sombra flotante de estudio debajo de la prenda 3D */}
+            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-slate-900/25 blur-md" />
+
             <WebGLShirtCanvas
               hex={hex}
               designUrl={designUrl || null}
@@ -908,7 +940,7 @@ export function InteractiveShirt3D({
             />
           )}
 
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-extrabold uppercase tracking-wide text-slate-800">
                 🎨 {isStoreOwner ? 'Diseños del Catálogo (A Mano)' : 'Diseños Disponibles'}
@@ -916,6 +948,20 @@ export function InteractiveShirt3D({
               <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-[11px] font-extrabold text-sky-900">
                 📐 Clic = Colocar en Tamaño A3
               </span>
+              {catalogDesigns && catalogDesigns.length >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => setShowcaseActive((v) => !v)}
+                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-extrabold transition active:scale-95 ${
+                    showcaseActive
+                      ? 'bg-amber-500 text-white shadow-sm ring-2 ring-amber-300'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  title="Desfilar automáticamente todos los diseños del catálogo sobre la camisa 3D"
+                >
+                  <span>{showcaseActive ? '⏸ Desfile Vivo: ON' : '🎬 Desfile Automático'}</span>
+                </button>
+              )}
             </div>
 
             {isStoreOwner && (
@@ -960,19 +1006,20 @@ export function InteractiveShirt3D({
               )}
             </div>
           ) : (
-            <div className="flex snap-x snap-mandatory gap-2.5 overflow-x-auto pb-1.5 pt-0.5 sm:flex-wrap sm:overflow-visible">
-              {catalogDesigns.map((d) => {
+            <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 pt-1.5 sm:flex-wrap sm:overflow-visible">
+              {catalogDesigns.map((d, idx) => {
                 const isSelected =
                   (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                   (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
                 return (
                   <div
                     key={d.id}
-                    className={`group relative flex w-[112px] shrink-0 snap-start flex-col justify-between rounded-2xl border-2 p-1.5 transition sm:w-[122px] ${
+                    style={{ animationDelay: `${(idx % 6) * 160}ms` }}
+                    className={`catalog-card-motion group relative flex w-[114px] shrink-0 snap-start flex-col justify-between rounded-2xl border-2 p-1.5 sm:w-[124px] ${
                       isSelected
-                        ? 'border-sky-600 bg-sky-50/80 shadow-md'
+                        ? 'border-sky-500 bg-gradient-to-b from-sky-50 to-white shadow-lg ring-2 ring-sky-300/70'
                         : d.clientVisible || !isStoreOwner
-                        ? 'border-slate-200 bg-white hover:border-slate-400'
+                        ? 'border-slate-200 bg-white shadow-sm hover:border-sky-400 hover:shadow-md'
                         : 'border-dashed border-slate-300 bg-slate-50/80 opacity-80'
                     }`}
                   >
@@ -992,20 +1039,23 @@ export function InteractiveShirt3D({
 
                     <button
                       type="button"
-                      onClick={() => onSelectCatalogDesign?.(d)}
+                      onClick={() => {
+                        setShowcaseActive(false);
+                        onSelectCatalogDesign?.(d);
+                      }}
                       disabled={!d.imageUrl}
                       className="flex w-full flex-col items-center text-left focus:outline-none"
                       title={`Colocar "${d.name}" en la camisa en Tamaño A3`}
                     >
                       <div
-                        className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-1.5 shadow-inner transition group-hover:scale-[1.02]"
+                        className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-1.5 shadow-inner transition duration-300 group-hover:scale-[1.04]"
                         style={{ backgroundColor: hex }}
                       >
                         {d.imageUrl ? (
                           <img
                             src={d.imageUrl}
                             alt={d.name}
-                            className="h-full w-full object-contain drop-shadow-sm"
+                            className="h-full w-full object-contain drop-shadow-md transition-transform duration-300 group-hover:scale-110"
                             loading="lazy"
                           />
                         ) : (
@@ -1015,7 +1065,7 @@ export function InteractiveShirt3D({
                           {d.placement === 'back' ? 'Espalda A3' : 'Frente A3'}
                         </span>
                         {isSelected && (
-                          <span className="absolute left-1 top-1 rounded-md bg-sky-600 px-1.5 py-0.5 text-[9px] font-extrabold text-white shadow">
+                          <span className="absolute left-1 top-1 animate-bounce rounded-md bg-sky-600 px-1.5 py-0.5 text-[9px] font-extrabold text-white shadow">
                             ✓ Puesto
                           </span>
                         )}
@@ -1128,6 +1178,7 @@ function WebGLShirtCanvas({
     indexCount: stateRef.current.indexCount
   };
 
+  const initialRgb = hexToRgbNorm(hex);
   const rotRef = useRef({
     rx: 5,
     ry: -14,
@@ -1135,6 +1186,12 @@ function WebGLShirtCanvas({
     vy: 0,
     baseRy: 0,
     smoothZoom: zoom,
+    smoothScale: designScale,
+    decalPop: 1,
+    decalPopVel: 0,
+    smoothR: initialRgb[0],
+    smoothG: initialRgb[1],
+    smoothB: initialRgb[2],
     dragging: false,
     lastX: 0,
     lastY: 0
@@ -1143,7 +1200,6 @@ function WebGLShirtCanvas({
   useEffect(() => {
     if (targetAngleY !== null && targetAngleY !== undefined) {
       rotRef.current.baseRy = targetAngleY;
-      rotRef.current.ry = targetAngleY;
     }
   }, [targetAngleY]);
 
@@ -1152,7 +1208,7 @@ function WebGLShirtCanvas({
     decalTex: WebGLTexture | null;
   } | null>(null);
 
-  // Actualizar textura del diseño (Decal) cuando cambia designUrl
+  // Actualizar textura del diseño (Decal) cuando cambia designUrl con efecto elástico (Spring Pop-in)
   useEffect(() => {
     const ctx = glRef.current;
     if (!ctx) return;
@@ -1174,6 +1230,11 @@ function WebGLShirtCanvas({
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       stateRef.current.decalAspect = img.naturalWidth / Math.max(1, img.naturalHeight);
       stateRef.current.hasDecal = true;
+      // Impulso elástico al estampar el diseño sobre la prenda 3D
+      rotRef.current.decalPop = 0.58;
+      rotRef.current.decalPopVel = 0.09;
+      rotRef.current.vy = 3.8;
+      rotRef.current.vx = -1.4;
     };
     img.src = designUrl;
   }, [designUrl]);
@@ -1339,27 +1400,40 @@ function WebGLShirtCanvas({
       const st = stateRef.current;
       const r = rotRef.current;
 
-      // Interpolación suave de Zoom
+      // Interpolación suave de Zoom, Escala y resorte elástico del diseño (Spring Pop-in)
       r.smoothZoom += (st.zoom - r.smoothZoom) * 0.14;
+      r.smoothScale += (st.designScale - r.smoothScale) * 0.18;
+      const springForce = (1.0 - r.decalPop) * 0.22;
+      r.decalPopVel = (r.decalPopVel + springForce) * 0.76;
+      r.decalPop = clamp(r.decalPop + r.decalPopVel, 0.35, 1.18);
+
+      // Transición suave de color RGB sobre las fibras de algodón
+      const [targetR, targetG, targetB] = hexToRgbNorm(st.hex);
+      r.smoothR += (targetR - r.smoothR) * 0.14;
+      r.smoothG += (targetG - r.smoothG) * 0.14;
+      r.smoothB += (targetB - r.smoothB) * 0.14;
 
       if (!r.dragging) {
         if (st.autoMotion) {
           if (st.mode === 'orbit') {
-            r.ry = (r.ry + 0.5) % 360;
+            r.ry = (r.ry + 0.55) % 360;
           } else if (st.mode === 'walk') {
             const target = r.baseRy + Math.sin(elapsed * 3.0) * 16;
-            r.ry += (target - r.ry) * 0.08;
-            r.rx += (4 + Math.abs(Math.cos(elapsed * 3.0)) * 4 - r.rx) * 0.08;
+            r.ry += (target - r.ry) * 0.10 + r.vy;
+            r.rx += (4 + Math.abs(Math.cos(elapsed * 3.0)) * 4 - r.rx) * 0.10 + r.vx;
           } else {
-            const target = r.baseRy + Math.sin(elapsed * 1.1) * 20;
-            r.ry += (target - r.ry) * 0.07;
-            r.rx += (5 + Math.cos(elapsed * 0.8) * 3 - r.rx) * 0.07;
+            const target = r.baseRy + Math.sin(elapsed * 1.1) * 19;
+            r.ry += (target - r.ry) * 0.09 + r.vy;
+            r.rx += (5 + Math.cos(elapsed * 0.8) * 3 - r.rx) * 0.09 + r.vx;
           }
+          r.vx *= 0.85;
+          r.vy *= 0.85;
         } else {
-          r.ry += r.vy;
+          // Incluso con autoMotion en pausa, girar suavemente hacia Frente/Perfil/Espalda
+          r.ry += (r.baseRy - r.ry) * 0.12 + r.vy;
           r.rx = clamp(r.rx + r.vx, -28, 32);
-          r.vx *= 0.90;
-          r.vy *= 0.90;
+          r.vx *= 0.88;
+          r.vy *= 0.88;
         }
       }
 
@@ -1400,17 +1474,17 @@ function WebGLShirtCanvas({
         gl.uniform1f(uMode, st.mode === 'walk' ? 1.0 : st.mode === 'orbit' ? 2.0 : 0.0);
         gl.uniform1f(uMotionActive, st.autoMotion ? 1.0 : 0.0);
 
-        const [cr, cg, cb] = hexToRgbNorm(st.hex);
-        gl.uniform3f(uBaseColor, cr, cg, cb);
+        gl.uniform3f(uBaseColor, r.smoothR, r.smoothG, r.smoothB);
 
         gl.uniform1i(uHasDecal, st.hasDecal ? 1 : 0);
         gl.uniform1i(uHasNormalMap, st.hasNormalMap ? 1 : 0);
         gl.uniform1i(uHasAoMap, st.hasAoMap ? 1 : 0);
         gl.uniform1i(uDecalOnBack, st.placement === 'back' ? 1 : 0);
 
+        const effectiveScale = clamp(r.smoothScale * r.decalPop, 0.25, 3.15);
         const rect = computeDecalRect3D(
           st.placement,
-          st.designScale,
+          effectiveScale,
           st.designOffsetX,
           st.designOffsetY,
           st.decalAspect

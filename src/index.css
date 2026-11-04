@@ -82,3 +82,57 @@
 .safe-bottom {
   padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
 }
+
+@keyframes catalogFloat {
+  0%,
+  100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(0.5deg);
+  }
+}
+
+@keyframes studioAuraPulse {
+  0%,
+  100% {
+    transform: scale(0.96);
+    opacity: 0.28;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.44;
+  }
+}
+
+@keyframes floorShadowBreath {
+  0%,
+  100% {
+    transform: scaleX(0.95) scaleY(1);
+    opacity: 0.22;
+  }
+  50% {
+    transform: scaleX(1.06) scaleY(1.08);
+    opacity: 0.34;
+  }
+}
+
+.catalog-card-motion {
+  animation: catalogFloat 3.6s ease-in-out infinite;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.22s ease;
+}
+
+.catalog-card-motion:hover {
+  animation-play-state: paused;
+  transform: translateY(-6px) scale(1.045) !important;
+}
+
+.studio-aura-pulse {
+  animation: studioAuraPulse 4.2s ease-in-out infinite;
+}
+
+.floor-shadow-breath {
+  animation: floorShadowBreath 3.4s ease-in-out infinite;
+}
