@@ -202,16 +202,13 @@ void main() {
     N = -N;
   }
 
-  // 1. Oclusión Ambiental (AO) real horneada del modelo 3D escaneado (pliegues y costuras reales)
-  // Normalizamos la cara trasera (v_objPos.z < 0.0) para que la espalda se vea igual de iluminada que el frente
+  // 1. Oclusión Ambiental (AO) suave y uniforme (sin sombras duras ni parches oscuros en espalda o pecho)
   float bakedAO = 1.0;
   if (u_hasAoMap == 1) {
     vec3 aoSample = texture2D(u_aoMap, v_uv).rgb;
     float rawAO = (aoSample.r + aoSample.g + aoSample.b) / 3.0;
-    if (v_objPos.z < 0.0) {
-      rawAO = clamp(rawAO * 1.48 + 0.24, 0.0, 1.0);
-    }
-    bakedAO = mix(1.0, rawAO, 0.78);
+    float cleanAO = clamp((rawAO - 0.42) * 1.55 + 0.88, 0.84, 1.0);
+    bakedAO = mix(1.0, cleanAO, 0.32);
   }
 
   // 2. Micro-relieve real de tejido de algodón (Normal Map 8x8 de shirt_baked.glb)
@@ -219,29 +216,28 @@ void main() {
   if (u_hasNormalMap == 1) {
     vec2 tiledUV = fract(v_uv * 8.0);
     vec3 nSample = texture2D(u_normalMap, tiledUV).rgb * 2.0 - 1.0;
-    N = normalize(N + vec3(nSample.x, nSample.y, 0.0) * 0.24);
-    fabricGrain = (nSample.x + nSample.y) * 0.015;
+    N = normalize(N + vec3(nSample.x, nSample.y, 0.0) * 0.22);
+    fabricGrain = (nSample.x + nSample.y) * 0.014;
   }
 
   vec3 fabricBase = clamp(u_baseColor + vec3(fabricGrain), 0.0, 1.0);
   vec3 decalColor = fabricBase;
   float decalMask = 0.0;
 
-  // 3. Proyección 3D del diseño / logo sobre el pecho o la espalda (soporta hasta tamaño A3 completo)
+  // 3. Proyección 3D del diseño / logo sobre el pecho o la espalda (usando normal pura sin corte Z en el centro)
   if (u_hasDecal == 1 && !interior) {
     bool isBackTarget = (u_decalOnBack == 1);
-    float sideZ = isBackTarget ? -v_objPos.z : v_objPos.z;
     float sideNz = isBackTarget ? -v_objNorm.z : v_objNorm.z;
 
-    // Solo proyectar en la cara frontal o trasera del torso (permitiendo ancho completo A3)
-    if (sideZ > -0.02 && sideNz > 0.04 && abs(v_objPos.x) < 0.49) {
+    // Solo proyectar en la cara frontal o trasera del torso según su normal 3D (permitiendo tamaño A3 completo)
+    if (sideNz > 0.05 && abs(v_objPos.x) < 0.49) {
       float sideX = isBackTarget ? -v_objPos.x : v_objPos.x;
       float du = (sideX - u_decalRect.x) / u_decalRect.z + 0.5;
       float dv = (u_decalRect.y - v_objPos.y) / u_decalRect.w + 0.5;
 
       if (du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0) {
         vec4 tex = texture2D(u_decalTex, vec2(du, dv));
-        float angleFade = smoothstep(0.04, 0.22, sideNz);
+        float angleFade = smoothstep(0.05, 0.22, sideNz);
         float alpha = tex.a * angleFade;
         decalColor = tex.rgb;
         decalMask = alpha;
@@ -249,33 +245,33 @@ void main() {
     }
   }
 
-  // 4. Iluminación de Estudio Fotográfico Simétrica (Frente y Espalda con el mismo brillo limpio)
+  // 4. Iluminación de Estudio Fotográfico Simétrica y Limpia (sin manchas ni sombras raras)
   vec3 V = normalize(-v_viewPos);
-  vec3 L_key = normalize(vec3(0.38, 0.62, 0.78));
-  vec3 L_fill = normalize(vec3(-0.55, 0.30, 0.65));
-  vec3 L_top = normalize(vec3(0.0, 0.90, 0.35));
+  vec3 L_key = normalize(vec3(0.32, 0.55, 0.82));
+  vec3 L_fill = normalize(vec3(-0.48, 0.28, 0.72));
+  vec3 L_top = normalize(vec3(0.0, 0.88, 0.42));
 
   float ndlKey = max(dot(N, L_key), 0.0);
-  float wrapKey = ndlKey * 0.62 + 0.38;
+  float wrapKey = ndlKey * 0.55 + 0.45;
   float ndlFill = max(dot(N, L_fill), 0.0);
   float ndlTop = max(dot(N, L_top), 0.0);
 
-  // Sheen aterciopelado de fibra de algodón en los bordes curvos
+  // Sheen aterciopelado sutil de fibra de algodón en los bordes
   float ndv = max(dot(N, V), 0.0);
-  float cottonSheen = pow(1.0 - ndv, 3.0) * 0.14;
+  float cottonSheen = pow(1.0 - ndv, 3.2) * 0.11;
 
-  // Iluminación de la tela de algodón
-  float fabricLight = (0.40 + 0.50 * wrapKey + 0.18 * ndlFill + 0.08 * ndlTop) * bakedAO;
+  // Iluminación pareja de la tela de algodón
+  float fabricLight = (0.44 + 0.46 * wrapKey + 0.16 * ndlFill + 0.06 * ndlTop) * bakedAO;
   if (interior) {
-    fabricLight *= 0.55;
+    fabricLight *= 0.58;
   }
   vec3 litFabric = fabricBase * fabricLight + vec3(cottonSheen);
 
-  // Iluminación de la tinta del diseño (DTF / Serigrafía): mantiene 100% vivos los colores en Frente y Espalda
+  // Iluminación de la tinta del diseño (DTF / Serigrafía): colores 100% nítidos y sin sombras encima
   vec3 H = normalize(L_key + V);
-  float inkSpec = pow(max(dot(N, H), 0.0), 28.0) * 0.05;
-  float inkLight = clamp(0.92 + 0.14 * wrapKey, 0.90, 1.04) * mix(1.0, bakedAO, 0.16);
-  vec3 litInk = (decalColor + vec3(fabricGrain * 0.4)) * inkLight + vec3(inkSpec);
+  float inkSpec = pow(max(dot(N, H), 0.0), 28.0) * 0.04;
+  float inkLight = clamp(0.95 + 0.09 * wrapKey, 0.94, 1.02);
+  vec3 litInk = (decalColor + vec3(fabricGrain * 0.35)) * inkLight + vec3(inkSpec);
 
   vec3 finalColor = mix(litFabric, litInk, decalMask);
 
@@ -431,6 +427,13 @@ export function InteractiveShirt3D({
   designOffsetX = 0,
   designOffsetY = 0,
   onDesignChange,
+  onUploadFile,
+  onClearDesign,
+  removeBg,
+  onToggleRemoveBg,
+  onAiRemoveBg,
+  onUpscale4K,
+  processingText,
   autoMotion = true,
   stockBadge
 }: {
@@ -448,6 +451,13 @@ export function InteractiveShirt3D({
     offsetY?: number;
     placement?: DecalPlacement;
   }) => void;
+  onUploadFile?: (file: File) => void;
+  onClearDesign?: () => void;
+  removeBg?: boolean;
+  onToggleRemoveBg?: (next: boolean) => void;
+  onAiRemoveBg?: () => void;
+  onUpscale4K?: () => void;
+  processingText?: string | null;
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
 }) {
@@ -455,6 +465,7 @@ export function InteractiveShirt3D({
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
   const [targetAngleY, setTargetAngleY] = useState<number | null>(0);
   const [zoom, setZoom] = useState<number>(1);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (placement === 'back') setTargetAngleY(180);
@@ -472,6 +483,20 @@ export function InteractiveShirt3D({
 
   return (
     <div className="relative select-none">
+      {onUploadFile && (
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUploadFile(f);
+            e.target.value = '';
+          }}
+        />
+      )}
+
       {/* Cabecera compacta con estado de stock en vivo */}
       {stockBadge && (
         <div className="mb-2 flex items-center justify-center">
@@ -492,8 +517,8 @@ export function InteractiveShirt3D({
         </div>
       )}
 
-      {/* Disposición de Estudio: Panel Izquierdo (Cámara/Zoom) + Camisa 3D Central (1:1 sin estirar) + Panel Derecho (Diseño/A3) */}
-      <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[146px_1fr_164px]">
+      {/* Disposición de Estudio: Panel Izquierdo (Cámara/Zoom) + Camisa 3D Central (1:1 sin estirar) + Panel Derecho (Subir Imagen/Diseño/A3) */}
+      <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[148px_1fr_180px]">
         {/* PANEL LATERAL IZQUIERDO: Ángulo 3D, Zoom de Camisa y Movimiento */}
         <div className="order-2 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:order-1 md:flex-col md:items-stretch">
           <div className="w-full">
@@ -618,6 +643,12 @@ export function InteractiveShirt3D({
               }}
             />
           </div>
+          {processingText && (
+            <div className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-3 py-1 text-[11px] font-extrabold text-sky-900">
+              <span className="h-2 w-2 animate-ping rounded-full bg-sky-600" />
+              <span>{processingText}</span>
+            </div>
+          )}
           <div className="mt-1 flex flex-wrap items-center justify-center gap-1.5 text-center text-xs font-semibold text-slate-500">
             <span>
               {touchAction === 'moveDesign'
@@ -631,8 +662,79 @@ export function InteractiveShirt3D({
           </div>
         </div>
 
-        {/* PANEL LATERAL DERECHO: Controles intuitivos del Diseño y Botón directo Tamaño A3 */}
+        {/* PANEL LATERAL DERECHO: Subir Imagen directo + Controles intuitivos del Diseño y Tamaño A3 */}
         <div className="order-3 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:flex-col md:items-stretch">
+          {onUploadFile && (
+            <div className="w-full border-b border-slate-100 pb-2">
+              <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                Imagen / Diseño
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => uploadInputRef.current?.click()}
+                  className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
+                >
+                  <span>📸</span>
+                  <span>{designUrl ? 'Cambiar Imagen' : 'Subir Imagen'}</span>
+                </button>
+                {designUrl && onClearDesign && (
+                  <button
+                    type="button"
+                    onClick={onClearDesign}
+                    title="Quitar imagen de la camisa"
+                    className="flex h-[40px] w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-xs font-extrabold text-rose-600 hover:bg-rose-100"
+                  >
+                    🗑
+                  </button>
+                )}
+              </div>
+
+              {onToggleRemoveBg && (
+                <button
+                  type="button"
+                  onClick={() => onToggleRemoveBg(!removeBg)}
+                  className={`mt-1.5 flex min-h-[32px] w-full items-center justify-between rounded-xl px-2.5 py-1 text-[11px] font-bold transition ${
+                    removeBg
+                      ? 'bg-emerald-50 text-emerald-900 ring-1 ring-emerald-300'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                  title="Quitar el fondo exterior del JPG/PNG protegiendo colores internos"
+                >
+                  <span>🪄 Quitar Fondo</span>
+                  <span className="font-extrabold">{removeBg ? 'ON' : 'OFF'}</span>
+                </button>
+              )}
+
+              {designUrl && (onAiRemoveBg || onUpscale4K) && (
+                <div className="mt-1 grid grid-cols-2 gap-1">
+                  {onAiRemoveBg && (
+                    <button
+                      type="button"
+                      disabled={!!processingText}
+                      onClick={onAiRemoveBg}
+                      className="min-h-[30px] rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-extrabold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                      title="Recorte de fondo con Inteligencia Artificial"
+                    >
+                      🤖 Fondo IA
+                    </button>
+                  )}
+                  {onUpscale4K && (
+                    <button
+                      type="button"
+                      disabled={!!processingText}
+                      onClick={onUpscale4K}
+                      className="min-h-[30px] rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-extrabold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                      title="Mejorar nitidez y escalar diseño a 4K Ultra HD"
+                    >
+                      ✨ 4K HD
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="w-full">
             <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
               Al arrastrar
@@ -640,7 +742,7 @@ export function InteractiveShirt3D({
             <div className="grid grid-cols-2 gap-1 md:grid-cols-1">
               <button
                 type="button"
-                className={`min-h-[38px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
                   touchAction === 'rotate'
                     ? 'bg-slate-900 text-white shadow-sm'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -652,7 +754,7 @@ export function InteractiveShirt3D({
               <button
                 type="button"
                 disabled={!designUrl}
-                className={`min-h-[38px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
                   !designUrl
                     ? 'cursor-not-allowed bg-slate-50 text-slate-300'
                     : touchAction === 'moveDesign'

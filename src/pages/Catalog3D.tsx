@@ -328,6 +328,18 @@ export default function Catalog3D() {
             if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
             if (patch.placement !== undefined) setPlacement(patch.placement);
           }}
+          onUploadFile={(file) => void onUploadDesign(file)}
+          onClearDesign={() => {
+            setDesignUrl(null);
+            setRawDesignUrl(null);
+            setPhotoId(null);
+            setIs4K(false);
+          }}
+          removeBg={removeBg}
+          onToggleRemoveBg={(next) => void handleToggleRemoveBg(next, bgTolerance)}
+          onAiRemoveBg={() => void handleAiRemoveBg()}
+          onUpscale4K={() => void handleUpscale4K()}
+          processingText={processingMsg}
           autoMotion={autoMotion}
           stockBadge={{
             available: currentVariantStock > 0,
@@ -917,6 +929,13 @@ export function CustomerCatalogView({
               if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
               if (patch.placement !== undefined) setPlacement(patch.placement);
             }}
+            onUploadFile={(file) => void onClientUpload(file)}
+            onClearDesign={() => {
+              setDesignUrl(null);
+              setRawDesignUrl(null);
+            }}
+            removeBg={removeBg}
+            onToggleRemoveBg={(next) => void handleClientToggleRemoveBg(next)}
             autoMotion
             stockBadge={{
               available: selectedSizeStock > 0,

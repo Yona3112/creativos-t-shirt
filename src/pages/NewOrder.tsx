@@ -312,6 +312,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               if (patch.placement !== undefined) next.placement = patch.placement;
               set(next);
             }}
+            onUploadFile={(file) => void onPhoto(file)}
+            onClearDesign={() => set({ photo: null, rawPhoto: null })}
+            removeBg={draft.removeBg ?? true}
+            onToggleRemoveBg={(next) => void toggleRemoveBg(next)}
+            onAiRemoveBg={() => void handleAiBgNewOrder()}
+            onUpscale4K={() => void handleUpscale4KNewOrder()}
+            processingText={procMsg}
             stockBadge={
               brand && color
                 ? {
