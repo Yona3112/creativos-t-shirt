@@ -1,4 +1,4 @@
-import type { Address, AppState, Brand, CartLine, Color, Customer, Movement, MovementReason, Order, OrderStatus, Settings, ShipTo } from './types';
+import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer, Movement, MovementReason, Order, OrderStatus, Settings, ShipTo } from './types';
 import { getState, update } from './store';
 import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
@@ -297,4 +297,49 @@ export function markPaid(id: string): void {
 
 export function brandsAndColors(s: AppState) {
   return activeBrands(s).map((b) => ({ brand: b, colors: brandColors(s, b.id) }));
+}
+
+/* --------------------- Diseños del Catálogo 3D ---------------------- */
+
+export function addCatalogDesign(input: {
+  name: string;
+  photoId: string;
+  clientVisible?: boolean;
+  placement?: CatalogDesign['placement'];
+}): CatalogDesign {
+  const t = now();
+  const design: CatalogDesign = {
+    id: `cd-${uid()}`,
+    name: input.name.trim() || 'Diseño',
+    photoId: input.photoId,
+    clientVisible: input.clientVisible ?? true,
+    placement: input.placement || 'center',
+    createdAt: t,
+    updatedAt: t
+  };
+  update((s) => ({
+    ...s,
+    catalogDesigns: [design, ...(s.catalogDesigns || [])]
+  }));
+  return design;
+}
+
+export function updateCatalogDesign(id: string, patch: Partial<CatalogDesign>): void {
+  const t = now();
+  update((s) => ({
+    ...s,
+    catalogDesigns: (s.catalogDesigns || []).map((d) =>
+      d.id === id ? { ...d, ...patch, updatedAt: t } : d
+    )
+  }));
+}
+
+export function deleteCatalogDesign(id: string): void {
+  const t = now();
+  update((s) => ({
+    ...s,
+    catalogDesigns: (s.catalogDesigns || []).map((d) =>
+      d.id === id ? { ...d, deleted: true, updatedAt: t } : d
+    )
+  }));
 }

@@ -95,6 +95,7 @@ export function createInitialState(): AppState {
     colors: brands.flatMap((b) => seedColorsFor(b)),
     customers: [],
     orders: [],
-    movements: []
+    movements: [],
+    catalogDesigns: []
   };
 }

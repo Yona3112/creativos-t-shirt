@@ -11,6 +11,7 @@ import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../com
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
+import { useCatalogDesigns } from '../lib/catalogDesigns';
 
 const LS_CART = 'cgs_cart_v1';
 
@@ -48,9 +49,9 @@ function emptyDraft(): Draft {
     rawPhoto: null,
     removeBg: true,
     placement: 'center',
-    designScale: 1,
+    designScale: 2.75,
     designOffsetX: 0,
-    designOffsetY: 0,
+    designOffsetY: 2,
     customerId: null,
     addressId: null,
     withShipping: true,
@@ -162,6 +163,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const removeLine = (id: string) => setDraft((d) => ({ ...d, lines: d.lines.filter((l) => l.id !== id) }));
 
   const [procMsg, setProcMsg] = useState<string | null>(null);
+  const {
+    allDesigns,
+    saveCurrentToCatalog,
+    uploadFilesToCatalog,
+    toggleVisible,
+    deleteDesign
+  } = useCatalogDesigns();
 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
@@ -172,12 +180,15 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       set({
         rawPhoto: raw,
         photo: processed,
-        removeBg: shouldRemoveBg
+        removeBg: shouldRemoveBg,
+        designScale: 2.75,
+        designOffsetX: 0,
+        designOffsetY: 2
       });
       toast(
         shouldRemoveBg
-          ? 'Diseño sin fondo agregado (colores internos protegidos)'
-          : 'Diseño agregado a la camisa 3D'
+          ? 'Diseño sin fondo agregado en Tamaño A3'
+          : 'Diseño agregado a la camisa 3D en Tamaño A3'
       );
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -301,9 +312,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             brandName={brand?.name || ''}
             designUrl={draft.photo}
             placement={draft.placement || 'center'}
-            designScale={draft.designScale ?? 1}
+            designScale={draft.designScale ?? 2.75}
             designOffsetX={draft.designOffsetX ?? 0}
-            designOffsetY={draft.designOffsetY ?? 0}
+            designOffsetY={draft.designOffsetY ?? 2}
             onDesignChange={(patch) => {
               const next: Partial<Draft> = {};
               if (patch.scale !== undefined) next.designScale = patch.scale;
@@ -319,6 +330,53 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             onAiRemoveBg={() => void handleAiBgNewOrder()}
             onUpscale4K={() => void handleUpscale4KNewOrder()}
             processingText={procMsg}
+            isStoreOwner
+            catalogDesigns={allDesigns}
+            onSelectCatalogDesign={(d) => {
+              if (!d.imageUrl) return;
+              set({
+                photo: d.imageUrl,
+                rawPhoto: d.imageUrl,
+                placement: d.placement || 'center',
+                designScale: 2.75,
+                designOffsetX: 0,
+                designOffsetY: 2
+              });
+              toast(`"${d.name}" aplicado en Tamaño A3`);
+            }}
+            onSaveCurrentToCatalog={() => {
+              if (!draft.photo) return;
+              void saveCurrentToCatalog({
+                dataUrl: draft.photo,
+                placement: draft.placement || 'center'
+              }).then((saved) => {
+                toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
+              });
+            }}
+            onUploadCatalogFiles={(files) => {
+              setProcMsg('Agregando diseños al catálogo...');
+              void uploadFilesToCatalog(files, {
+                removeBg: draft.removeBg ?? true,
+                tolerance: 34,
+                placement: draft.placement || 'center'
+              })
+                .then((n) => {
+                  if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
+                })
+                .finally(() => setProcMsg(null));
+            }}
+            onToggleCatalogDesignVisible={(id, nextVis) => {
+              toggleVisible(id, nextVis);
+              toast(
+                nextVis
+                  ? 'Diseño habilitado para que el cliente lo vea'
+                  : 'Diseño oculto para el cliente'
+              );
+            }}
+            onDeleteCatalogDesign={(id) => {
+              deleteDesign(id);
+              toast('Diseño eliminado del catálogo');
+            }}
             stockBadge={
               brand && color
                 ? {

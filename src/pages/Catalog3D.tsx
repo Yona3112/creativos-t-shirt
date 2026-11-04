@@ -11,6 +11,7 @@ import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { Stepper, toast } from '../components/ui';
+import { useCatalogDesigns, type SharedCatalogDesignRef } from '../lib/catalogDesigns';
 
 export interface SharedCatalogColor {
   id?: string;
@@ -33,6 +34,7 @@ export interface SharedCatalogPayload {
   scale: number;
   offsetX?: number;
   offsetY: number;
+  designs?: SharedCatalogDesignRef[];
 }
 
 function encodeCatalog(p: SharedCatalogPayload): string {
@@ -90,14 +92,24 @@ export default function Catalog3D() {
   const [processingMsg, setProcessingMsg] = useState<string | null>(null);
   const [is4K, setIs4K] = useState(false);
   const [photoId, setPhotoId] = useState<string | null>(null);
+  const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<DecalPlacement>('center');
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(2.75);
   const [offsetX, setOffsetX] = useState(0);
-  const [offsetY, setOffsetY] = useState(0);
+  const [offsetY, setOffsetY] = useState(2);
   const [autoMotion, setAutoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
   const [previewClient, setPreviewClient] = useState<SharedCatalogPayload | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const {
+    allDesigns,
+    clientDesigns,
+    saveCurrentToCatalog,
+    uploadFilesToCatalog,
+    toggleVisible,
+    deleteDesign
+  } = useCatalogDesigns();
 
   useEffect(() => {
     const ids = colors.map((c) => c.id);
@@ -152,12 +164,16 @@ export default function Catalog3D() {
       await savePhoto(id, processed, 0);
       void uploadPhotoNow(id, processed);
       setPhotoId(id);
+      setActiveCatalogDesignId(null);
       setRawDesignUrl(raw);
       setDesignUrl(processed);
+      setScale(2.75);
+      setOffsetX(0);
+      setOffsetY(2);
       toast(
         removeBg
-          ? 'Diseño sin fondo aplicado (colores internos protegidos)'
-          : 'Diseño aplicado a la camisa 3D'
+          ? 'Diseño sin fondo aplicado en Tamaño A3'
+          : 'Diseño aplicado a la camisa 3D en Tamaño A3'
       );
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -242,7 +258,13 @@ export default function Catalog3D() {
       placement,
       scale,
       offsetX,
-      offsetY
+      offsetY,
+      designs: clientDesigns.map((d) => ({
+        id: d.id,
+        name: d.name,
+        photoId: d.photoId,
+        placement: d.placement
+      }))
     };
   };
 
@@ -333,6 +355,7 @@ export default function Catalog3D() {
             setDesignUrl(null);
             setRawDesignUrl(null);
             setPhotoId(null);
+            setActiveCatalogDesignId(null);
             setIs4K(false);
           }}
           removeBg={removeBg}
@@ -340,6 +363,57 @@ export default function Catalog3D() {
           onAiRemoveBg={() => void handleAiRemoveBg()}
           onUpscale4K={() => void handleUpscale4K()}
           processingText={processingMsg}
+          isStoreOwner
+          catalogDesigns={allDesigns}
+          activeCatalogDesignId={activeCatalogDesignId}
+          onSelectCatalogDesign={(d) => {
+            if (!d.imageUrl) return;
+            setDesignUrl(d.imageUrl);
+            setRawDesignUrl(d.imageUrl);
+            setPhotoId(d.photoId);
+            setActiveCatalogDesignId(d.id);
+            setPlacement(d.placement || 'center');
+            setScale(2.75);
+            setOffsetX(0);
+            setOffsetY(2);
+            toast(`"${d.name}" aplicado en Tamaño A3`);
+          }}
+          onSaveCurrentToCatalog={() => {
+            if (!designUrl) return;
+            void saveCurrentToCatalog({
+              dataUrl: designUrl,
+              placement,
+              existingPhotoId: photoId
+            }).then((saved) => {
+              setActiveCatalogDesignId(saved.id);
+              toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
+            });
+          }}
+          onUploadCatalogFiles={(files) => {
+            setProcessingMsg('Agregando diseños al catálogo...');
+            void uploadFilesToCatalog(files, {
+              removeBg,
+              tolerance: bgTolerance,
+              placement
+            })
+              .then((n) => {
+                if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
+              })
+              .finally(() => setProcessingMsg(null));
+          }}
+          onToggleCatalogDesignVisible={(id, nextVis) => {
+            toggleVisible(id, nextVis);
+            toast(
+              nextVis
+                ? 'Diseño habilitado para que el cliente lo vea'
+                : 'Diseño oculto para el cliente'
+            );
+          }}
+          onDeleteCatalogDesign={(id) => {
+            deleteDesign(id);
+            if (activeCatalogDesignId === id) setActiveCatalogDesignId(null);
+            toast('Diseño eliminado del catálogo');
+          }}
           autoMotion={autoMotion}
           stockBadge={{
             available: currentVariantStock > 0,
@@ -783,14 +857,18 @@ export function CustomerCatalogView({
   const [selectedColor, setSelectedColor] = useState<SharedCatalogColor>(payload.colors[0]);
   const [rawDesignUrl, setRawDesignUrl] = useState<string | null>(initialDesignUrl);
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
+  const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
+  const [selectedDesignName, setSelectedDesignName] = useState<string | null>(null);
   const [removeBg, setRemoveBg] = useState(true);
   const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'center');
-  const [scale, setScale] = useState(payload.scale || 1);
+  const [scale, setScale] = useState(payload.scale || 2.75);
   const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
-  const [offsetY, setOffsetY] = useState(payload.offsetY || 0);
+  const [offsetY, setOffsetY] = useState(payload.offsetY ?? 2);
   const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
   const [qty, setQty] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const { clientDesigns } = useCatalogDesigns(payload.designs);
 
   useEffect(() => {
     if (!designUrl && payload.photoId) {
@@ -852,10 +930,15 @@ export function CustomerCatalogView({
   const onClientUpload = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const raw = await compressImage(file, 560, 0.82, false);
-      const processed = removeBg ? await applyBackgroundRemoval(raw, true, 42) : raw;
+      const raw = await compressImage(file, 960, 0.88, false);
+      const processed = removeBg ? await applyBackgroundRemoval(raw, true, 36) : raw;
       setRawDesignUrl(raw);
       setDesignUrl(processed);
+      setActiveCatalogDesignId(null);
+      setSelectedDesignName('Diseño propio subido');
+      setScale(2.75);
+      setOffsetX(0);
+      setOffsetY(2);
     } catch {
       /* ignorar */
     }
@@ -881,7 +964,10 @@ export function CustomerCatalogView({
       ? `${selectedSizeStock} en stock inmediato + ${qty - selectedSizeStock} disponible pronto`
       : 'Bajo pedido (Disponible pronto)';
 
-  const orderText = `¡Hola ${payload.storeName}! 👋 Vi el Catálogo 3D en vivo y quiero pedir:\n\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds\n• Ubicación del diseño: ${placementLabel}\n• Total estimado: ${money(total)}`;
+  const designNote = selectedDesignName
+    ? `\n• Diseño elegido: ${selectedDesignName} (${scale >= 2.4 ? 'Tamaño A3' : `${Math.round(scale * 100)}%`})`
+    : '';
+  const orderText = `¡Hola ${payload.storeName}! 👋 Vi el Catálogo 3D en vivo y quiero pedir:\n\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designNote}\n• Ubicación del diseño: ${placementLabel}\n• Total estimado: ${money(total)}`;
 
   return (
     <div className="min-h-screen bg-slate-100 pb-10">
@@ -933,9 +1019,24 @@ export function CustomerCatalogView({
             onClearDesign={() => {
               setDesignUrl(null);
               setRawDesignUrl(null);
+              setActiveCatalogDesignId(null);
+              setSelectedDesignName(null);
             }}
             removeBg={removeBg}
             onToggleRemoveBg={(next) => void handleClientToggleRemoveBg(next)}
+            catalogDesigns={clientDesigns}
+            activeCatalogDesignId={activeCatalogDesignId}
+            onSelectCatalogDesign={(d) => {
+              if (!d.imageUrl) return;
+              setDesignUrl(d.imageUrl);
+              setRawDesignUrl(d.imageUrl);
+              setActiveCatalogDesignId(d.id);
+              setSelectedDesignName(d.name);
+              setPlacement(d.placement || 'center');
+              setScale(2.75);
+              setOffsetX(0);
+              setOffsetY(2);
+            }}
             autoMotion
             stockBadge={{
               available: selectedSizeStock > 0,

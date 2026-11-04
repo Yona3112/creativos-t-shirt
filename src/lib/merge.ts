@@ -56,6 +56,7 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     customers: Array.isArray(s.customers) ? s.customers : [],
     orders: Array.isArray(s.orders) ? s.orders : [],
     movements: Array.isArray(s.movements) ? s.movements : [],
+    catalogDesigns: Array.isArray(s.catalogDesigns) ? s.catalogDesigns : [],
     _by: s._by,
     _at: s._at
   };
@@ -70,6 +71,7 @@ export function mergeStates(local: AppState, remote: AppState): AppState {
     customers: mergeEntities(local.customers, remote.customers),
     orders: fixFolios(mergeEntities(local.orders, remote.orders)),
     movements: mergeMovements(local.movements, remote.movements),
+    catalogDesigns: mergeEntities(local.catalogDesigns || [], remote.catalogDesigns || []),
     _by: local._by,
     _at: Math.max(local._at || 0, remote._at || 0)
   };
@@ -84,6 +86,7 @@ export function contentSignature(s: AppState): string {
     colors: byId(s.colors),
     customers: byId(s.customers),
     orders: byId(s.orders),
-    movements: byId(s.movements)
+    movements: byId(s.movements),
+    catalogDesigns: byId(s.catalogDesigns || [])
   });
 }

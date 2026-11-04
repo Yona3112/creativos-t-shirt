@@ -413,9 +413,19 @@ export function ShirtPreview({
   );
 }
 
+export interface CatalogQuickDesign {
+  id: string;
+  name: string;
+  photoId: string;
+  imageUrl: string | null;
+  placement: DecalPlacement;
+  clientVisible: boolean;
+}
+
 /**
  * Estudio 3D Interactivo con modelo escaneado real (`shirt_baked.glb`),
- * controles intuitivos a los lados y Zoom de acercamiento para ver el diseño y la tela.
+ * controles intuitivos a los lados, Zoom de acercamiento y bandeja responsiva
+ * de Diseños del Catálogo a un clic (con medida A3 de inicio).
  */
 export function InteractiveShirt3D({
   hex,
@@ -423,9 +433,9 @@ export function InteractiveShirt3D({
   brandName,
   designUrl,
   placement = 'center',
-  designScale = 1,
+  designScale = 2.75,
   designOffsetX = 0,
-  designOffsetY = 0,
+  designOffsetY = 2,
   onDesignChange,
   onUploadFile,
   onClearDesign,
@@ -434,6 +444,14 @@ export function InteractiveShirt3D({
   onAiRemoveBg,
   onUpscale4K,
   processingText,
+  catalogDesigns,
+  activeCatalogDesignId,
+  onSelectCatalogDesign,
+  isStoreOwner = false,
+  onSaveCurrentToCatalog,
+  onUploadCatalogFiles,
+  onToggleCatalogDesignVisible,
+  onDeleteCatalogDesign,
   autoMotion = true,
   stockBadge
 }: {
@@ -458,6 +476,14 @@ export function InteractiveShirt3D({
   onAiRemoveBg?: () => void;
   onUpscale4K?: () => void;
   processingText?: string | null;
+  catalogDesigns?: CatalogQuickDesign[];
+  activeCatalogDesignId?: string | null;
+  onSelectCatalogDesign?: (design: CatalogQuickDesign) => void;
+  isStoreOwner?: boolean;
+  onSaveCurrentToCatalog?: () => void;
+  onUploadCatalogFiles?: (files: FileList) => void;
+  onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
+  onDeleteCatalogDesign?: (designId: string) => void;
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
 }) {
@@ -466,6 +492,7 @@ export function InteractiveShirt3D({
   const [targetAngleY, setTargetAngleY] = useState<number | null>(0);
   const [zoom, setZoom] = useState<number>(1);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const catalogBatchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (placement === 'back') setTargetAngleY(180);
@@ -861,6 +888,168 @@ export function InteractiveShirt3D({
           )}
         </div>
       </div>
+
+      {/* BANDEJA RESPONSIVA DE DISEÑOS DEL CATÁLOGO A MANO (1 clic = colocar en Tamaño A3) */}
+      {(isStoreOwner || (catalogDesigns && catalogDesigns.length > 0)) && (
+        <div className="mt-3 rounded-2xl border border-slate-200/90 bg-white/95 p-3 shadow-sm">
+          {onUploadCatalogFiles && (
+            <input
+              ref={catalogBatchInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  onUploadCatalogFiles(e.target.files);
+                }
+                e.target.value = '';
+              }}
+            />
+          )}
+
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-extrabold uppercase tracking-wide text-slate-800">
+                🎨 {isStoreOwner ? 'Diseños del Catálogo (A Mano)' : 'Diseños Disponibles'}
+              </span>
+              <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-[11px] font-extrabold text-sky-900">
+                📐 Clic = Colocar en Tamaño A3
+              </span>
+            </div>
+
+            {isStoreOwner && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {designUrl && onSaveCurrentToCatalog && (
+                  <button
+                    type="button"
+                    onClick={onSaveCurrentToCatalog}
+                    className="rounded-xl bg-emerald-600 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+                    title="Guardar el diseño que está puesto ahora en la camisa dentro del catálogo"
+                  >
+                    ➕ Guardar diseño actual en Catálogo
+                  </button>
+                )}
+                {onUploadCatalogFiles && (
+                  <button
+                    type="button"
+                    onClick={() => catalogBatchInputRef.current?.click()}
+                    className="rounded-xl bg-slate-900 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-slate-800 active:scale-95"
+                    title="Subir uno o varios diseños al catálogo"
+                  >
+                    📥 + Subir Diseños al Catálogo
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {!catalogDesigns || catalogDesigns.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-3 text-center">
+              <p className="text-xs font-semibold text-slate-500">
+                Aún no has agregado diseños al catálogo rápido. Súbelos aquí y elige cuáles verá el cliente para que con un clic se coloquen en Tamaño A3.
+              </p>
+              {onUploadCatalogFiles && (
+                <button
+                  type="button"
+                  onClick={() => catalogBatchInputRef.current?.click()}
+                  className="rounded-xl bg-sky-600 px-3 py-1.5 text-xs font-extrabold text-white shadow-sm hover:bg-sky-700"
+                >
+                  📸 Subir primeros diseños al Catálogo
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex snap-x snap-mandatory gap-2.5 overflow-x-auto pb-1.5 pt-0.5 sm:flex-wrap sm:overflow-visible">
+              {catalogDesigns.map((d) => {
+                const isSelected =
+                  (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
+                  (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
+                return (
+                  <div
+                    key={d.id}
+                    className={`group relative flex w-[112px] shrink-0 snap-start flex-col justify-between rounded-2xl border-2 p-1.5 transition sm:w-[122px] ${
+                      isSelected
+                        ? 'border-sky-600 bg-sky-50/80 shadow-md'
+                        : d.clientVisible || !isStoreOwner
+                        ? 'border-slate-200 bg-white hover:border-slate-400'
+                        : 'border-dashed border-slate-300 bg-slate-50/80 opacity-80'
+                    }`}
+                  >
+                    {isStoreOwner && onDeleteCatalogDesign && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteCatalogDesign(d.id);
+                        }}
+                        title="Eliminar diseño del catálogo"
+                        className="absolute right-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-[11px] font-extrabold text-rose-600 shadow hover:bg-rose-600 hover:text-white"
+                      >
+                        ✕
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => onSelectCatalogDesign?.(d)}
+                      disabled={!d.imageUrl}
+                      className="flex w-full flex-col items-center text-left focus:outline-none"
+                      title={`Colocar "${d.name}" en la camisa en Tamaño A3`}
+                    >
+                      <div
+                        className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-1.5 shadow-inner transition group-hover:scale-[1.02]"
+                        style={{ backgroundColor: hex }}
+                      >
+                        {d.imageUrl ? (
+                          <img
+                            src={d.imageUrl}
+                            alt={d.name}
+                            className="h-full w-full object-contain drop-shadow-sm"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-400">Cargando...</span>
+                        )}
+                        <span className="absolute bottom-1 left-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[9px] font-extrabold text-white backdrop-blur-sm">
+                          {d.placement === 'back' ? 'Espalda A3' : 'Frente A3'}
+                        </span>
+                        {isSelected && (
+                          <span className="absolute left-1 top-1 rounded-md bg-sky-600 px-1.5 py-0.5 text-[9px] font-extrabold text-white shadow">
+                            ✓ Puesto
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 w-full truncate text-center text-[11px] font-extrabold text-slate-800">
+                        {d.name}
+                      </div>
+                    </button>
+
+                    {isStoreOwner && onToggleCatalogDesignVisible && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleCatalogDesignVisible(d.id, !d.clientVisible)}
+                        className={`mt-1 flex min-h-[26px] w-full items-center justify-center gap-1 rounded-lg px-1.5 py-0.5 text-[10px] font-extrabold transition ${
+                          d.clientVisible
+                            ? 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+                            : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                        }`}
+                        title={
+                          d.clientVisible
+                            ? 'El cliente PUEDE ver y probar este diseño. Haz clic para ocultarlo.'
+                            : 'Oculto para el cliente. Haz clic para dejarlo disponible al cliente.'
+                        }
+                      >
+                        <span>{d.clientVisible ? '👁 Cliente: Sí' : '🔒 Oculto'}</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

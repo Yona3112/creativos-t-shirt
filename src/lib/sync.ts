@@ -269,11 +269,15 @@ export class SyncEngine {
 
   private async fetchMissingPhotos(state: AppState) {
     if (!this.client || !navigator.onLine) return;
-    const wanted = state.orders
+    const orderPhotos = state.orders
       .filter((o) => o.photoId && !o.deleted)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, 80)
+      .slice(0, 60)
       .map((o) => o.photoId as string);
+    const catalogPhotos = (state.catalogDesigns || [])
+      .filter((d) => d.photoId && !d.deleted)
+      .map((d) => d.photoId);
+    const wanted = Array.from(new Set([...catalogPhotos, ...orderPhotos]));
     if (!wanted.length) return;
     const have = new Set((await db.photos.where('id').anyOf(wanted).primaryKeys()) as string[]);
     const missing = wanted.filter((id) => !have.has(id));

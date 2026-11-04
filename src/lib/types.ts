@@ -122,6 +122,16 @@ export interface Settings {
   waReady: string;
 }
 
+export interface CatalogDesign extends Entity {
+  name: string;
+  photoId: string;
+  /** Si es true, el cliente lo ve disponible al editar la camisa 3D */
+  clientVisible: boolean;
+  /** Ubicación predeterminada ('center' | 'pocket' | 'full' | 'back') */
+  placement: 'center' | 'pocket' | 'full' | 'back';
+  createdAt: number;
+}
+
 export interface AppState {
   version: 1;
   settings: Settings;
@@ -130,6 +140,7 @@ export interface AppState {
   customers: Customer[];
   orders: Order[];
   movements: Movement[];
+  catalogDesigns?: CatalogDesign[];
   /** dispositivo que hizo la última escritura y cuándo */
   _by?: string;
   _at?: number;
