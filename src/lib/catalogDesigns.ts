@@ -55,7 +55,15 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       for (const item of rawList) {
         if (!item.photoId) continue;
         const data = await fetchSharedPhoto(item.photoId);
-        if (data) next[item.photoId] = data;
+        if (data) {
+          try {
+            // Garantizar que cualquier diseño previamente guardado limpie huecos internos (A, B, O) y bordes negros
+            const cleaned = await applyBackgroundRemoval(data, true, 36);
+            next[item.photoId] = cleaned;
+          } catch {
+            next[item.photoId] = data;
+          }
+        }
       }
       if (!cancelled) {
         setUrlMap((prev) => ({ ...prev, ...next }));

@@ -239,7 +239,9 @@ void main() {
         vec4 tex = texture2D(u_decalTex, vec2(du, dv));
         float angleFade = smoothstep(0.05, 0.22, sideNz);
         float alpha = tex.a * angleFade;
-        decalColor = tex.rgb;
+        // Des-premultiplicar RGB para que el filtrado bilineal de WebGL nunca manche de negro los bordes ni los huecos internos
+        vec3 cleanDecalRgb = tex.a > 0.008 ? clamp(tex.rgb / tex.a, 0.0, 1.0) : fabricBase;
+        decalColor = cleanDecalRgb;
         decalMask = alpha;
       }
     }
@@ -422,10 +424,19 @@ export interface CatalogQuickDesign {
   clientVisible: boolean;
 }
 
+export interface ShirtColorOption {
+  id: string;
+  name: string;
+  hex: string;
+  stockText?: string;
+  available?: boolean;
+  included?: boolean;
+}
+
 /**
  * Estudio 3D Interactivo con modelo escaneado real (`shirt_baked.glb`),
- * controles intuitivos a los lados, Zoom de acercamiento y bandeja responsiva
- * de Diseños del Catálogo a un clic (con medida A3 de inicio).
+ * selector de color integrado arriba, controles intuitivos a los lados,
+ * Zoom de acercamiento y bandeja responsiva de Diseños del Catálogo a un clic (Tamaño A3).
  */
 export function InteractiveShirt3D({
   hex,
@@ -441,9 +452,16 @@ export function InteractiveShirt3D({
   onClearDesign,
   removeBg,
   onToggleRemoveBg,
+  bgTolerance = 36,
+  onChangeBgTolerance,
   onAiRemoveBg,
   onUpscale4K,
   processingText,
+  colorOptions,
+  activeColorId,
+  onSelectColor,
+  onToggleColorIncluded,
+  onAddNewColor,
   catalogDesigns,
   activeCatalogDesignId,
   onSelectCatalogDesign,
@@ -473,9 +491,16 @@ export function InteractiveShirt3D({
   onClearDesign?: () => void;
   removeBg?: boolean;
   onToggleRemoveBg?: (next: boolean) => void;
+  bgTolerance?: number;
+  onChangeBgTolerance?: (tol: number) => void;
   onAiRemoveBg?: () => void;
   onUpscale4K?: () => void;
   processingText?: string | null;
+  colorOptions?: ShirtColorOption[];
+  activeColorId?: string;
+  onSelectColor?: (colorId: string) => void;
+  onToggleColorIncluded?: (colorId: string) => void;
+  onAddNewColor?: () => void;
   catalogDesigns?: CatalogQuickDesign[];
   activeCatalogDesignId?: string | null;
   onSelectCatalogDesign?: (design: CatalogQuickDesign) => void;
@@ -494,6 +519,13 @@ export function InteractiveShirt3D({
   const [showcaseActive, setShowcaseActive] = useState<boolean>(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
+  const colorSlideRef = useRef<HTMLDivElement>(null);
+
+  const slideColors = (dir: -1 | 1) => {
+    const el = colorSlideRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * 135, behavior: 'smooth' });
+  };
 
   useEffect(() => {
     if (placement === 'back') setTargetAngleY(180);
@@ -566,26 +598,184 @@ export function InteractiveShirt3D({
         </div>
       )}
 
-      {/* Disposición de Estudio: Panel Izquierdo (Cámara/Zoom) + Camisa 3D Central (1:1 sin estirar) + Panel Derecho (Subir Imagen/Diseño/A3) */}
-      <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[148px_1fr_180px]">
-        {/* PANEL LATERAL IZQUIERDO: Ángulo 3D, Zoom de Camisa y Movimiento */}
+      {/* Disposición de Estudio: Panel Izquierdo (Color + Cámara + Zoom + Movimiento) + Camisa 3D Central + Panel Derecho (Solo Admin) */}
+      <div
+        className={`grid grid-cols-1 items-center gap-3 ${
+          isStoreOwner ? 'md:grid-cols-[176px_1fr_184px]' : 'md:grid-cols-[176px_1fr]'
+        }`}
+      >
+        {/* PANEL LATERAL IZQUIERDO: Color de Camisa (Slide Compacto), Ángulo 3D, Zoom y Movimiento */}
         <div className="order-2 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:order-1 md:flex-col md:items-stretch">
+          {/* 1. COLOR DE CAMISA EN EL PANEL DE HERRAMIENTAS (Slide compacto + puntos rápidos) */}
+          {colorOptions && colorOptions.length > 0 && onSelectColor && (
+            <div className="w-full border-b border-slate-100 pb-2">
+              <div className="mb-1 flex items-center justify-between gap-1">
+                <span className="truncate text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                  🎨 Color · <strong className="text-slate-800">{colorName}</strong>
+                </span>
+                {isStoreOwner && onAddNewColor && (
+                  <button
+                    type="button"
+                    onClick={onAddNewColor}
+                    className="shrink-0 rounded-lg bg-sky-600 px-1.5 py-0.5 text-[10px] font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
+                    title="Agregar nuevo color de camisa (Solo Admin)"
+                  >
+                    + Color
+                  </button>
+                )}
+              </div>
+
+              {/* Slide horizontal compacto con botones ‹ › para deslizar colores */}
+              <div className="flex items-center gap-1">
+                {colorOptions.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={() => slideColors(-1)}
+                    className="flex h-7 w-5 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-extrabold text-slate-600 hover:bg-slate-200 active:scale-95"
+                    aria-label="Deslizar colores a la izquierda"
+                    title="Anterior color"
+                  >
+                    ‹
+                  </button>
+                )}
+                <div
+                  ref={colorSlideRef}
+                  className="flex flex-1 snap-x snap-mandatory items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
+                  {colorOptions.map((c) => {
+                    const active = activeColorId ? c.id === activeColorId : c.name === colorName;
+                    const included = c.included ?? true;
+                    return (
+                      <div
+                        key={c.id}
+                        className={`flex shrink-0 snap-start items-center gap-1 rounded-xl border px-2 py-1 transition ${
+                          active
+                            ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                            : included
+                            ? 'border-slate-200 bg-slate-50 text-slate-800 hover:border-slate-400'
+                            : 'border-dashed border-slate-200 bg-slate-50/50 text-slate-400 opacity-60'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onSelectColor(c.id)}
+                          className="flex items-center gap-1.5 text-left"
+                          title={`${c.name}${c.stockText ? ` (${c.stockText})` : ''}`}
+                        >
+                          <span
+                            className="relative h-4 w-4 shrink-0 rounded-full border border-black/20 shadow-inner"
+                            style={{ backgroundColor: c.hex }}
+                          >
+                            <span
+                              className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white ${
+                                c.available ? 'bg-emerald-500' : 'bg-amber-400'
+                              }`}
+                            />
+                          </span>
+                          <div className="leading-none">
+                            <div className="max-w-[64px] truncate text-[11px] font-extrabold">
+                              {c.name}
+                            </div>
+                            {c.stockText && (
+                              <div
+                                className={`mt-0.5 text-[9px] font-bold ${
+                                  active
+                                    ? c.available
+                                      ? 'text-emerald-300'
+                                      : 'text-amber-300'
+                                    : c.available
+                                    ? 'text-emerald-600'
+                                    : 'text-amber-600'
+                                }`}
+                              >
+                                {c.stockText}
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                        {isStoreOwner && onToggleColorIncluded && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleColorIncluded(c.id);
+                            }}
+                            className={`ml-0.5 flex h-4 w-4 items-center justify-center rounded text-[9px] font-extrabold ${
+                              included
+                                ? active
+                                  ? 'bg-emerald-500 text-white'
+                                  : 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-200 text-slate-500'
+                            }`}
+                            title={
+                              included
+                                ? 'Color visible para el cliente (clic para ocultar)'
+                                : 'Color oculto para el cliente (clic para mostrar)'
+                            }
+                          >
+                            {included ? '✓' : '×'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {colorOptions.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={() => slideColors(1)}
+                    className="flex h-7 w-5 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-extrabold text-slate-600 hover:bg-slate-200 active:scale-95"
+                    aria-label="Deslizar colores a la derecha"
+                    title="Siguiente color"
+                  >
+                    ›
+                  </button>
+                )}
+              </div>
+
+              {/* Puntos rápidos de color en miniatura para cambio en 1 toque */}
+              <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
+                {colorOptions.map((c) => {
+                  const active = activeColorId ? c.id === activeColorId : c.name === colorName;
+                  const included = c.included ?? true;
+                  return (
+                    <button
+                      key={`dot-${c.id}`}
+                      type="button"
+                      onClick={() => onSelectColor(c.id)}
+                      title={`${c.name}${c.stockText ? ` · ${c.stockText}` : ''}`}
+                      className={`relative h-5 w-5 rounded-full border transition ${
+                        active
+                          ? 'scale-110 border-slate-900 ring-2 ring-sky-400'
+                          : included
+                          ? 'border-black/20 hover:scale-110'
+                          : 'border-dashed border-slate-300 opacity-45'
+                      }`}
+                      style={{ backgroundColor: c.hex }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 2. ÁNGULO 3D */}
           <div className="w-full">
             <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
               Ángulo 3D
             </div>
-            <div className="grid grid-cols-3 gap-1 md:grid-cols-1">
+            <div className="grid grid-cols-3 gap-1">
               {(
                 [
                   [0, '👕 Frente'],
-                  [38, '📐 Perfil 3D'],
+                  [38, '📐 Perfil'],
                   [180, '🔄 Espalda']
                 ] as const
               ).map(([angle, lbl]) => (
                 <button
                   key={lbl}
                   type="button"
-                  className={`min-h-[36px] rounded-xl px-2.5 py-1 text-left text-xs font-bold transition ${
+                  className={`min-h-[32px] rounded-xl px-1.5 py-1 text-center text-[11px] font-bold transition ${
                     targetAngleY === angle
                       ? 'bg-slate-900 text-white shadow-sm'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -598,8 +788,8 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Controles de ZOOM de la Camisa */}
-          <div className="w-full border-t border-slate-100 pt-2">
+          {/* 3. ZOOM CAMISA */}
+          <div className="w-full border-t border-slate-100 pt-1.5">
             <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
               <span>Zoom Camisa</span>
               <span className="font-bold text-slate-700">{Math.round(zoom * 100)}%</span>
@@ -607,7 +797,7 @@ export function InteractiveShirt3D({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-sm font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95"
+                className="flex h-8 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95"
                 onClick={() => adjustZoom(-0.2)}
                 title="Alejar camisa"
               >
@@ -615,43 +805,43 @@ export function InteractiveShirt3D({
               </button>
               <button
                 type="button"
-                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-sm font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95"
+                className="flex h-8 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95"
                 onClick={() => adjustZoom(0.2)}
                 title="Acercar camisa para ver el diseño"
               >
                 🔍+
               </button>
+              <button
+                type="button"
+                className={`min-h-[32px] flex-1 rounded-xl px-2 py-1 text-[11px] font-bold transition ${
+                  zoom > 1.35
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+                }`}
+                onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.75))}
+              >
+                {zoom > 1.35 ? '🔭 Completa' : '🎯 Acercar'}
+              </button>
             </div>
-            <button
-              type="button"
-              className={`mt-1.5 min-h-[34px] w-full rounded-xl px-2 py-1 text-xs font-bold transition ${
-                zoom > 1.35
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
-              }`}
-              onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.75))}
-            >
-              {zoom > 1.35 ? '🔭 Ver Camisa Completa' : '🎯 Acercar al Diseño'}
-            </button>
           </div>
 
-          {/* Modo de movimiento 3D */}
-          <div className="w-full border-t border-slate-100 pt-2">
+          {/* 4. MODO DE MOVIMIENTO 3D */}
+          <div className="w-full border-t border-slate-100 pt-1.5">
             <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
               Movimiento
             </div>
-            <div className="grid grid-cols-3 gap-1 md:grid-cols-1">
+            <div className="grid grid-cols-3 gap-1">
               {(
                 [
-                  ['wind', '🌬️ Tela Viva'],
-                  ['walk', '🚶 Caminata'],
-                  ['orbit', '🔄 Giro 360°']
+                  ['wind', '🌬️ Tela'],
+                  ['walk', '🚶 Paso'],
+                  ['orbit', '🔄 360°']
                 ] as const
               ).map(([id, lbl]) => (
                 <button
                   key={id}
                   type="button"
-                  className={`min-h-[34px] rounded-xl px-2.5 py-1 text-left text-xs font-bold transition ${
+                  className={`min-h-[32px] rounded-xl px-1.5 py-1 text-center text-[11px] font-bold transition ${
                     mode === id
                       ? 'bg-slate-900 text-white shadow-sm'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -721,204 +911,224 @@ export function InteractiveShirt3D({
           </div>
         </div>
 
-        {/* PANEL LATERAL DERECHO: Subir Imagen directo + Controles intuitivos del Diseño y Tamaño A3 */}
-        <div className="order-3 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:flex-col md:items-stretch">
-          {onUploadFile && (
-            <div className="w-full border-b border-slate-100 pb-2">
+        {/* PANEL LATERAL DERECHO: Exclusivo para el Administrador (Subir Imagen, Recorte, Tamaño A3 y Zona) */}
+        {isStoreOwner && (
+          <div className="order-3 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:flex-col md:items-stretch">
+            {onUploadFile && (
+              <div className="w-full border-b border-slate-100 pb-2">
+                <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                  Imagen / Diseño
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => uploadInputRef.current?.click()}
+                    className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
+                  >
+                    <span>📸</span>
+                    <span>{designUrl ? 'Cambiar Imagen' : 'Subir Imagen'}</span>
+                  </button>
+                  {designUrl && onClearDesign && (
+                    <button
+                      type="button"
+                      onClick={onClearDesign}
+                      title="Quitar imagen de la camisa"
+                      className="flex h-[40px] w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-xs font-extrabold text-rose-600 hover:bg-rose-100"
+                    >
+                      🗑
+                    </button>
+                  )}
+                </div>
+
+                {onToggleRemoveBg && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleRemoveBg(!removeBg)}
+                    className={`mt-1.5 flex min-h-[32px] w-full items-center justify-between rounded-xl px-2.5 py-1 text-[11px] font-bold transition ${
+                      removeBg
+                        ? 'bg-emerald-50 text-emerald-900 ring-1 ring-emerald-300'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                    title="Quitar fondo exterior y huecos internos de letras (A, B, O) sin halo negro"
+                  >
+                    <span>🪄 Quitar Fondo</span>
+                    <span className="font-extrabold">{removeBg ? 'ON' : 'OFF'}</span>
+                  </button>
+                )}
+
+                {designUrl && removeBg && onChangeBgTolerance && (
+                  <div className="mt-1.5 rounded-xl bg-slate-50 px-2 py-1.5">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-600">
+                      <span>Recorte fino</span>
+                      <span>{bgTolerance}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="14"
+                      max="78"
+                      step="2"
+                      value={bgTolerance}
+                      onChange={(e) => onChangeBgTolerance(parseInt(e.target.value, 10))}
+                      className="mt-0.5 w-full accent-slate-900"
+                    />
+                  </div>
+                )}
+
+                {designUrl && (onAiRemoveBg || onUpscale4K) && (
+                  <div className="mt-1 grid grid-cols-2 gap-1">
+                    {onAiRemoveBg && (
+                      <button
+                        type="button"
+                        disabled={!!processingText}
+                        onClick={onAiRemoveBg}
+                        className="min-h-[30px] rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-extrabold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                        title="Recorte de fondo con Inteligencia Artificial"
+                      >
+                        🤖 Fondo IA
+                      </button>
+                    )}
+                    {onUpscale4K && (
+                      <button
+                        type="button"
+                        disabled={!!processingText}
+                        onClick={onUpscale4K}
+                        className="min-h-[30px] rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-extrabold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                        title="Mejorar nitidez y escalar diseño a 4K Ultra HD"
+                      >
+                        ✨ 4K HD
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="w-full">
               <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                Imagen / Diseño
+                Al arrastrar
+              </div>
+              <div className="grid grid-cols-2 gap-1 md:grid-cols-1">
+                <button
+                  type="button"
+                  className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                    touchAction === 'rotate'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  onClick={() => setTouchAction('rotate')}
+                >
+                  🖐 Girar Camisa 3D
+                </button>
+                <button
+                  type="button"
+                  disabled={!designUrl}
+                  className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                    !designUrl
+                      ? 'cursor-not-allowed bg-slate-50 text-slate-300'
+                      : touchAction === 'moveDesign'
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+                  }`}
+                  onClick={() => setTouchAction('moveDesign')}
+                >
+                  ✥ Mover Diseño
+                </button>
+              </div>
+            </div>
+
+            <div className="w-full border-t border-slate-100 pt-2">
+              <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                <span>Tamaño Diseño</span>
+                <span className="font-bold text-slate-700">
+                  {designScale >= 2.5 ? `A3 (${Math.round(designScale * 100)}%)` : `${Math.round(designScale * 100)}%`}
+                </span>
               </div>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => uploadInputRef.current?.click()}
-                  className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
+                  disabled={!designUrl || !onDesignChange}
+                  className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
+                  onClick={() => adjustScale(-0.15)}
+                  title="Hacer diseño más pequeño"
                 >
-                  <span>📸</span>
-                  <span>{designUrl ? 'Cambiar Imagen' : 'Subir Imagen'}</span>
+                  − Pequeño
                 </button>
-                {designUrl && onClearDesign && (
-                  <button
-                    type="button"
-                    onClick={onClearDesign}
-                    title="Quitar imagen de la camisa"
-                    className="flex h-[40px] w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-xs font-extrabold text-rose-600 hover:bg-rose-100"
-                  >
-                    🗑
-                  </button>
-                )}
-              </div>
-
-              {onToggleRemoveBg && (
                 <button
                   type="button"
-                  onClick={() => onToggleRemoveBg(!removeBg)}
-                  className={`mt-1.5 flex min-h-[32px] w-full items-center justify-between rounded-xl px-2.5 py-1 text-[11px] font-bold transition ${
-                    removeBg
-                      ? 'bg-emerald-50 text-emerald-900 ring-1 ring-emerald-300'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                  title="Quitar el fondo exterior del JPG/PNG protegiendo colores internos"
+                  disabled={!designUrl || !onDesignChange}
+                  className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
+                  onClick={() => adjustScale(0.15)}
+                  title="Hacer diseño más grande"
                 >
-                  <span>🪄 Quitar Fondo</span>
-                  <span className="font-extrabold">{removeBg ? 'ON' : 'OFF'}</span>
+                  + Grande
                 </button>
-              )}
+              </div>
 
-              {designUrl && (onAiRemoveBg || onUpscale4K) && (
-                <div className="mt-1 grid grid-cols-2 gap-1">
-                  {onAiRemoveBg && (
-                    <button
-                      type="button"
-                      disabled={!!processingText}
-                      onClick={onAiRemoveBg}
-                      className="min-h-[30px] rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-extrabold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
-                      title="Recorte de fondo con Inteligencia Artificial"
-                    >
-                      🤖 Fondo IA
-                    </button>
-                  )}
-                  {onUpscale4K && (
-                    <button
-                      type="button"
-                      disabled={!!processingText}
-                      onClick={onUpscale4K}
-                      className="min-h-[30px] rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-extrabold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
-                      title="Mejorar nitidez y escalar diseño a 4K Ultra HD"
-                    >
-                      ✨ 4K HD
-                    </button>
-                  )}
+              {/* Botón directo a Tamaño A3 Completo de una sola vez */}
+              <div className="mt-1.5 grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  disabled={!designUrl || !onDesignChange}
+                  className={`min-h-[34px] rounded-xl px-2 py-1 text-[11px] font-extrabold transition disabled:opacity-40 ${
+                    designScale >= 2.5
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+                  }`}
+                  onClick={() =>
+                    onDesignChange?.({
+                      scale: 2.75,
+                      offsetX: 0,
+                      offsetY: 2
+                    })
+                  }
+                  title="Establecer tamaño máximo de hoja A3 de una sola vez"
+                >
+                  📐 Tamaño A3
+                </button>
+                <button
+                  type="button"
+                  disabled={!designUrl || !onDesignChange}
+                  className="min-h-[34px] rounded-xl bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                  onClick={() => onDesignChange?.({ scale: 1, offsetX: 0, offsetY: 0 })}
+                  title="Restablecer a tamaño estándar A4 centrado"
+                >
+                  ↺ Estándar A4
+                </button>
+              </div>
+            </div>
+
+            {onDesignChange && (
+              <div className="w-full border-t border-slate-100 pt-2">
+                <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                  Zona Rápida
                 </div>
-              )}
-            </div>
-          )}
-
-          <div className="w-full">
-            <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-              Al arrastrar
-            </div>
-            <div className="grid grid-cols-2 gap-1 md:grid-cols-1">
-              <button
-                type="button"
-                className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
-                  touchAction === 'rotate'
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-                onClick={() => setTouchAction('rotate')}
-              >
-                🖐 Girar Camisa 3D
-              </button>
-              <button
-                type="button"
-                disabled={!designUrl}
-                className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
-                  !designUrl
-                    ? 'cursor-not-allowed bg-slate-50 text-slate-300'
-                    : touchAction === 'moveDesign'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
-                }`}
-                onClick={() => setTouchAction('moveDesign')}
-              >
-                ✥ Mover Diseño
-              </button>
-            </div>
-          </div>
-
-          <div className="w-full border-t border-slate-100 pt-2">
-            <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-              <span>Tamaño Diseño</span>
-              <span className="font-bold text-slate-700">
-                {designScale >= 2.5 ? `A3 (${Math.round(designScale * 100)}%)` : `${Math.round(designScale * 100)}%`}
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
-                onClick={() => adjustScale(-0.15)}
-                title="Hacer diseño más pequeño"
-              >
-                − Pequeño
-              </button>
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
-                onClick={() => adjustScale(0.15)}
-                title="Hacer diseño más grande"
-              >
-                + Grande
-              </button>
-            </div>
-
-            {/* Botón directo a Tamaño A3 Completo de una sola vez */}
-            <div className="mt-1.5 grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                className={`min-h-[34px] rounded-xl px-2 py-1 text-[11px] font-extrabold transition disabled:opacity-40 ${
-                  designScale >= 2.5
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
-                }`}
-                onClick={() =>
-                  onDesignChange?.({
-                    scale: 2.75,
-                    offsetX: 0,
-                    offsetY: 2
-                  })
-                }
-                title="Establecer tamaño máximo de hoja A3 de una sola vez"
-              >
-                📐 Tamaño A3
-              </button>
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                className="min-h-[34px] rounded-xl bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
-                onClick={() => onDesignChange?.({ scale: 1, offsetX: 0, offsetY: 0 })}
-                title="Restablecer a tamaño estándar A4 centrado"
-              >
-                ↺ Estándar A4
-              </button>
-            </div>
-          </div>
-
-          {onDesignChange && (
-            <div className="w-full border-t border-slate-100 pt-2">
-              <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                Zona Rápida
+                <div className="grid grid-cols-2 gap-1">
+                  {(
+                    [
+                      ['center', 'Pecho'],
+                      ['pocket', 'Logo Izq.'],
+                      ['full', 'Grande'],
+                      ['back', 'Espalda']
+                    ] as const
+                  ).map(([id, lbl]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`min-h-[32px] rounded-lg px-1.5 py-1 text-[11px] font-bold transition ${
+                        placement === id
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                      onClick={() => onDesignChange({ placement: id, offsetX: 0, offsetY: 0 })}
+                    >
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-1">
-                {(
-                  [
-                    ['center', 'Pecho'],
-                    ['pocket', 'Logo Izq.'],
-                    ['full', 'Grande'],
-                    ['back', 'Espalda']
-                  ] as const
-                ).map(([id, lbl]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`min-h-[32px] rounded-lg px-1.5 py-1 text-[11px] font-bold transition ${
-                      placement === id
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                    onClick={() => onDesignChange({ placement: id, offsetX: 0, offsetY: 0 })}
-                  >
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* BANDEJA RESPONSIVA DE DISEÑOS DEL CATÁLOGO A MANO (1 clic = colocar en Tamaño A3) */}
@@ -1222,8 +1432,9 @@ function WebGLShirtCanvas({
     img.onload = () => {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, decalTex);
-      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -1311,7 +1522,9 @@ function WebGLShirtCanvas({
       img.onload = () => {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, decalTex);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);

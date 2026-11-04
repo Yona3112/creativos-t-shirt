@@ -183,11 +183,13 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 /**
- * Recorte por Inundación de Contorno Exterior (Flood-Fill BFS desde los bordes):
- * - A diferencia de un reemplazo global de color, este algoritmo SOLO elimina píxeles de fondo
- *   que están conectados físicamente al borde exterior de la imagen.
- * - NUNCA borra letras blancas, ojos, franjas ni colores que estén dentro del diseño.
- * - Además aplica suavizado sub-píxel (Alpha Matting) en la frontera exacta entre el fondo y el logo.
+ * Recorte Profesional DTF (Exterior + Huecos Internos de Letras A/B/O + Descontaminación Alpha Un-Matting):
+ * 1. Detecta el color de fondo dominante (ej. negro o blanco) desde el perímetro.
+ * 2. Elimina tanto el fondo exterior como los huecos de fondo encerrados dentro de letras (A, B, O, D, P, R),
+ *    escudos (TC) y poros de textura vintage/grunge que tengan exactamente el color del fondo.
+ * 3. Aplica Descontaminación Matemática de Color (Un-Matting / Remove Black & White Matte) en todos los
+ *    bordes suavizados para que NUNCA quede un halo negro o gris alrededor de las letras ni del dibujo.
+ * 4. Protege al 100% los colores cromáticos e internos del diseño.
  */
 function floodFillExteriorBackground(
   ctx: CanvasRenderingContext2D,
@@ -198,128 +200,155 @@ function floodFillExteriorBackground(
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
 
-  // 1. Si la imagen ya es un PNG con esquinas transparentes, respetamos sus colores internos intactos
-  const corners = [
-    0,
-    (w - 1) * 4,
-    (h - 1) * w * 4,
-    ((h - 1) * w + (w - 1)) * 4
-  ];
-  let transparentCorners = 0;
-  for (const idx of corners) {
-    if (d[idx + 3] < 35) transparentCorners++;
-  }
-  if (transparentCorners >= 2) return;
-
-  // 2. Muestrear el perímetro exterior para estimar el color de fondo dominante
+  // 1. Muestrear el perímetro exterior para estimar el color de fondo dominante
+  // Si el perímetro ya tenía píxeles transparentes (por un recorte previo), usamos negro (0,0,0) por defecto para limpiar huecos internos
   const samples: [number, number, number][] = [];
-  const stepX = Math.max(1, Math.floor(w / 24));
-  const stepY = Math.max(1, Math.floor(h / 24));
+  const stepX = Math.max(1, Math.floor(w / 32));
+  const stepY = Math.max(1, Math.floor(h / 32));
+
   for (let x = 0; x < w; x += stepX) {
     const top = x * 4;
     const bot = ((h - 1) * w + x) * 4;
-    samples.push([d[top], d[top + 1], d[top + 2]]);
-    samples.push([d[bot], d[bot + 1], d[bot + 2]]);
+    if (d[top + 3] > 35) samples.push([d[top], d[top + 1], d[top + 2]]);
+    if (d[bot + 3] > 35) samples.push([d[bot], d[bot + 1], d[bot + 2]]);
   }
   for (let y = 0; y < h; y += stepY) {
     const left = y * w * 4;
     const right = (y * w + (w - 1)) * 4;
-    samples.push([d[left], d[left + 1], d[left + 2]]);
-    samples.push([d[right], d[right + 1], d[right + 2]]);
+    if (d[left + 3] > 35) samples.push([d[left], d[left + 1], d[left + 2]]);
+    if (d[right + 3] > 35) samples.push([d[right], d[right + 1], d[right + 2]]);
   }
 
-  const rs = samples.map((s) => s[0]).sort((a, b) => a - b);
-  const gs = samples.map((s) => s[1]).sort((a, b) => a - b);
-  const bs = samples.map((s) => s[2]).sort((a, b) => a - b);
-  const mid = Math.floor(samples.length / 2);
-  const bgR = rs[mid];
-  const bgG = gs[mid];
-  const bgB = bs[mid];
+  let bgR = 0;
+  let bgG = 0;
+  let bgB = 0;
+  if (samples.length >= 4) {
+    const rs = samples.map((s) => s[0]).sort((a, b) => a - b);
+    const gs = samples.map((s) => s[1]).sort((a, b) => a - b);
+    const bs = samples.map((s) => s[2]).sort((a, b) => a - b);
+    const mid = Math.floor(samples.length / 2);
+    bgR = rs[mid];
+    bgG = gs[mid];
+    bgB = bs[mid];
+  }
 
-  const colorDist = (pIdx: number): number => {
-    const dr = d[pIdx] - bgR;
-    const dg = d[pIdx + 1] - bgG;
-    const db = d[pIdx + 2] - bgB;
-    // Distancia perceptual ponderada (Redmean) para proteger tonos cálidos/fríos del diseño
-    return Math.sqrt(0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db) * 1.65;
+  const bgMax = Math.max(bgR, bgG, bgB);
+  const bgMin = Math.min(bgR, bgG, bgB);
+  const bgIsNeutral = bgMax - bgMin < 28;
+  const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
+  const bgIsDark = bgLum < 65;
+
+  const colorDist = (r: number, g: number, b: number): number => {
+    const dr = r - bgR;
+    const dg = g - bgG;
+    const db = b - bgB;
+    let dist = Math.sqrt(0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db) * 1.65;
+
+    // Si el fondo es neutro (negro/gris/blanco), proteger los píxeles con saturación de color real (ej. naranja, rojo, cuero, dorado)
+    if (bgIsNeutral) {
+      const pMax = Math.max(r, g, b);
+      const pMin = Math.min(r, g, b);
+      const chroma = pMax - pMin;
+      if (chroma > 22) {
+        dist += (chroma - 22) * 0.85;
+      }
+    }
+    return dist;
   };
 
-  const tol = Math.max(8, Math.min(95, tolerance));
+  const tol = Math.max(12, Math.min(95, tolerance));
   const totalPixels = w * h;
-  // 0 = no visitado (interior protegido), 1 = fondo exterior confirmado
+
+  // Paso A: Flood-Fill desde el exterior para limpiar todo el fondo externo con tolerancia amplia
   const visited = new Uint8Array(totalPixels);
   const queue = new Int32Array(totalPixels);
   let qHead = 0;
   let qTail = 0;
 
-  const tryPush = (px: number, py: number, prevIdx: number) => {
+  const tryPush = (px: number, py: number) => {
     if (px < 0 || px >= w || py < 0 || py >= h) return;
     const idx = py * w + px;
     if (visited[idx]) return;
-
     const p4 = idx * 4;
-    const distBg = colorDist(p4);
-    if (distBg > tol) return;
-
-    // Barrera de gradiente local: si hay un salto brusco respecto al vecino, nos detenemos en el borde del diseño
-    if (prevIdx >= 0) {
-      const prev4 = prevIdx * 4;
-      const stepDiff =
-        Math.abs(d[p4] - d[prev4]) +
-        Math.abs(d[p4 + 1] - d[prev4 + 1]) +
-        Math.abs(d[p4 + 2] - d[prev4 + 2]);
-      if (stepDiff > tol * 1.45) return;
+    if (d[p4 + 3] < 35) {
+      visited[idx] = 1;
+      queue[qTail++] = idx;
+      return;
     }
-
-    visited[idx] = 1;
-    queue[qTail++] = idx;
+    const dist = colorDist(d[p4], d[p4 + 1], d[p4 + 2]);
+    if (dist <= tol * 1.15) {
+      visited[idx] = 1;
+      queue[qTail++] = idx;
+    }
   };
 
-  // Sembrar el Flood-Fill únicamente desde los 4 bordes exteriores
   for (let x = 0; x < w; x++) {
-    tryPush(x, 0, -1);
-    tryPush(x, h - 1, -1);
+    tryPush(x, 0);
+    tryPush(x, h - 1);
   }
   for (let y = 1; y < h - 1; y++) {
-    tryPush(0, y, -1);
-    tryPush(w - 1, y, -1);
+    tryPush(0, y);
+    tryPush(w - 1, y);
   }
 
-  // Propagar hacia adentro solo por regiones continuas de fondo
   while (qHead < qTail) {
     const curr = queue[qHead++];
     const cx = curr % w;
     const cy = (curr - cx) / w;
-
-    tryPush(cx + 1, cy, curr);
-    tryPush(cx - 1, cy, curr);
-    tryPush(cx, cy + 1, curr);
-    tryPush(cx, cy - 1, curr);
+    tryPush(cx + 1, cy);
+    tryPush(cx - 1, cy);
+    tryPush(cx, cy + 1);
+    tryPush(cx, cy - 1);
   }
 
-  // 3. Hacer transparente únicamente el fondo exterior alcanzado y suavizar el borde de contacto (1-2px)
-  const featherRange = 18;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = y * w + x;
-      const p4 = idx * 4;
-      if (visited[idx] === 1) {
+  // Paso B: Limpiar también los huecos de fondo encerrados (centro de letras A, B, O, escudos y poros grunge)
+  // y aplicar Descontaminación de Color (Un-Matting) en todos los bordes para eliminar el halo negro
+  const innerHoleTol = bgIsDark ? tol * 1.18 : tol * 0.92;
+  const unmatteRange = bgIsDark ? tol * 2.15 + 28 : tol * 1.75 + 22;
+
+  for (let i = 0; i < totalPixels; i++) {
+    const p4 = i * 4;
+    const a = d[p4 + 3];
+    if (a === 0) continue;
+
+    if (visited[i] === 1) {
+      d[p4 + 3] = 0;
+      continue;
+    }
+
+    const r = d[p4];
+    const g = d[p4 + 1];
+    const b = d[p4 + 2];
+    const dist = colorDist(r, g, b);
+
+    // Si es un hueco interno del mismo color del fondo (ej. el centro negro de la A, B, O o poros del diseño grunge)
+    if (dist <= innerHoleTol) {
+      d[p4 + 3] = 0;
+      continue;
+    }
+
+    // Zona de transición / borde suavizado (Alpha Un-Matting: quita el tinte negro del borde de las letras y rayas)
+    if (dist < unmatteRange) {
+      const normAlpha = Math.max(
+        0,
+        Math.min(1, (dist - innerHoleTol) / Math.max(1, unmatteRange - innerHoleTol))
+      );
+      // Curva suave para que los bordes queden nítidos y sin residuos oscuros
+      const cleanAlpha = normAlpha * normAlpha * (3 - 2 * normAlpha);
+      const newA = Math.round(a * cleanAlpha);
+
+      if (newA < 18) {
         d[p4 + 3] = 0;
       } else {
-        // Verificar si este píxel del diseño toca directamente el fondo eliminado (borde de contorno)
-        const touchesBg =
-          (x > 0 && visited[idx - 1] === 1) ||
-          (x < w - 1 && visited[idx + 1] === 1) ||
-          (y > 0 && visited[idx - w] === 1) ||
-          (y < h - 1 && visited[idx + w] === 1);
-
-        if (touchesBg) {
-          const dist = colorDist(p4);
-          if (dist < tol + featherRange) {
-            const alphaFactor = Math.max(0.15, Math.min(1, (dist - tol * 0.5) / (tol * 0.5 + featherRange)));
-            d[p4 + 3] = Math.round(d[p4 + 3] * alphaFactor);
-          }
-        }
+        const af = Math.max(0.18, cleanAlpha);
+        // Descontaminar matemáticamente el color de fondo (Remove Matte)
+        const cleanR = Math.round(Math.max(0, Math.min(255, (r - (1 - af) * bgR) / af)));
+        const cleanG = Math.round(Math.max(0, Math.min(255, (g - (1 - af) * bgG) / af)));
+        const cleanB = Math.round(Math.max(0, Math.min(255, (b - (1 - af) * bgB) / af)));
+        d[p4] = cleanR;
+        d[p4 + 1] = cleanG;
+        d[p4 + 2] = cleanB;
+        d[p4 + 3] = newA;
       }
     }
   }

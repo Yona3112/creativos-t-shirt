@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CartLine, Customer, Order, Section } from '../lib/types';
 import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, isWholesale, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
@@ -14,13 +14,6 @@ import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
 
 const LS_CART = 'cgs_cart_v1';
-
-const PLACEMENTS: { id: DecalPlacement; label: string }[] = [
-  { id: 'center', label: 'Pecho Centro' },
-  { id: 'pocket', label: 'Logo Izq.' },
-  { id: 'full', label: 'Frente Grande' },
-  { id: 'back', label: 'Espalda' }
-];
 
 interface Draft {
   lines: CartLine[];
@@ -100,7 +93,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [pendingColorName, setPendingColorName] = useState<string | null>(null);
   const [viewer, setViewer] = useState<string | null>(null);
   const [done, setDone] = useState<Order | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const brand = brands.find((b) => b.id === brandId);
   const color = colors.find((c) => c.id === colorId) || colors[0];
@@ -193,7 +185,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     } catch (e) {
       toast((e as Error).message, 'error');
     }
-    if (fileRef.current) fileRef.current.value = '';
   };
 
   const toggleRemoveBg = async (nextRemove: boolean) => {
@@ -330,6 +321,21 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             onAiRemoveBg={() => void handleAiBgNewOrder()}
             onUpscale4K={() => void handleUpscale4KNewOrder()}
             processingText={procMsg}
+            colorOptions={colors.map((c) => {
+              const totalC = brand
+                ? settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
+                : 0;
+              return {
+                id: c.id,
+                name: c.name,
+                hex: c.hex,
+                available: totalC > 0,
+                stockText: totalC > 0 ? `${totalC} disp.` : 'Pronto'
+              };
+            })}
+            activeColorId={color?.id}
+            onSelectColor={(id) => setColorId(id)}
+            onAddNewColor={() => setColorModal(true)}
             isStoreOwner
             catalogDesigns={allDesigns}
             onSelectCatalogDesign={(d) => {
@@ -391,198 +397,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           />
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {colors.map((c) => {
-            const totalC = brand
-              ? settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
-              : 0;
-            const active = c.id === color?.id;
-            return (
-              <button
-                key={c.id}
-                className={`flex min-h-[48px] items-center gap-2 rounded-2xl border-2 px-3 py-1.5 text-left transition ${
-                  active ? 'border-brand-700 bg-brand-700 text-white shadow' : 'border-slate-200 bg-white text-slate-800'
-                }`}
-                onClick={() => setColorId(c.id)}
-                aria-label={c.name}
-                title={c.name}
-              >
-                <span className="h-6 w-6 shrink-0 rounded-full border border-black/15" style={{ background: c.hex }} />
-                <div>
-                  <div className="text-xs font-bold leading-tight">{c.name}</div>
-                  <div
-                    className={`text-[11px] font-semibold ${
-                      active
-                        ? totalC > 0
-                          ? 'text-emerald-300'
-                          : 'text-amber-300'
-                        : totalC > 0
-                        ? 'text-emerald-600'
-                        : 'text-amber-600'
-                    }`}
-                  >
-                    {totalC > 0 ? `${totalC} en stock` : 'Disponible pronto'}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-          <button className="flex min-h-[48px] items-center rounded-2xl border-2 border-dashed border-brand-300 px-3 text-sm font-bold text-brand-700" onClick={() => setColorModal(true)}>
-            + Nuevo color
-          </button>
-        </div>
-      </section>
-
-      {/* 3. Foto del diseño + Quitar fondo JPG + Colocar y Escalar */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">3 · Diseño (Subir, Quitar Fondo y Colocar en 3D)</h2>
-        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
-        <div className="flex items-center gap-3">
-          {draft.photo ? (
-            <button
-              className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200 p-1 shadow-inner"
-              style={{ backgroundColor: color?.hex || '#f1f5f9' }}
-              onClick={() => setViewer(draft.photo)}
-              title="Ver diseño sobre el color de la camisa"
-            >
-              <img src={draft.photo} alt="Diseño" className="h-full w-full object-contain" />
-            </button>
-          ) : null}
-          <div className="flex flex-1 flex-col gap-2">
-            <button className="btn-soft w-full" onClick={() => fileRef.current?.click()}>
-              📸 {draft.photo ? 'Cambiar Foto del Diseño (JPG / PNG)' : 'Subir Foto del Diseño (JPG / PNG)'}
-            </button>
-            {draft.photo && (
-              <button
-                className="btn-ghost w-full text-red-600"
-                onClick={() => set({ photo: null, rawPhoto: null })}
-              >
-                Quitar foto
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Opción para quitar el fondo si es JPG y dejarlo igual al color de la camisa */}
-        <label className="flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
-          <input
-            type="checkbox"
-            className="h-5 w-5 accent-slate-900"
-            checked={draft.removeBg ?? true}
-            onChange={(e) => void toggleRemoveBg(e.target.checked)}
-          />
-          <span>🪄 Quitar fondo exterior (protege colores y letras internas del diseño)</span>
-        </label>
-
-        {procMsg && (
-          <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-900">
-            <span className="h-2.5 w-2.5 animate-ping rounded-full bg-sky-600" />
-            <span>{procMsg}</span>
-          </div>
-        )}
-
-        {draft.photo && (
-          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                className="btn-soft min-h-[42px] text-xs font-extrabold"
-                onClick={() => void handleAiBgNewOrder()}
-                disabled={!!procMsg}
-              >
-                🤖 Quitar Fondo con IA Pro
-              </button>
-              <button
-                type="button"
-                className="btn-soft min-h-[42px] text-xs font-extrabold"
-                onClick={() => void handleUpscale4KNewOrder()}
-                disabled={!!procMsg}
-              >
-                ✨ Escalar Diseño a 4K Ultra HD
-              </button>
-            </div>
-
-            <div>
-              <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                Ubicación en la camisa 3D
-              </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {PLACEMENTS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`chip text-xs ${(draft.placement || 'center') === p.id ? 'chip-on' : 'chip-off'}`}
-                    onClick={() => set({ placement: p.id, designOffsetX: 0, designOffsetY: 0 })}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-bold text-slate-600">Tamaño rápido:</span>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  className="rounded-xl bg-white px-2.5 py-1 text-xs font-extrabold text-slate-800 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => set({ designScale: 1, designOffsetX: 0, designOffsetY: 0 })}
-                >
-                  📄 Estándar A4 (100%)
-                </button>
-                <button
-                  type="button"
-                  className="rounded-xl bg-sky-600 px-3 py-1 text-xs font-extrabold text-white shadow-sm"
-                  onClick={() => set({ designScale: 2.75, designOffsetX: 0, designOffsetY: 2 })}
-                >
-                  📐 Tamaño A3 Completo (Máx)
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="label">
-                  Tamaño ({(draft.designScale ?? 1) >= 2.5 ? `A3 · ${Math.round((draft.designScale ?? 1) * 100)}%` : `${Math.round((draft.designScale ?? 1) * 100)}%`})
-                </label>
-                <input
-                  type="range"
-                  min="0.30"
-                  max="3.00"
-                  step="0.05"
-                  className="w-full accent-slate-900"
-                  value={draft.designScale ?? 1}
-                  onChange={(e) => set({ designScale: parseFloat(e.target.value) })}
-                />
-              </div>
-              <div>
-                <label className="label">Mover Izq. / Der.</label>
-                <input
-                  type="range"
-                  min="-24"
-                  max="24"
-                  step="1"
-                  className="w-full accent-slate-900"
-                  value={draft.designOffsetX ?? 0}
-                  onChange={(e) => set({ designOffsetX: parseFloat(e.target.value) })}
-                />
-              </div>
-              <div>
-                <label className="label">Mover Arriba / Abajo</label>
-                <input
-                  type="range"
-                  min="-24"
-                  max="26"
-                  step="1"
-                  className="w-full accent-slate-900"
-                  value={draft.designOffsetY ?? 0}
-                  onChange={(e) => set({ designOffsetY: parseFloat(e.target.value) })}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
         <div>
           <label className="label" htmlFor="wt">
             Tipo de trabajo
@@ -595,9 +409,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </div>
       </section>
 
-      {/* 4. Talla */}
+      {/* 3. Talla */}
       <section className="card">
-        <h2 className="section-title">4 · Talla</h2>
+        <h2 className="section-title">3 · Talla</h2>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           {settings.sizes.map((sz) => {
             const st = brand && color ? stock.get(vkey(brand.id, color.id, sz)) || 0 : 0;
