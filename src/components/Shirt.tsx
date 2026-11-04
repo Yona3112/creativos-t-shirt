@@ -3,6 +3,55 @@ import { contrastText } from '../lib/inventory';
 
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
 export type MotionMode = 'wind' | 'walk' | 'orbit';
+export type BoutiqueTheme = 'ranchero' | 'establo' | 'nocturno' | 'arena';
+
+const BOUTIQUE_THEMES: Record<
+  BoutiqueTheme,
+  {
+    label: string;
+    stageClass: string;
+    galleryClass: string;
+    auraColor: string;
+    badgeText: string;
+  }
+> = {
+  ranchero: {
+    label: '🤠 Ranchero',
+    stageClass:
+      'border-2 border-amber-500/45 bg-gradient-to-b from-[#2b1407] via-[#4d2611] to-[#1c0c04] text-amber-50 shadow-[inset_0_0_60px_rgba(245,158,11,0.18)]',
+    galleryClass:
+      'border-2 border-amber-500/40 bg-gradient-to-br from-[#2b1407] via-[#3d1e0d] to-[#1c0c04] text-amber-50',
+    auraColor: '#f59e0b55',
+    badgeText: '🤠 Ambiente Ranchero · Edición Western'
+  },
+  establo: {
+    label: '🪵 Establo',
+    stageClass:
+      'border-2 border-yellow-700/50 bg-[radial-gradient(ellipse_at_top,#5c3a21_0%,#2e1a0c_65%,#170c05_100%)] text-amber-50',
+    galleryClass:
+      'border-2 border-yellow-700/45 bg-gradient-to-br from-[#362010] via-[#261509] to-[#170c05] text-amber-50',
+    auraColor: '#d9770655',
+    badgeText: '🪵 Ambiente Talabartería & Establo'
+  },
+  nocturno: {
+    label: '✨ Nocturno',
+    stageClass:
+      'border border-slate-200/30 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-950 text-white',
+    galleryClass:
+      'border-2 border-indigo-950/30 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white',
+    auraColor: '#38bdf833',
+    badgeText: '✨ Probador Boutique Nocturno'
+  },
+  arena: {
+    label: '☀️ Rodeo Arena',
+    stageClass:
+      'border-2 border-amber-400/50 bg-gradient-to-b from-[#59371c] via-[#784b27] to-[#361f0d] text-amber-50',
+    galleryClass:
+      'border-2 border-amber-400/40 bg-gradient-to-br from-[#4a2c15] via-[#361f0d] to-[#241307] text-amber-50',
+    auraColor: '#fbbf2466',
+    badgeText: '☀️ Ambiente Sol de Rodeo'
+  }
+};
 
 function clamp(x: number, a: number, b: number): number {
   return x < a ? a : x > b ? b : x;
@@ -470,6 +519,8 @@ export function InteractiveShirt3D({
   onUploadCatalogFiles,
   onToggleCatalogDesignVisible,
   onDeleteCatalogDesign,
+  boutiqueTheme = 'ranchero',
+  onChangeBoutiqueTheme,
   autoMotion = true,
   stockBadge
 }: {
@@ -509,14 +560,23 @@ export function InteractiveShirt3D({
   onUploadCatalogFiles?: (files: FileList) => void;
   onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
   onDeleteCatalogDesign?: (designId: string) => void;
+  boutiqueTheme?: BoutiqueTheme;
+  onChangeBoutiqueTheme?: (theme: BoutiqueTheme) => void;
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
 }) {
   const [mode, setMode] = useState<MotionMode>('wind');
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
-  const [targetAngleY, setTargetAngleY] = useState<number | null>(0);
+  const [targetAngleY, setTargetAngleY] = useState<number | null>(placement === 'back' ? 180 : 0);
   const [zoom, setZoom] = useState<number>(1);
   const [showcaseActive, setShowcaseActive] = useState<boolean>(false);
+  const [localTheme, setLocalTheme] = useState<BoutiqueTheme>(boutiqueTheme);
+  const activeTheme = onChangeBoutiqueTheme ? boutiqueTheme : localTheme;
+  const setTheme = (t: BoutiqueTheme) => {
+    setLocalTheme(t);
+    onChangeBoutiqueTheme?.(t);
+  };
+  const themeStyle = BOUTIQUE_THEMES[activeTheme] || BOUTIQUE_THEMES.ranchero;
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
   const colorSlideRef = useRef<HTMLDivElement>(null);
@@ -563,23 +623,44 @@ export function InteractiveShirt3D({
   };
 
   if (!isStoreOwner) {
+    const isBackSide = placement === 'back';
     return (
       <div className="relative select-none space-y-3">
-        {/* BARRA SUPERIOR TIPO BOUTIQUE (Cámara 3D + Zoom + Giro) */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-900/95 px-3 py-2 text-white shadow-md backdrop-blur-md">
+        {/* BARRA SUPERIOR DE AMBIENTE (FONDO RANCHERO / ESTABLO) + VISTA 3D */}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/30 bg-[#1f0f06]/95 px-3 py-2 text-white shadow-md backdrop-blur-md">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+              Fondo:
+            </span>
+            {(Object.keys(BOUTIQUE_THEMES) as BoutiqueTheme[]).map((tKey) => (
+              <button
+                key={tKey}
+                type="button"
+                onClick={() => setTheme(tKey)}
+                className={`rounded-xl px-2 py-1 text-[11px] font-extrabold transition ${
+                  activeTheme === tKey
+                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                    : 'bg-white/10 text-amber-100 hover:bg-white/20'
+                }`}
+              >
+                {BOUTIQUE_THEMES[tKey].label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center gap-1">
             {(
               [
-                [0, '👕 Frente'],
-                [38, '📐 Perfil'],
-                [180, '🔄 Espalda']
+                [180, '🔄 Ver Espalda'],
+                [0, '👕 Ver Frente'],
+                [38, '📐 Perfil']
               ] as const
             ).map(([angle, lbl]) => (
               <button
                 key={lbl}
                 type="button"
                 onClick={() => setTargetAngleY(angle)}
-                className={`rounded-xl px-2.5 py-1.5 text-xs font-extrabold transition ${
+                className={`rounded-xl px-2.5 py-1 text-xs font-extrabold transition ${
                   targetAngleY === angle
                     ? 'bg-amber-400 text-slate-950 shadow-sm'
                     : 'bg-white/10 text-slate-200 hover:bg-white/20'
@@ -588,46 +669,32 @@ export function InteractiveShirt3D({
                 {lbl}
               </button>
             ))}
-          </div>
-
-          <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.75))}
-              className={`rounded-xl px-2.5 py-1.5 text-xs font-extrabold transition ${
+              className={`rounded-xl px-2.5 py-1 text-xs font-extrabold transition ${
                 zoom > 1.35
                   ? 'bg-sky-400 text-slate-950'
                   : 'bg-white/10 text-slate-200 hover:bg-white/20'
               }`}
             >
-              {zoom > 1.35 ? '🔭 Alejar' : '🔍 Acercar Diseño'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode((m) => (m === 'orbit' ? 'wind' : 'orbit'))}
-              className={`rounded-xl px-2.5 py-1.5 text-xs font-extrabold transition ${
-                mode === 'orbit'
-                  ? 'bg-emerald-400 text-slate-950'
-                  : 'bg-white/10 text-slate-200 hover:bg-white/20'
-              }`}
-            >
-              {mode === 'orbit' ? '🔄 Girando 360°' : '🌬️ Giro 360°'}
+              {zoom > 1.35 ? '🔭 Alejar' : '🔍 Zoom'}
             </button>
           </div>
         </div>
 
-        {/* ESCENARIO SHOWROOM DEL CLIENTE */}
-        <div className="relative overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 p-4 text-white shadow-inner">
-          {stockBadge && (
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-extrabold text-amber-300 backdrop-blur-sm">
-                ✨ Probador Virtual 3D
-              </span>
+        {/* ESCENARIO SHOWROOM DEL CLIENTE CON FONDO RANCHERO PERSONALIZABLE */}
+        <div className={`relative overflow-hidden rounded-3xl p-4 shadow-inner transition-colors duration-500 ${themeStyle.stageClass}`}>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-black/35 px-3 py-1 text-[11px] font-extrabold text-amber-300 ring-1 ring-amber-400/30 backdrop-blur-sm">
+              {themeStyle.badgeText}
+            </span>
+            {stockBadge && (
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold shadow-sm ${
                   stockBadge.available
-                    ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-400/50'
-                    : 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/50'
+                    ? 'bg-emerald-500/25 text-emerald-200 ring-1 ring-emerald-400/60'
+                    : 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60'
                 }`}
               >
                 <span
@@ -637,8 +704,37 @@ export function InteractiveShirt3D({
                 />
                 {stockBadge.text}
               </span>
-            </div>
-          )}
+            )}
+          </div>
+
+          {/* AVISO CLARO DE QUÉ LADO DE LA CAMISA ESTÁ VIENDO Y DÓNDE VA EL DISEÑO */}
+          <div className="mb-1 flex flex-wrap items-center justify-center gap-2">
+            <span className="rounded-xl bg-black/45 px-3 py-1 text-xs font-extrabold text-white ring-1 ring-white/15">
+              👁 Viendo ahora:{' '}
+              <strong className="text-amber-300">
+                {targetAngleY === 180
+                  ? 'ESPALDA (Parte de Atrás)'
+                  : targetAngleY === 0
+                  ? 'FRENTE (Parte Delantera)'
+                  : 'PERFIL 3D'}
+              </strong>
+            </span>
+            {designUrl ? (
+              <span
+                className={`rounded-xl px-3 py-1 text-xs font-extrabold shadow-sm ring-1 ${
+                  isBackSide
+                    ? 'bg-amber-400 text-slate-950 ring-amber-200'
+                    : 'bg-sky-400 text-slate-950 ring-sky-200'
+                }`}
+              >
+                📍 Diseño puesto en: {isBackSide ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}
+              </span>
+            ) : (
+              <span className="rounded-xl bg-white/10 px-3 py-1 text-xs font-bold text-amber-100">
+                👕 Camisa Lisa (Sin diseño seleccionado)
+              </span>
+            )}
+          </div>
 
           <div
             className="relative mx-auto flex w-full max-w-[360px] items-center justify-center"
@@ -647,10 +743,10 @@ export function InteractiveShirt3D({
             <div
               className="studio-aura-pulse pointer-events-none absolute inset-6 rounded-full blur-2xl transition-colors duration-700"
               style={{
-                background: `radial-gradient(circle, ${hex}88 0%, #38bdf833 55%, transparent 75%)`
+                background: `radial-gradient(circle, ${hex}88 0%, ${themeStyle.auraColor} 55%, transparent 75%)`
               }}
             />
-            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/50 blur-md" />
+            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/60 blur-md" />
 
             <WebGLShirtCanvas
               hex={hex}
@@ -668,19 +764,62 @@ export function InteractiveShirt3D({
             />
           </div>
 
-          <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-center text-xs font-medium text-slate-300">
-            <span>🖐 Desliza la camisa para girarla en 360°</span>
-            <span>·</span>
-            <span className="font-extrabold text-white">
-              {brandName} · Color {colorName}
-            </span>
-          </div>
+          {/* CONTROLES CLAROS PARA EL CLIENTE: CAMBIAR ENTRE ESPALDA Y FRENTE O QUITAR EL DISEÑO */}
+          {designUrl && (
+            <div className="mt-2 rounded-2xl border border-amber-400/40 bg-black/40 p-2.5 backdrop-blur-md">
+              <div className="mb-1.5 text-center text-[11px] font-extrabold uppercase tracking-wider text-amber-300">
+                📍 ¿En qué lado de la camisa quieres este diseño?
+              </div>
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDesignChange?.({ placement: 'back', offsetX: 0, offsetY: 2 });
+                    setTargetAngleY(180);
+                  }}
+                  className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                    isBackSide
+                      ? 'bg-amber-400 text-slate-950 shadow-md ring-2 ring-amber-200'
+                      : 'bg-white/10 text-white hover:bg-white/20'
+                  }`}
+                >
+                  <span>🔄</span>
+                  <span>En la ESPALDA (Atrás) {isBackSide ? '✓' : ''}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDesignChange?.({ placement: 'center', offsetX: 0, offsetY: 2 });
+                    setTargetAngleY(0);
+                  }}
+                  className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                    !isBackSide
+                      ? 'bg-sky-400 text-slate-950 shadow-md ring-2 ring-sky-200'
+                      : 'bg-white/10 text-white hover:bg-white/20'
+                  }`}
+                >
+                  <span>👕</span>
+                  <span>En el FRENTE (Pecho) {!isBackSide ? '✓' : ''}</span>
+                </button>
+                {onClearDesign && (
+                  <button
+                    type="button"
+                    onClick={onClearDesign}
+                    className="flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-rose-400/50 bg-rose-500/20 px-3 py-1.5 text-xs font-extrabold text-rose-200 transition hover:bg-rose-500 hover:text-white"
+                  >
+                    <span>🚫</span>
+                    <span>Quitar Diseño</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* SLIDE DE COLORES ESTILO BOUTIQUE DENTRO DEL ESCAPARATE */}
           {colorOptions && colorOptions.length > 0 && onSelectColor && (
-            <div className="mt-3 rounded-2xl border border-white/15 bg-white/10 p-2.5 backdrop-blur-md">
+            <div className="mt-3 rounded-2xl border border-white/15 bg-black/30 p-2.5 backdrop-blur-md">
               <div className="mb-1.5 flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-amber-300">
-                <span>🎨 1. Toca para cambiar el color de camisa</span>
+                <span>🎨 1. Elige el Color de tu Camisa</span>
                 <span className="text-white">{colorName}</span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -708,7 +847,7 @@ export function InteractiveShirt3D({
                         className={`flex shrink-0 snap-start items-center gap-2 rounded-full border px-3 py-1.5 text-left text-xs font-extrabold transition ${
                           active
                             ? 'scale-105 border-amber-400 bg-white text-slate-950 shadow-lg ring-2 ring-amber-400/60'
-                            : 'border-white/20 bg-slate-900/70 text-white hover:bg-slate-900'
+                            : 'border-white/20 bg-black/45 text-white hover:bg-black/70'
                         }`}
                       >
                         <span
@@ -752,31 +891,47 @@ export function InteractiveShirt3D({
           )}
         </div>
 
-        {/* GALERÍA DE DISEÑOS DISPONIBLES PARA EL CLIENTE (1 CLIC = PROBAR EN 3D) */}
+        {/* GALERÍA DE DISEÑOS DISPONIBLES PARA EL CLIENTE (EMPIEZA EN LA ESPALDA Y PERMITE CAMBIAR A FRENTE O QUITAR) */}
         {catalogDesigns && catalogDesigns.length > 0 && (
-          <div className="rounded-3xl border-2 border-indigo-950/15 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 p-3.5 text-white shadow-md">
+          <div className={`rounded-3xl p-3.5 shadow-md transition-colors duration-500 ${themeStyle.galleryClass}`}>
             <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
                   ✨ Paso 2
                 </span>
-                <span className="text-sm font-extrabold text-white">
-                  Toca un Diseño para Probarlo en tu Camisa
-                </span>
+                <div>
+                  <span className="text-sm font-extrabold text-white">
+                    Elige tu Diseño (Se coloca en la Espalda en Tamaño A3)
+                  </span>
+                  <span className="block text-[11px] font-medium text-amber-200/90">
+                    Después de elegirlo puedes pasarlo al Frente o quitarlo con un clic
+                  </span>
+                </div>
               </div>
-              {catalogDesigns.length >= 2 && (
-                <button
-                  type="button"
-                  onClick={() => setShowcaseActive((v) => !v)}
-                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-extrabold transition active:scale-95 ${
-                    showcaseActive
-                      ? 'bg-amber-400 text-slate-950 shadow ring-2 ring-amber-200'
-                      : 'bg-white/15 text-white hover:bg-white/25'
-                  }`}
-                >
-                  <span>{showcaseActive ? '⏸ Pausar Desfile' : '🎬 Ver Desfile Automático'}</span>
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {designUrl && onClearDesign && (
+                  <button
+                    type="button"
+                    onClick={onClearDesign}
+                    className="inline-flex items-center gap-1 rounded-full border border-rose-400/50 bg-rose-500/20 px-3 py-1 text-xs font-extrabold text-rose-200 transition hover:bg-rose-500 hover:text-white"
+                  >
+                    🚫 Quitar Diseño
+                  </button>
+                )}
+                {catalogDesigns.length >= 2 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowcaseActive((v) => !v)}
+                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-extrabold transition active:scale-95 ${
+                      showcaseActive
+                        ? 'bg-amber-400 text-slate-950 shadow ring-2 ring-amber-200'
+                        : 'bg-white/15 text-white hover:bg-white/25'
+                    }`}
+                  >
+                    <span>{showcaseActive ? '⏸ Pausar Desfile' : '🎬 Desfile Automático'}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 pt-1 sm:flex-wrap sm:overflow-visible">
@@ -791,13 +946,17 @@ export function InteractiveShirt3D({
                     style={{ animationDelay: `${(idx % 6) * 160}ms` }}
                     onClick={() => {
                       setShowcaseActive(false);
+                      if (isSelected && onClearDesign) {
+                        onClearDesign();
+                        return;
+                      }
                       onSelectCatalogDesign?.(d);
                     }}
                     disabled={!d.imageUrl}
-                    className={`catalog-card-motion group relative flex w-[122px] shrink-0 snap-start flex-col rounded-2xl border-2 p-2 text-left transition ${
+                    className={`catalog-card-motion group relative flex w-[124px] shrink-0 snap-start flex-col rounded-2xl border-2 p-2 text-left transition ${
                       isSelected
                         ? 'border-amber-400 bg-white/15 shadow-lg ring-2 ring-amber-400/60'
-                        : 'border-white/15 bg-white/5 hover:border-amber-300/70 hover:bg-white/10'
+                        : 'border-white/15 bg-black/25 hover:border-amber-300/70 hover:bg-white/10'
                     }`}
                   >
                     <div
@@ -814,8 +973,12 @@ export function InteractiveShirt3D({
                       ) : (
                         <span className="text-[10px] font-bold text-slate-300">Cargando...</span>
                       )}
-                      <span className="absolute bottom-1 left-1 rounded-md bg-black/75 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-300">
-                        {d.placement === 'back' ? 'Espalda A3' : 'Frente A3'}
+                      <span className="absolute bottom-1 left-1 rounded-md bg-black/80 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-300">
+                        {isSelected
+                          ? isBackSide
+                            ? 'En Espalda'
+                            : 'En Frente'
+                          : 'Espalda A3'}
                       </span>
                       {isSelected && (
                         <span className="absolute left-1 top-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-extrabold text-slate-950 shadow">
@@ -827,7 +990,7 @@ export function InteractiveShirt3D({
                       {d.name}
                     </div>
                     <div className="mt-0.5 w-full text-center text-[10px] font-bold text-amber-300">
-                      {isSelected ? 'Estampado activo' : 'Tocar para probar'}
+                      {isSelected ? 'Toca para quitar' : 'Probar en Espalda'}
                     </div>
                   </button>
                 );
@@ -1126,6 +1289,29 @@ export function InteractiveShirt3D({
                   onClick={() => setMode(id)}
                 >
                   {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 5. TEMA DE FONDO DE LA TIENDA BOUTIQUE (RANCHERO / ESTABLO / NOCTURNO / ARENA) */}
+          <div className="w-full border-t border-slate-100 pt-1.5">
+            <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-amber-700">
+              🤠 Fondo Tienda
+            </div>
+            <div className="grid grid-cols-2 gap-1">
+              {(Object.keys(BOUTIQUE_THEMES) as BoutiqueTheme[]).map((tKey) => (
+                <button
+                  key={tKey}
+                  type="button"
+                  onClick={() => setTheme(tKey)}
+                  className={`min-h-[28px] rounded-lg px-1.5 py-0.5 text-[10px] font-extrabold transition ${
+                    activeTheme === tKey
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-amber-50 text-amber-900 hover:bg-amber-100'
+                  }`}
+                >
+                  {BOUTIQUE_THEMES[tKey].label}
                 </button>
               ))}
             </div>

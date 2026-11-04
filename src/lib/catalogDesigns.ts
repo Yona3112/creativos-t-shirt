@@ -38,7 +38,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
           id: ref.id,
           name: ref.name,
           photoId: ref.photoId,
-          placement: ref.placement || 'center',
+          placement: ref.placement || 'back',
           clientVisible: true,
           createdAt: 0,
           updatedAt: 0
@@ -76,7 +76,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         name: d.name,
         photoId: d.photoId,
         imageUrl: urlMap[d.photoId] || null,
-        placement: d.placement || 'center',
+        placement: d.placement || 'back',
         clientVisible: d.clientVisible
       })),
     [rawList, urlMap]
@@ -103,7 +103,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       name: opts.name?.trim() || `Diseño #${count}`,
       photoId: pId,
       clientVisible: true,
-      placement: opts.placement || 'center'
+      placement: opts.placement || 'back'
     });
   };
 
@@ -131,7 +131,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         name: cleanFileName ? cleanFileName.slice(0, 24) : `Diseño #${count}`,
         photoId: pId,
         clientVisible: true,
-        placement: opts?.placement || 'center'
+        placement: opts?.placement || 'back'
       });
       added++;
     }

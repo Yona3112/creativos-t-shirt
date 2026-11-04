@@ -5,7 +5,7 @@ import { Drawer, Header, SECTIONS } from './components/Shell';
 import { Toasts } from './components/ui';
 import Home from './pages/Home';
 import NewOrder from './pages/NewOrder';
-import Catalog3D, { CustomerCatalogView, readSharedCatalogHash } from './pages/Catalog3D';
+import Catalog3D, { CustomerCatalogView, readSharedCatalogHash, readWebOrderImportHash } from './pages/Catalog3D';
 import Workshop from './pages/Workshop';
 import Inventory from './pages/Inventory';
 import Brands from './pages/Brands';
@@ -17,6 +17,7 @@ import SettingsPage from './pages/Settings';
 const VALID = new Set(SECTIONS.map((s) => s.id));
 
 function initialSection(): Section {
+  if (readWebOrderImportHash()) return 'vender';
   const s = sessionStorage.getItem('cgs_section') as Section | null;
   return s && VALID.has(s) ? s : 'inicio';
 }
@@ -29,7 +30,15 @@ export default function App() {
   const [sharedCatalog, setSharedCatalog] = useState(readSharedCatalogHash);
 
   useEffect(() => {
-    const onHash = () => setSharedCatalog(readSharedCatalogHash());
+    const onHash = () => {
+      if (readWebOrderImportHash()) {
+        setSharedCatalog(null);
+        setSection('vender');
+        sessionStorage.setItem('cgs_section', 'vender');
+        return;
+      }
+      setSharedCatalog(readSharedCatalogHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);

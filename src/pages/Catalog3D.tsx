@@ -8,7 +8,7 @@ import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
 import { copyText } from '../lib/csv';
 import { whatsappUrl } from '../lib/whatsapp';
-import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
+import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { Stepper, toast } from '../components/ui';
 import { useCatalogDesigns, type SharedCatalogDesignRef } from '../lib/catalogDesigns';
@@ -34,10 +34,38 @@ export interface SharedCatalogPayload {
   scale: number;
   offsetX?: number;
   offsetY: number;
+  boutiqueTheme?: BoutiqueTheme;
   designs?: SharedCatalogDesignRef[];
 }
 
-const LIVE_CATALOG_KEY = 'cat_live';
+export interface CustomerWebOrderPayload {
+  id: string;
+  createdAt: number;
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  brandId?: string;
+  brandName: string;
+  colorId?: string;
+  colorName: string;
+  colorHex: string;
+  size: string;
+  qty: number;
+  unitPrice: number;
+  designId?: string | null;
+  designName?: string | null;
+  photoId?: string | null;
+  placement: DecalPlacement;
+  scale: number;
+}
+
+export const LIVE_CATALOG_KEY = 'cat_live';
+export const WEB_ORDER_LATEST_KEY = 'weborder_latest';
+
+export function readWebOrderImportHash(): string | null {
+  const m = location.hash.match(/pedido=([A-Za-z0-9_-]+)/);
+  return m ? m[1] : null;
+}
 
 function buildDefaultLivePayload(): SharedCatalogPayload {
   const st = getState();
@@ -58,10 +86,11 @@ function buildDefaultLivePayload(): SharedCatalogPayload {
     priceWholesale: st.settings.priceWholesale,
     wholesaleMin: st.settings.wholesaleMin,
     photoId: null,
-    placement: 'center',
+    placement: 'back',
     scale: 2.75,
     offsetX: 0,
-    offsetY: 2
+    offsetY: 2,
+    boutiqueTheme: 'ranchero'
   };
 }
 
@@ -91,13 +120,6 @@ export function readSharedCatalogHash(): SharedCatalogPayload | null {
   return decodeCatalog(m[1]) || buildDefaultLivePayload();
 }
 
-const PLACEMENTS: { id: DecalPlacement; label: string }[] = [
-  { id: 'center', label: 'Pecho Centro' },
-  { id: 'pocket', label: 'Logo Izq.' },
-  { id: 'full', label: 'Frente Grande' },
-  { id: 'back', label: 'Espalda' }
-];
-
 export default function Catalog3D() {
   const state = useAppState();
   const { stock } = useStock();
@@ -120,10 +142,11 @@ export default function Catalog3D() {
   const [processingMsg, setProcessingMsg] = useState<string | null>(null);
   const [photoId, setPhotoId] = useState<string | null>(null);
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
-  const [placement, setPlacement] = useState<DecalPlacement>('center');
+  const [placement, setPlacement] = useState<DecalPlacement>('back');
   const [scale, setScale] = useState(2.75);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(2);
+  const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>('ranchero');
   const [autoMotion, setAutoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
   const [previewClient, setPreviewClient] = useState<SharedCatalogPayload | null>(null);
@@ -270,6 +293,7 @@ export default function Catalog3D() {
       scale,
       offsetX,
       offsetY,
+      boutiqueTheme,
       designs: clientDesigns.map((d) => ({
         id: d.id,
         name: d.name,
@@ -424,12 +448,14 @@ export default function Catalog3D() {
             setRawDesignUrl(d.imageUrl);
             setPhotoId(d.photoId);
             setActiveCatalogDesignId(d.id);
-            setPlacement(d.placement || 'center');
+            setPlacement('back');
             setScale(2.75);
             setOffsetX(0);
             setOffsetY(2);
-            toast(`"${d.name}" aplicado en Tamaño A3`);
+            toast(`"${d.name}" aplicado en la Espalda (Tamaño A3)`);
           }}
+          boutiqueTheme={boutiqueTheme}
+          onChangeBoutiqueTheme={(t) => setBoutiqueTheme(t)}
           onSaveCurrentToCatalog={() => {
             if (!designUrl) return;
             void saveCurrentToCatalog({
@@ -628,14 +654,27 @@ export function CustomerCatalogView({
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
   const [selectedDesignName, setSelectedDesignName] = useState<string | null>(null);
-  const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'center');
+  const [selectedDesignPhotoId, setSelectedDesignPhotoId] = useState<string | null>(
+    payload.photoId || null
+  );
+  const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'back');
   const [scale, setScale] = useState(payload.scale || 2.75);
   const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
   const [offsetY, setOffsetY] = useState(payload.offsetY ?? 2);
+  const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(
+    payload.boutiqueTheme || 'ranchero'
+  );
   const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
   const [qty, setQty] = useState(1);
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
 
   const { clientDesigns } = useCatalogDesigns(payload.designs);
+
+  useEffect(() => {
+    if (payload.boutiqueTheme) setBoutiqueTheme(payload.boutiqueTheme);
+  }, [payload.boutiqueTheme]);
 
   useEffect(() => {
     if (!payload.colors.some((c) => c.name === selectedColor?.name)) {
@@ -648,24 +687,28 @@ export function CustomerCatalogView({
       void fetchSharedPhoto(payload.photoId).then((d) => {
         if (d) {
           setDesignUrl(d);
+          setSelectedDesignPhotoId(payload.photoId);
         }
       });
     }
   }, [payload.photoId, designUrl]);
 
-  // Si no hay diseño inicial pero hay diseños disponibles para el cliente, pre-cargar el primero automáticamente
+  // Si no hay diseño inicial pero hay diseños disponibles para el cliente, pre-cargar el primero automáticamente en la ESPALDA
+  const [autoLoadedOnce, setAutoLoadedOnce] = useState(false);
   useEffect(() => {
-    if (!designUrl && !payload.photoId && clientDesigns.length > 0 && clientDesigns[0].imageUrl) {
+    if (!autoLoadedOnce && !designUrl && !payload.photoId && clientDesigns.length > 0 && clientDesigns[0].imageUrl) {
       const first = clientDesigns[0];
+      setAutoLoadedOnce(true);
       setDesignUrl(first.imageUrl);
       setActiveCatalogDesignId(first.id);
       setSelectedDesignName(first.name);
-      setPlacement(first.placement || 'center');
+      setSelectedDesignPhotoId(first.photoId);
+      setPlacement('back');
       setScale(2.75);
       setOffsetX(0);
       setOffsetY(2);
     }
-  }, [clientDesigns, designUrl, payload.photoId]);
+  }, [autoLoadedOnce, clientDesigns, designUrl, payload.photoId]);
 
   const liveBrand = useMemo(
     () =>
@@ -711,7 +754,13 @@ export function CustomerCatalogView({
   const unitPrice = qty >= payload.wholesaleMin ? payload.priceWholesale : payload.priceNormal;
   const total = qty * unitPrice;
 
-  const placementLabel = PLACEMENTS.find((p) => p.id === placement)?.label || 'Pecho Centro';
+  const isBackSide = placement === 'back';
+  const sideLabelExplicit = !designUrl
+    ? 'SIN ESTAMPADO (Camisa Lisa)'
+    : isBackSide
+    ? 'ESPALDA (Parte de Atrás de la Camisa)'
+    : 'FRENTE (Pecho Delantero de la Camisa)';
+
   const stockNote =
     selectedSizeStock >= qty
       ? `Disponible en stock (${selectedSizeStock} uds)`
@@ -719,17 +768,58 @@ export function CustomerCatalogView({
       ? `${selectedSizeStock} en stock inmediato + ${qty - selectedSizeStock} disponible pronto`
       : 'Bajo pedido (Disponible pronto)';
 
-  const designNote = selectedDesignName
-    ? `\n• Diseño elegido: ${selectedDesignName} (${scale >= 2.4 ? 'Tamaño A3' : `${Math.round(scale * 100)}%`})`
-    : '';
-  const orderText = `¡Hola ${payload.storeName}! 👋 Vi la Tienda 3D en vivo y quiero pedir:\n\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designNote}\n• Ubicación del diseño: ${placementLabel}\n• Total estimado: ${money(total)}`;
+  const handleSendOrderWhatsApp = async () => {
+    const orderId = uid().slice(0, 8);
+    const webOrder: CustomerWebOrderPayload = {
+      id: orderId,
+      createdAt: Date.now(),
+      customerName: customerName.trim() || 'Cliente Tienda 3D',
+      customerPhone: customerPhone.trim(),
+      customerAddress: customerAddress.trim(),
+      brandId: liveBrand?.id || payload.brandId,
+      brandName: payload.brandName,
+      colorId: resolveColorId(selectedColor) || selectedColor?.id,
+      colorName: selectedColor?.name || 'Negro',
+      colorHex: selectedColor?.hex || '#111827',
+      size,
+      qty,
+      unitPrice,
+      designId: activeCatalogDesignId,
+      designName: designUrl ? selectedDesignName || 'Diseño personalizado' : null,
+      photoId: designUrl ? selectedDesignPhotoId : null,
+      placement,
+      scale
+    };
 
-  const waHref = payload.storePhone
-    ? whatsappUrl(payload.storePhone, orderText)
-    : `https://wa.me/?text=${encodeURIComponent(orderText)}`;
+    const rawOrderJson = JSON.stringify(webOrder);
+    void savePhoto(WEB_ORDER_LATEST_KEY, rawOrderJson, 0);
+    void savePhoto(`weborder_${orderId}`, rawOrderJson, 0);
+    void uploadPhotoNow(WEB_ORDER_LATEST_KEY, rawOrderJson);
+    void uploadPhotoNow(`weborder_${orderId}`, rawOrderJson);
+
+    const importUrl = `${location.origin}${location.pathname}#pedido=${orderId}`;
+    const clientHeader =
+      customerName.trim() || customerPhone.trim() || customerAddress.trim()
+        ? `\n👤 *DATOS DEL CLIENTE:*\n• Nombre: ${customerName.trim() || 'Por confirmar'}${
+            customerPhone.trim() ? `\n• Teléfono: ${customerPhone.trim()}` : ''
+          }${customerAddress.trim() ? `\n• Dirección / Nota: ${customerAddress.trim()}` : ''}\n`
+        : '';
+
+    const designBlock = designUrl
+      ? `\n• Diseño elegido: *${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
+      : `\n• Estilo: *Camisa Lisa (Sin estampado)*`;
+
+    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designBlock}\n• Total estimado: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
+
+    const targetHref = payload.storePhone
+      ? whatsappUrl(payload.storePhone, orderText)
+      : `https://wa.me/?text=${encodeURIComponent(orderText)}`;
+
+    window.open(targetHref, '_blank', 'noopener,noreferrer');
+  };
 
   return (
-    <div className="min-h-screen bg-slate-950 pb-28 text-slate-100">
+    <div className="min-h-screen bg-[#140a04] pb-28 text-amber-50">
       {/* AVISO CLARO CUANDO EL ADMINISTRADOR ESTÁ PREVISUALIZANDO LA TIENDA DEL CLIENTE */}
       {onExitPreview && (
         <div className="sticky top-0 z-50 bg-amber-400 px-3 py-2 text-slate-950 shadow-md">
@@ -738,7 +828,7 @@ export function CustomerCatalogView({
               <span className="rounded-md bg-slate-950 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
                 Modo Prueba
               </span>
-              <span>Así ven tus clientes la Tienda Interactiva (#tienda)</span>
+              <span>Así ven tus clientes la Tienda Boutique Ranchera (#tienda)</span>
             </div>
             <button
               type="button"
@@ -751,13 +841,13 @@ export function CustomerCatalogView({
         </div>
       )}
 
-      {/* CABECERA BOUTIQUE EXCLUSIVA DE LA TIENDA DEL CLIENTE */}
-      <header className="border-b border-white/10 bg-gradient-to-r from-indigo-950 via-slate-900 to-emerald-950 px-4 py-4 shadow-lg">
+      {/* CABECERA BOUTIQUE RANCHERA EXCLUSIVA DE LA TIENDA DEL CLIENTE */}
+      <header className="border-b border-amber-500/30 bg-gradient-to-r from-[#2b1407] via-[#3e1d0a] to-[#1f0e05] px-4 py-4 shadow-lg">
         <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-amber-300 ring-1 ring-amber-400/40">
-                🛍️ Tienda Oficial 3D
+                🤠 Boutique Oficial 3D
               </span>
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300 ring-1 ring-emerald-400/30">
                 <span
@@ -771,19 +861,19 @@ export function CustomerCatalogView({
             <h1 className="mt-1 text-xl font-extrabold tracking-tight text-white">
               {payload.storeName}
             </h1>
-            <p className="text-xs font-medium text-slate-300">
+            <p className="text-xs font-medium text-amber-200/85">
               Personalizador Interactivo · Camisas {payload.brandName}
             </p>
           </div>
 
-          <div className="flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-right backdrop-blur-sm">
+          <div className="flex items-center gap-2 rounded-2xl border border-amber-400/25 bg-black/30 px-3 py-2 text-right backdrop-blur-sm">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-200/70">
                 Unidad
               </div>
               <div className="text-sm font-extrabold text-white">{money(payload.priceNormal)}</div>
             </div>
-            <div className="h-7 w-px bg-white/15" />
+            <div className="h-7 w-px bg-amber-400/20" />
             <div>
               <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
                 Mayorista ({payload.wholesaleMin}+)
@@ -798,7 +888,7 @@ export function CustomerCatalogView({
 
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
         {/* ESCAPARATE 3D INTERACTIVO DEL CLIENTE */}
-        <section className="rounded-3xl border border-white/10 bg-slate-900/90 p-3 shadow-xl">
+        <section className="rounded-3xl border border-amber-500/25 bg-[#211006]/90 p-3 shadow-xl">
           <InteractiveShirt3D
             hex={selectedColor?.hex || '#111827'}
             colorName={selectedColor?.name || ''}
@@ -808,6 +898,20 @@ export function CustomerCatalogView({
             designScale={scale}
             designOffsetX={offsetX}
             designOffsetY={offsetY}
+            onDesignChange={(patch) => {
+              if (patch.placement !== undefined) setPlacement(patch.placement);
+              if (patch.scale !== undefined) setScale(patch.scale);
+              if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
+              if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
+            }}
+            onClearDesign={() => {
+              setDesignUrl(null);
+              setActiveCatalogDesignId(null);
+              setSelectedDesignName(null);
+              setSelectedDesignPhotoId(null);
+            }}
+            boutiqueTheme={boutiqueTheme}
+            onChangeBoutiqueTheme={(t) => setBoutiqueTheme(t)}
             colorOptions={payload.colors.map((c) => {
               const totalC = getColorTotalStock(c);
               return {
@@ -827,10 +931,12 @@ export function CustomerCatalogView({
             activeCatalogDesignId={activeCatalogDesignId}
             onSelectCatalogDesign={(d) => {
               if (!d.imageUrl) return;
+              // Siempre empieza en la ESPALDA y luego el cliente puede elegir Frontal o quitarlo
               setDesignUrl(d.imageUrl);
               setActiveCatalogDesignId(d.id);
               setSelectedDesignName(d.name);
-              setPlacement(d.placement || 'center');
+              setSelectedDesignPhotoId(d.photoId);
+              setPlacement('back');
               setScale(2.75);
               setOffsetX(0);
               setOffsetY(2);
@@ -847,7 +953,7 @@ export function CustomerCatalogView({
         </section>
 
         {/* PASO 3: SELECCIÓN DE TALLA ESTILO TIENDA ONLINE */}
-        <section className="rounded-3xl border border-white/10 bg-slate-900/90 p-4 shadow-xl">
+        <section className="rounded-3xl border border-amber-500/25 bg-[#211006]/90 p-4 shadow-xl">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
@@ -872,8 +978,8 @@ export function CustomerCatalogView({
                     isSel
                       ? 'scale-[1.03] border-amber-400 bg-amber-400 text-slate-950 shadow-lg'
                       : st > 0
-                      ? 'border-white/15 bg-slate-800/90 text-white hover:border-amber-300/60'
-                      : 'border-white/5 bg-slate-900/60 text-slate-400'
+                      ? 'border-white/15 bg-black/40 text-white hover:border-amber-300/60'
+                      : 'border-white/5 bg-black/20 text-slate-400'
                   }`}
                 >
                   <span className="text-base font-extrabold">{sz}</span>
@@ -900,19 +1006,72 @@ export function CustomerCatalogView({
           </div>
         </section>
 
-        {/* PASO 4: CANTIDAD Y RESUMEN */}
-        <section className="rounded-3xl border border-white/10 bg-slate-900/90 p-4 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* PASO 4: DATOS DEL CLIENTE, CANTIDAD Y CONFIRMACIÓN DE LADO (ESPALDA / FRENTE) */}
+        <section className="space-y-3 rounded-3xl border border-amber-500/25 bg-[#211006]/90 p-4 shadow-xl">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
+                👤 Paso 4
+              </span>
+              <h2 className="text-sm font-extrabold text-white">
+                Tus Datos y Resumen de Estampado
+              </h2>
+            </div>
+            <span className="rounded-lg bg-amber-400/20 px-2.5 py-1 text-xs font-extrabold text-amber-300">
+              📍 {sideLabelExplicit}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-bold text-amber-200">
+                Tu Nombre Completo *
+              </label>
+              <input
+                type="text"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="Ej. Juan Pérez"
+                className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-3 py-2.5 text-sm font-bold text-white placeholder-amber-200/40 focus:border-amber-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-bold text-amber-200">
+                Tu Teléfono / WhatsApp
+              </label>
+              <input
+                type="tel"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="Ej. 9999-8888"
+                className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-3 py-2.5 text-sm font-bold text-white placeholder-amber-200/40 focus:border-amber-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-bold text-amber-200">
+                Dirección o Nota de Entrega
+              </label>
+              <input
+                type="text"
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+                placeholder="Barrio / Colonia / Ciudad"
+                className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-3 py-2.5 text-sm font-bold text-white placeholder-amber-200/40 focus:border-amber-400 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
             <div>
               <div className="mb-1 text-xs font-extrabold uppercase tracking-wider text-amber-300">
-                🛒 Paso 4 · Cantidad de Camisas
+                Cantidad de Camisas
               </div>
               <div className="rounded-2xl bg-white p-1 text-slate-900">
                 <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
               </div>
             </div>
             <div className="text-right">
-              <div className="text-xs font-bold text-slate-300">
+              <div className="text-xs font-bold text-amber-100/80">
                 {qty >= payload.wholesaleMin ? '✨ Precio Mayorista Aplicado' : 'Precio Unitario'}:{' '}
                 <strong className="text-white">{money(unitPrice)} c/u</strong>
               </div>
@@ -921,7 +1080,7 @@ export function CustomerCatalogView({
           </div>
 
           {selectedSizeStock === 0 && (
-            <div className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
+            <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
               ⏳ La talla <strong>{size}</strong> en color <strong>{selectedColor?.name}</strong> está como{' '}
               <strong>Disponible pronto</strong>. Puedes apartarla o encargarla bajo pedido por WhatsApp.
             </div>
@@ -930,24 +1089,27 @@ export function CustomerCatalogView({
       </div>
 
       {/* BARRA INFERIOR FIJA DE COMPRA (ESTILO TIENDA ONLINE) */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/15 bg-slate-900/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-amber-500/30 bg-[#1a0c04]/95 px-4 py-3 shadow-2xl backdrop-blur-md">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-xs font-bold text-slate-300">
-              {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'camisa' : 'camisas'}
-              {selectedDesignName ? ` · ${selectedDesignName}` : ''}
+            <div className="truncate text-xs font-bold text-amber-100">
+              {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'} ·{' '}
+              <span className="font-extrabold text-amber-300">
+                {designUrl
+                  ? `${selectedDesignName || 'Diseño'} (${isBackSide ? 'EN ESPALDA' : 'EN FRENTE'})`
+                  : 'Camisa Lisa'}
+              </span>
             </div>
             <div className="text-lg font-extrabold text-amber-300">{money(total)}</div>
           </div>
-          <a
+          <button
+            type="button"
+            onClick={() => void handleSendOrderWhatsApp()}
             className="inline-flex min-h-[48px] shrink-0 items-center justify-center gap-2 rounded-2xl bg-[#25D366] px-5 py-2.5 text-sm font-extrabold text-white shadow-lg transition hover:bg-[#1ebe5b] active:scale-95"
-            href={waHref}
-            target="_blank"
-            rel="noreferrer"
           >
             <span>💬</span>
             <span>{selectedSizeStock > 0 ? 'Pedir por WhatsApp' : 'Encargar por WhatsApp'}</span>
-          </a>
+          </button>
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CartLine, Customer, Order, Section } from '../lib/types';
 import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, isWholesale, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
@@ -6,14 +6,17 @@ import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
 import { savePhoto } from '../lib/db';
+import { fetchSharedPhoto } from '../lib/sync';
 import { addressOneLine, createOrder, quickCustomer, updateBrand, updateSettings } from '../lib/actions';
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
+import { WEB_ORDER_LATEST_KEY, readWebOrderImportHash, type CustomerWebOrderPayload } from './Catalog3D';
 
 const LS_CART = 'cgs_cart_v1';
+const LS_LAST_IMPORTED_WEB_ORDER = 'cgs_last_imported_weborder_v1';
 
 interface Draft {
   lines: CartLine[];
@@ -41,7 +44,7 @@ function emptyDraft(): Draft {
     photo: null,
     rawPhoto: null,
     removeBg: false,
-    placement: 'center',
+    placement: 'back',
     designScale: 2.75,
     designOffsetX: 0,
     designOffsetY: 2,
@@ -50,7 +53,7 @@ function emptyDraft(): Draft {
     withShipping: true,
     shipping: s.shipping,
     paymentMethod: s.paymentMethods[0] || 'Efectivo',
-    workType: s.workTypes[0] || 'DTF Frontal',
+    workType: s.workTypes.find((w) => w.toLowerCase().includes('espalda')) || s.workTypes[0] || 'DTF Frontal',
     deposit: null,
     notes: ''
   };
@@ -234,6 +237,158 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [custMode, setCustMode] = useState<'buscar' | 'nuevo'>('buscar');
   const [q, setQ] = useState('');
   const [qc, setQc] = useState({ name: '', phone: '', address: '' });
+  const [latestWebOrder, setLatestWebOrder] = useState<CustomerWebOrderPayload | null>(null);
+  const [importingWebOrder, setImportingWebOrder] = useState(false);
+
+  const importCustomerWebOrder = useCallback(
+    async (webOrder: CustomerWebOrderPayload) => {
+      setImportingWebOrder(true);
+      try {
+        const matchedBrand =
+          state.brands.find((b) => !b.deleted && b.id === webOrder.brandId) ||
+          state.brands.find((b) => !b.deleted && b.name.toLowerCase() === (webOrder.brandName || '').toLowerCase()) ||
+          brands[0];
+
+        const brandCols = matchedBrand ? brandColors(state, matchedBrand.id) : colors;
+        const matchedColor =
+          brandCols.find((c) => c.id === webOrder.colorId) ||
+          brandCols.find((c) => c.name.toLowerCase() === (webOrder.colorName || '').toLowerCase()) ||
+          brandCols[0];
+
+        if (matchedBrand) setBrandId(matchedBrand.id);
+        if (matchedColor) setColorId(matchedColor.id);
+        if (webOrder.size) setSize(webOrder.size);
+
+        let loadedPhoto: string | null = null;
+        if (webOrder.photoId) {
+          loadedPhoto = await fetchSharedPhoto(webOrder.photoId);
+        }
+
+        const isBack = (webOrder.placement || 'back') === 'back';
+        const sideExplicit = isBack
+          ? 'ESPALDA (Parte de Atrás de la Camisa)'
+          : 'FRENTE (Pecho Delantero de la Camisa)';
+        const matchedWorkType =
+          settings.workTypes.find((w) =>
+            isBack ? w.toLowerCase().includes('espalda') : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+          ) || settings.workTypes[0] || 'DTF Frontal';
+
+        const cleanPhone = (webOrder.customerPhone || '').replace(/\D/g, '');
+        const existingCustomer = cleanPhone
+          ? state.customers.find((c) => !c.deleted && c.phone.replace(/\D/g, '').endsWith(cleanPhone.slice(-8)))
+          : null;
+
+        if (existingCustomer) {
+          setCustMode('buscar');
+          const defAddr = existingCustomer.addresses.find((a) => a.isDefault) || existingCustomer.addresses[0];
+          setDraft((prev) => ({
+            ...prev,
+            customerId: existingCustomer.id,
+            addressId: defAddr?.id || null
+          }));
+        } else if (webOrder.customerName || webOrder.customerPhone || webOrder.customerAddress) {
+          setCustMode('nuevo');
+          setQc({
+            name: webOrder.customerName || '',
+            phone: (webOrder.customerPhone || '').replace(/^\+?504\s*/, ''),
+            address: webOrder.customerAddress || ''
+          });
+        }
+
+        const newLine: CartLine | null =
+          matchedBrand && matchedColor
+            ? {
+                id: uid(),
+                brandId: matchedBrand.id,
+                colorId: matchedColor.id,
+                size: webOrder.size || 'M',
+                qty: Math.max(1, webOrder.qty || 1),
+                unitPrice: webOrder.unitPrice || tierPrice(settings, matchedBrand, webOrder.qty || 1),
+                manualPrice: false
+              }
+            : null;
+
+        const noteParts = [
+          webOrder.designName
+            ? `Diseño: ${webOrder.designName} · Ubicación: ${sideExplicit}`
+            : `Camisa lisa (sin diseño estampado)`,
+          webOrder.customerAddress ? `Nota/Dirección cliente: ${webOrder.customerAddress}` : ''
+        ].filter(Boolean);
+
+        setDraft((prev) => ({
+          ...prev,
+          lines: newLine ? [newLine] : prev.lines,
+          photo: loadedPhoto,
+          rawPhoto: loadedPhoto,
+          removeBg: false,
+          placement: webOrder.placement || 'back',
+          designScale: webOrder.scale || 2.75,
+          designOffsetX: 0,
+          designOffsetY: 2,
+          workType: matchedWorkType,
+          customerId: existingCustomer ? existingCustomer.id : null,
+          addressId: existingCustomer ? (existingCustomer.addresses.find((a) => a.isDefault) || existingCustomer.addresses[0])?.id || null : null,
+          notes: noteParts.join(' | ')
+        }));
+
+        try {
+          localStorage.setItem(LS_LAST_IMPORTED_WEB_ORDER, webOrder.id);
+        } catch {
+          /* ignorar */
+        }
+        setLatestWebOrder(null);
+        toast(`✅ Pedido de ${webOrder.customerName || 'Cliente'} (${sideExplicit}) cargado automáticamente`);
+      } catch (e) {
+        toast((e as Error).message || 'No se pudo cargar el pedido web', 'error');
+      } finally {
+        setImportingWebOrder(false);
+      }
+    },
+    [brands, colors, settings, state]
+  );
+
+  // Cargar pedido automáticamente si viene del link #pedido=<id> o mostrar banner del último pedido web
+  useEffect(() => {
+    let cancelled = false;
+    const checkWebOrder = async () => {
+      const hashOrderId = readWebOrderImportHash();
+      if (hashOrderId) {
+        const raw =
+          (await fetchSharedPhoto(`weborder_${hashOrderId}`)) ||
+          (await fetchSharedPhoto(WEB_ORDER_LATEST_KEY));
+        if (!cancelled && raw) {
+          try {
+            const parsed = JSON.parse(raw) as CustomerWebOrderPayload;
+            history.replaceState({ section: 'vender' }, '', location.pathname);
+            await importCustomerWebOrder(parsed);
+            return;
+          } catch {
+            /* ignorar */
+          }
+        }
+      }
+
+      // Verificar si hay un pedido reciente desde la Tienda 3D aún no importado
+      const latestRaw = await fetchSharedPhoto(WEB_ORDER_LATEST_KEY);
+      if (!cancelled && latestRaw) {
+        try {
+          const parsed = JSON.parse(latestRaw) as CustomerWebOrderPayload;
+          const lastImported = localStorage.getItem(LS_LAST_IMPORTED_WEB_ORDER);
+          if (parsed && parsed.id && parsed.id !== lastImported) {
+            setLatestWebOrder(parsed);
+          }
+        } catch {
+          /* ignorar */
+        }
+      }
+    };
+    void checkWebOrder();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const matches = useMemo(() => {
     const t = q.trim().toLowerCase();
     if (!t) return [];
@@ -257,6 +412,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       await savePhoto(photoId, draft.photo, 0);
       notifyPhotos();
     }
+    const sideNote = draft.photo
+      ? `[UBICACIÓN DISEÑO: ${(draft.placement || 'back') === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}]`
+      : '';
+    const finalNotes = [sideNote, draft.notes.trim()].filter(Boolean).join(' · ');
     const order = createOrder({
       lines,
       customer: cust,
@@ -265,7 +424,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       deposit: draft.deposit || 0,
       paymentMethod: draft.paymentMethod,
       workType: draft.workType,
-      notes: draft.notes,
+      notes: finalNotes,
       photoId,
       status
     });
@@ -281,6 +440,55 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   return (
     <div className="space-y-4 pb-6">
+      {/* Banner 1-Clic cuando un cliente envía un pedido desde la Tienda 3D */}
+      {latestWebOrder && (
+        <section className="rounded-2xl border-2 border-amber-400 bg-gradient-to-r from-amber-950 via-stone-900 to-amber-950 p-3.5 text-white shadow-lg">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider text-amber-300">
+                🤠 Nuevo Pedido desde Tienda 3D Interactiva
+              </div>
+              <div className="text-base font-black text-white">
+                {latestWebOrder.customerName || 'Cliente'} {latestWebOrder.customerPhone ? `· ${latestWebOrder.customerPhone}` : ''}
+              </div>
+              <div className="text-xs font-semibold text-amber-100/90">
+                {latestWebOrder.qty}× {latestWebOrder.brandName} · Color {latestWebOrder.colorName} · Talla {latestWebOrder.size} ·{' '}
+                <span className="rounded bg-amber-400 px-1.5 py-0.5 font-black text-stone-950">
+                  {latestWebOrder.designName
+                    ? `${latestWebOrder.designName} en ${latestWebOrder.placement === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}`
+                    : 'Camisa Lisa'}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={importingWebOrder}
+                onClick={() => void importCustomerWebOrder(latestWebOrder)}
+                className="rounded-xl bg-amber-400 px-4 py-2.5 text-xs font-black text-stone-950 shadow-md transition hover:bg-amber-300 active:scale-95"
+              >
+                {importingWebOrder ? '⏳ Cargando...' : '⚡ Cargar automáticamente al Pedido'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    localStorage.setItem(LS_LAST_IMPORTED_WEB_ORDER, latestWebOrder.id);
+                  } catch {
+                    /* ignorar */
+                  }
+                  setLatestWebOrder(null);
+                }}
+                className="rounded-xl border border-white/20 px-2.5 py-2 text-xs font-bold text-stone-300 hover:bg-white/10"
+                title="Ocultar aviso"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* 1. Marca */}
       <section className="card">
         <h2 className="section-title">1 · Marca</h2>
@@ -302,7 +510,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             colorName={color?.name || ''}
             brandName={brand?.name || ''}
             designUrl={draft.photo}
-            placement={draft.placement || 'center'}
+            placement={draft.placement || 'back'}
             designScale={draft.designScale ?? 2.75}
             designOffsetX={draft.designOffsetX ?? 0}
             designOffsetY={draft.designOffsetY ?? 2}
@@ -343,18 +551,18 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               set({
                 photo: d.imageUrl,
                 rawPhoto: d.imageUrl,
-                placement: d.placement || 'center',
+                placement: 'back',
                 designScale: 2.75,
                 designOffsetX: 0,
                 designOffsetY: 2
               });
-              toast(`"${d.name}" aplicado en Tamaño A3`);
+              toast(`"${d.name}" colocado en ESPALDA (Tamaño A3)`);
             }}
             onSaveCurrentToCatalog={() => {
               if (!draft.photo) return;
               void saveCurrentToCatalog({
                 dataUrl: draft.photo,
-                placement: draft.placement || 'center'
+                placement: draft.placement || 'back'
               }).then((saved) => {
                 toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
               });
@@ -364,7 +572,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               void uploadFilesToCatalog(files, {
                 removeBg: draft.removeBg ?? false,
                 tolerance: 32,
-                placement: draft.placement || 'center'
+                placement: 'back'
               })
                 .then((n) => {
                   if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
@@ -495,11 +703,49 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </div>
 
         {draft.photo && (
-          <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-2">
-            <button className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border" onClick={() => setViewer(draft.photo)}>
-              <img src={draft.photo} alt="Diseño" className="h-full w-full object-cover" />
-            </button>
-            <span className="text-sm font-semibold text-slate-700">{draft.workType}</span>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-2.5">
+            <div className="flex items-center gap-3">
+              <button className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-amber-300 bg-white" onClick={() => setViewer(draft.photo)}>
+                <img src={draft.photo} alt="Diseño" className="h-full w-full object-contain" />
+              </button>
+              <div>
+                <div className="text-sm font-extrabold text-slate-800">{draft.workType}</div>
+                <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-black text-stone-950">
+                  📍 Ubicación: {(draft.placement || 'back') === 'back' ? 'ESPALDA (Parte de Atrás)' : 'FRENTE (Pecho Delantero)'}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => set({ placement: 'back' })}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition ${
+                  (draft.placement || 'back') === 'back'
+                    ? 'bg-slate-900 text-white'
+                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                🔄 Espalda
+              </button>
+              <button
+                type="button"
+                onClick={() => set({ placement: 'center' })}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition ${
+                  draft.placement && draft.placement !== 'back'
+                    ? 'bg-slate-900 text-white'
+                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                👕 Frente
+              </button>
+              <button
+                type="button"
+                onClick={() => set({ photo: null, rawPhoto: null })}
+                className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-extrabold text-rose-600 hover:bg-rose-100"
+              >
+                🚫 Quitar
+              </button>
+            </div>
           </div>
         )}
 
