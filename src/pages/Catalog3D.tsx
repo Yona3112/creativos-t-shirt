@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useAppState, useStock, useSyncStatus } from '../lib/store';
+import { getState, useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
@@ -37,11 +37,32 @@ export interface SharedCatalogPayload {
   designs?: SharedCatalogDesignRef[];
 }
 
-function encodeCatalog(p: SharedCatalogPayload): string {
-  const bytes = new TextEncoder().encode(JSON.stringify(p));
-  let bin = '';
-  bytes.forEach((b) => (bin += String.fromCharCode(b)));
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const LIVE_CATALOG_KEY = 'cat_live';
+
+function buildDefaultLivePayload(): SharedCatalogPayload {
+  const st = getState();
+  const brands = activeBrands(st);
+  const brand = brands[0];
+  const colors = brand ? brandColors(st, brand.id) : [];
+  return {
+    storeName: st.settings.storeName,
+    storePhone: st.settings.storePhone,
+    brandId: brand?.id,
+    brandName: brand?.name || 'Camisa',
+    colors:
+      colors.length > 0
+        ? colors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
+        : [{ name: 'Negro', hex: '#111827' }],
+    sizes: st.settings.sizes,
+    priceNormal: normalPrice(st.settings, brand),
+    priceWholesale: st.settings.priceWholesale,
+    wholesaleMin: st.settings.wholesaleMin,
+    photoId: null,
+    placement: 'center',
+    scale: 2.75,
+    offsetX: 0,
+    offsetY: 2
+  };
 }
 
 function decodeCatalog(token: string): SharedCatalogPayload | null {
@@ -58,9 +79,16 @@ function decodeCatalog(token: string): SharedCatalogPayload | null {
 }
 
 export function readSharedCatalogHash(): SharedCatalogPayload | null {
+  const h = location.hash.replace(/^#\/?/, '').trim();
+  if (!h) return null;
+  // Enlace corto de Tienda Oficial (#tienda o #catalogo)
+  if (h === 'tienda' || h === 'catalogo' || h.startsWith('c=')) {
+    return buildDefaultLivePayload();
+  }
+  // Compatibilidad con enlaces anteriores (#catalogo=eyJ...)
   const m = location.hash.match(/catalogo=([A-Za-z0-9_-]+)/);
   if (!m) return null;
-  return decodeCatalog(m[1]);
+  return decodeCatalog(m[1]) || buildDefaultLivePayload();
 }
 
 const PLACEMENTS: { id: DecalPlacement; label: string }[] = [
@@ -252,20 +280,27 @@ export default function Catalog3D() {
   };
 
   const buildShareUrl = (): string => {
-    const token = encodeCatalog(buildPayload());
-    return `${location.origin}${location.pathname}#catalogo=${token}`;
+    return `${location.origin}${location.pathname}#tienda`;
   };
 
-  const handleShareLink = async () => {
+  const syncLiveCatalogSnapshot = async () => {
+    const payload = buildPayload();
+    const rawJson = JSON.stringify(payload);
+    await savePhoto(LIVE_CATALOG_KEY, rawJson, 0);
+    await uploadPhotoNow(LIVE_CATALOG_KEY, rawJson);
     if (photoId && designUrl) {
       await uploadPhotoNow(photoId, designUrl);
     }
+  };
+
+  const handleShareLink = async () => {
+    void syncLiveCatalogSnapshot();
     const url = buildShareUrl();
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `${settings.storeName} · Catálogo 3D`,
-          text: `Mira en vivo nuestros colores y tallas disponibles en 3D (${brand?.name || ''}):`,
+          title: `${settings.storeName} · Tienda 3D`,
+          text: `Personaliza tu camisa en 3D y mira colores y tallas en vivo (${brand?.name || ''}):`,
           url
         });
         return;
@@ -274,15 +309,13 @@ export default function Catalog3D() {
       }
     }
     await copyText(url);
-    toast('Enlace del Catálogo 3D copiado');
+    toast('Enlace corto (#tienda) copiado');
   };
 
   const handleShareWhatsApp = async () => {
-    if (photoId && designUrl) {
-      await uploadPhotoNow(photoId, designUrl);
-    }
+    void syncLiveCatalogSnapshot();
     const url = buildShareUrl();
-    const text = `¡Hola! 👋 Mira en vivo nuestro *Catálogo 3D Interactivo* de *${settings.storeName}* (${brand?.name || ''}).\n\nPuedes girar la camisa en 3D, ver qué colores y tallas están disponibles en tiempo real y probar el diseño aquí:\n${url}`;
+    const text = `¡Hola! 👋 Entra a nuestra *Tienda 3D Interactiva* de *${settings.storeName}*:\n👉 ${url}\n\nAhí puedes girar la camisa en 3D, tocar los diseños disponibles, elegir color y talla en vivo y enviarnos tu pedido.`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
   };
 
@@ -481,21 +514,32 @@ export default function Catalog3D() {
         </div>
       </section>
 
-      {/* Compartir catálogo 3D */}
+      {/* Compartir catálogo 3D con Enlace Corto */}
       <section className="card space-y-3">
-        <h2 className="section-title mb-0">Compartir Catálogo 3D con el Cliente</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-title mb-0">Compartir Tienda 3D con el Cliente (Enlace Corto)</h2>
+          <code className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-sky-800">
+            {buildShareUrl()}
+          </code>
+        </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <button className="btn-primary" onClick={handleShareLink}>
-            🔗 Compartir / Copiar Enlace 3D
+            🔗 Copiar Enlace Corto (#tienda)
           </button>
           <button
             className="btn bg-[#25D366] text-white hover:bg-[#1ebe5b]"
             onClick={handleShareWhatsApp}
           >
-            💬 Enviar por WhatsApp
+            💬 Enviar Link Corto por WhatsApp
           </button>
-          <button className="btn-soft" onClick={() => setPreviewClient(buildPayload())}>
-            👁 Ver como Cliente
+          <button
+            className="btn-soft"
+            onClick={() => {
+              void syncLiveCatalogSnapshot();
+              setPreviewClient(buildPayload());
+            }}
+          >
+            🛍️ Ver Tienda del Cliente
           </button>
         </div>
       </section>
@@ -512,12 +556,12 @@ export default function Catalog3D() {
 }
 
 /**
- * Vista interactiva limpia para el cliente (#catalogo=...).
- * Conectada en tiempo real a Supabase para mostrar existencias en vivo por color y talla,
- * o "Disponible pronto" cuando una variante está en 0.
+ * TIENDA OFICIAL INTERACTIVA 3D PARA EL CLIENTE (#tienda).
+ * Diseño visual tipo Boutique / Showroom completamente distinto al panel de administración
+ * para evitar cualquier confusión y guiar al cliente paso a paso.
  */
 export function CustomerCatalogView({
-  payload,
+  payload: initialPayload,
   initialDesignUrl = null,
   onExitPreview
 }: {
@@ -528,6 +572,57 @@ export function CustomerCatalogView({
   const state = useAppState();
   const { stock } = useStock();
   const { status } = useSyncStatus();
+
+  const [cloudPayload, setCloudPayload] = useState<SharedCatalogPayload | null>(null);
+
+  // Al abrir el enlace corto #tienda, recuperar la configuración activa compartida por el administrador
+  useEffect(() => {
+    if (onExitPreview) return;
+    void fetchSharedPhoto(LIVE_CATALOG_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw) as SharedCatalogPayload;
+        if (parsed && Array.isArray(parsed.colors) && parsed.colors.length > 0) {
+          setCloudPayload(parsed);
+        }
+      } catch {
+        /* usar estado en vivo */
+      }
+    });
+  }, [onExitPreview]);
+
+  // Combinar datos en vivo de Supabase con la configuración compartida
+  const payload: SharedCatalogPayload = useMemo(() => {
+    const base = cloudPayload || initialPayload;
+    const liveBrands = activeBrands(state);
+    const matchedBrand =
+      liveBrands.find(
+        (b) =>
+          (base.brandId && b.id === base.brandId) ||
+          b.name.toLowerCase() === base.brandName.toLowerCase()
+      ) || liveBrands[0];
+
+    const liveBrandColors = matchedBrand ? brandColors(state, matchedBrand.id) : [];
+    const resolvedColors =
+      cloudPayload || onExitPreview
+        ? base.colors
+        : liveBrandColors.length > 0
+        ? liveBrandColors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
+        : base.colors;
+
+    return {
+      ...base,
+      storeName: state.settings.storeName || base.storeName,
+      storePhone: state.settings.storePhone || base.storePhone,
+      brandId: matchedBrand?.id || base.brandId,
+      brandName: matchedBrand?.name || base.brandName,
+      colors: resolvedColors.length > 0 ? resolvedColors : base.colors,
+      sizes: state.settings.sizes.length > 0 ? state.settings.sizes : base.sizes,
+      priceNormal: matchedBrand ? normalPrice(state.settings, matchedBrand) : base.priceNormal,
+      priceWholesale: state.settings.priceWholesale || base.priceWholesale,
+      wholesaleMin: state.settings.wholesaleMin || base.wholesaleMin
+    };
+  }, [cloudPayload, initialPayload, onExitPreview, state]);
 
   const [selectedColor, setSelectedColor] = useState<SharedCatalogColor>(payload.colors[0]);
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
@@ -543,6 +638,12 @@ export function CustomerCatalogView({
   const { clientDesigns } = useCatalogDesigns(payload.designs);
 
   useEffect(() => {
+    if (!payload.colors.some((c) => c.name === selectedColor?.name)) {
+      setSelectedColor(payload.colors[0]);
+    }
+  }, [payload.colors, selectedColor]);
+
+  useEffect(() => {
     if (!designUrl && payload.photoId) {
       void fetchSharedPhoto(payload.photoId).then((d) => {
         if (d) {
@@ -552,7 +653,20 @@ export function CustomerCatalogView({
     }
   }, [payload.photoId, designUrl]);
 
-  // Resolver la marca y colores en el estado sincronizado en vivo
+  // Si no hay diseño inicial pero hay diseños disponibles para el cliente, pre-cargar el primero automáticamente
+  useEffect(() => {
+    if (!designUrl && !payload.photoId && clientDesigns.length > 0 && clientDesigns[0].imageUrl) {
+      const first = clientDesigns[0];
+      setDesignUrl(first.imageUrl);
+      setActiveCatalogDesignId(first.id);
+      setSelectedDesignName(first.name);
+      setPlacement(first.placement || 'center');
+      setScale(2.75);
+      setOffsetX(0);
+      setOffsetY(2);
+    }
+  }, [clientDesigns, designUrl, payload.photoId]);
+
   const liveBrand = useMemo(
     () =>
       state.brands.find(
@@ -585,7 +699,6 @@ export function CustomerCatalogView({
     return payload.sizes.reduce((sum, sz) => sum + getSizeStock(c, sz), 0);
   };
 
-  // Si el color seleccionado cambia y la talla actual está en 0 pero otra talla sí tiene stock, sugerir la primera con stock
   const handleSelectColor = (c: SharedCatalogColor) => {
     setSelectedColor(c);
     if (getSizeStock(c, size) === 0) {
@@ -609,39 +722,83 @@ export function CustomerCatalogView({
   const designNote = selectedDesignName
     ? `\n• Diseño elegido: ${selectedDesignName} (${scale >= 2.4 ? 'Tamaño A3' : `${Math.round(scale * 100)}%`})`
     : '';
-  const orderText = `¡Hola ${payload.storeName}! 👋 Vi el Catálogo 3D en vivo y quiero pedir:\n\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designNote}\n• Ubicación del diseño: ${placementLabel}\n• Total estimado: ${money(total)}`;
+  const orderText = `¡Hola ${payload.storeName}! 👋 Vi la Tienda 3D en vivo y quiero pedir:\n\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designNote}\n• Ubicación del diseño: ${placementLabel}\n• Total estimado: ${money(total)}`;
+
+  const waHref = payload.storePhone
+    ? whatsappUrl(payload.storePhone, orderText)
+    : `https://wa.me/?text=${encodeURIComponent(orderText)}`;
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-10">
-      <header className="safe-top sticky top-0 z-40 bg-slate-900 text-white shadow-md">
-        <div className="mx-auto flex h-16 max-w-2xl items-center justify-between px-4">
+    <div className="min-h-screen bg-slate-950 pb-28 text-slate-100">
+      {/* AVISO CLARO CUANDO EL ADMINISTRADOR ESTÁ PREVISUALIZANDO LA TIENDA DEL CLIENTE */}
+      {onExitPreview && (
+        <div className="sticky top-0 z-50 bg-amber-400 px-3 py-2 text-slate-950 shadow-md">
+          <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-extrabold">
+              <span className="rounded-md bg-slate-950 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
+                Modo Prueba
+              </span>
+              <span>Así ven tus clientes la Tienda Interactiva (#tienda)</span>
+            </div>
+            <button
+              type="button"
+              onClick={onExitPreview}
+              className="rounded-xl bg-slate-950 px-3 py-1.5 text-xs font-extrabold text-white shadow hover:bg-slate-800"
+            >
+              ← Volver al Panel Admin
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* CABECERA BOUTIQUE EXCLUSIVA DE LA TIENDA DEL CLIENTE */}
+      <header className="border-b border-white/10 bg-gradient-to-r from-indigo-950 via-slate-900 to-emerald-950 px-4 py-4 shadow-lg">
+        <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-base font-extrabold">{payload.storeName}</span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-xs font-semibold text-emerald-300">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-amber-300 ring-1 ring-amber-400/40">
+                🛍️ Tienda Oficial 3D
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300 ring-1 ring-emerald-400/30">
                 <span
                   className={`h-2 w-2 rounded-full ${
                     status === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-sky-400'
                   }`}
                 />
-                Stock en vivo
+                Existencias en Vivo
               </span>
             </div>
-            <div className="text-xs text-sky-200">Catálogo 3D Interactivo · {payload.brandName}</div>
+            <h1 className="mt-1 text-xl font-extrabold tracking-tight text-white">
+              {payload.storeName}
+            </h1>
+            <p className="text-xs font-medium text-slate-300">
+              Personalizador Interactivo · Camisas {payload.brandName}
+            </p>
           </div>
-          {onExitPreview && (
-            <button
-              className="btn min-h-[40px] bg-white px-3 text-sm text-slate-900"
-              onClick={onExitPreview}
-            >
-              ← Volver a Tienda
-            </button>
-          )}
+
+          <div className="flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-right backdrop-blur-sm">
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Unidad
+              </div>
+              <div className="text-sm font-extrabold text-white">{money(payload.priceNormal)}</div>
+            </div>
+            <div className="h-7 w-px bg-white/15" />
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                Mayorista ({payload.wholesaleMin}+)
+              </div>
+              <div className="text-sm font-extrabold text-amber-300">
+                {money(payload.priceWholesale)}
+              </div>
+            </div>
+          </div>
         </div>
       </header>
 
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
-        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-b from-slate-100 via-white to-slate-100 p-4 shadow-sm">
+        {/* ESCAPARATE 3D INTERACTIVO DEL CLIENTE */}
+        <section className="rounded-3xl border border-white/10 bg-slate-900/90 p-3 shadow-xl">
           <InteractiveShirt3D
             hex={selectedColor?.hex || '#111827'}
             colorName={selectedColor?.name || ''}
@@ -658,7 +815,7 @@ export function CustomerCatalogView({
                 name: c.name,
                 hex: c.hex,
                 available: totalC > 0,
-                stockText: totalC > 0 ? '● Disp.' : '⏳ Pronto'
+                stockText: totalC > 0 ? '● Disponible' : '⏳ Pronto'
               };
             })}
             activeColorId={selectedColor?.name}
@@ -689,13 +846,20 @@ export function CustomerCatalogView({
           />
         </section>
 
-        {/* Tallas en vivo con etiqueta "Disponible pronto" si está en 0 */}
-        <section className="card space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="section-title mb-0">1 · Elige tu Talla ({selectedColor?.name})</h2>
-            <span className="text-xs font-semibold text-slate-500">Stock en tiempo real</span>
+        {/* PASO 3: SELECCIÓN DE TALLA ESTILO TIENDA ONLINE */}
+        <section className="rounded-3xl border border-white/10 bg-slate-900/90 p-4 shadow-xl">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
+                📏 Paso 3
+              </span>
+              <h2 className="text-sm font-extrabold text-white">
+                Elige tu Talla ({selectedColor?.name})
+              </h2>
+            </div>
+            <span className="text-xs font-semibold text-emerald-300">● Inventario en tiempo real</span>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {payload.sizes.map((sz) => {
               const st = getSizeStock(selectedColor, sz);
               const isSel = sz === size;
@@ -704,26 +868,30 @@ export function CustomerCatalogView({
                   key={sz}
                   type="button"
                   onClick={() => setSize(sz)}
-                  className={`flex min-h-[60px] flex-col items-center justify-center rounded-xl border-2 px-3 py-2 transition ${
+                  className={`flex min-h-[62px] flex-col items-center justify-center rounded-2xl border-2 px-2 py-2 transition ${
                     isSel
-                      ? 'border-slate-900 bg-slate-900 text-white shadow'
+                      ? 'scale-[1.03] border-amber-400 bg-amber-400 text-slate-950 shadow-lg'
                       : st > 0
-                      ? 'border-emerald-200 bg-white text-slate-900 hover:border-emerald-400'
-                      : 'border-slate-200 bg-slate-50 text-slate-500'
+                      ? 'border-white/15 bg-slate-800/90 text-white hover:border-amber-300/60'
+                      : 'border-white/5 bg-slate-900/60 text-slate-400'
                   }`}
                 >
                   <span className="text-base font-extrabold">{sz}</span>
                   {st > 0 ? (
                     <span
-                      className={`text-xs font-bold ${
-                        isSel ? 'text-emerald-300' : st <= 5 ? 'text-amber-600' : 'text-emerald-600'
+                      className={`text-[10px] font-extrabold ${
+                        isSel ? 'text-slate-900' : st <= 5 ? 'text-amber-300' : 'text-emerald-300'
                       }`}
                     >
-                      {st <= 5 ? `¡Últimas ${st} disp.!` : `Disponible (${st})`}
+                      {st <= 5 ? `¡Últimas ${st}!` : `Disponible`}
                     </span>
                   ) : (
-                    <span className={`text-xs font-bold ${isSel ? 'text-amber-300' : 'text-amber-600'}`}>
-                      Disponible pronto
+                    <span
+                      className={`text-[10px] font-bold ${
+                        isSel ? 'text-slate-800' : 'text-amber-400/90'
+                      }`}
+                    >
+                      Pronto
                     </span>
                   )}
                 </button>
@@ -732,41 +900,55 @@ export function CustomerCatalogView({
           </div>
         </section>
 
-        {/* Cantidad y botón de pedido por WhatsApp */}
-        <section className="card space-y-3">
+        {/* PASO 4: CANTIDAD Y RESUMEN */}
+        <section className="rounded-3xl border border-white/10 bg-slate-900/90 p-4 shadow-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <label className="label">Cantidad</label>
-              <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
+              <div className="mb-1 text-xs font-extrabold uppercase tracking-wider text-amber-300">
+                🛒 Paso 4 · Cantidad de Camisas
+              </div>
+              <div className="rounded-2xl bg-white p-1 text-slate-900">
+                <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
+              </div>
             </div>
             <div className="text-right">
-              <div className="text-xs font-semibold text-slate-500">
-                {qty >= payload.wholesaleMin ? 'Precio Mayorista' : 'Precio Unitario'}: {money(unitPrice)} c/u
+              <div className="text-xs font-bold text-slate-300">
+                {qty >= payload.wholesaleMin ? '✨ Precio Mayorista Aplicado' : 'Precio Unitario'}:{' '}
+                <strong className="text-white">{money(unitPrice)} c/u</strong>
               </div>
-              <div className="text-2xl font-extrabold text-slate-900">{money(total)}</div>
+              <div className="text-2xl font-extrabold text-amber-300">{money(total)}</div>
             </div>
           </div>
 
           {selectedSizeStock === 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-              ⏳ La talla <strong>{size}</strong> en color <strong>{selectedColor?.name}</strong> está marcada como{' '}
+            <div className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
+              ⏳ La talla <strong>{size}</strong> en color <strong>{selectedColor?.name}</strong> está como{' '}
               <strong>Disponible pronto</strong>. Puedes apartarla o encargarla bajo pedido por WhatsApp.
             </div>
           )}
+        </section>
+      </div>
 
+      {/* BARRA INFERIOR FIJA DE COMPRA (ESTILO TIENDA ONLINE) */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/15 bg-slate-900/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-xs font-bold text-slate-300">
+              {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'camisa' : 'camisas'}
+              {selectedDesignName ? ` · ${selectedDesignName}` : ''}
+            </div>
+            <div className="text-lg font-extrabold text-amber-300">{money(total)}</div>
+          </div>
           <a
-            className="btn w-full bg-[#25D366] text-lg text-white hover:bg-[#1ebe5b]"
-            href={
-              payload.storePhone
-                ? whatsappUrl(payload.storePhone, orderText)
-                : `https://wa.me/?text=${encodeURIComponent(orderText)}`
-            }
+            className="inline-flex min-h-[48px] shrink-0 items-center justify-center gap-2 rounded-2xl bg-[#25D366] px-5 py-2.5 text-sm font-extrabold text-white shadow-lg transition hover:bg-[#1ebe5b] active:scale-95"
+            href={waHref}
             target="_blank"
             rel="noreferrer"
           >
-            💬 {selectedSizeStock > 0 ? 'Pedir Ahora por WhatsApp' : 'Encargar (Disponible pronto) por WhatsApp'}
+            <span>💬</span>
+            <span>{selectedSizeStock > 0 ? 'Pedir por WhatsApp' : 'Encargar por WhatsApp'}</span>
           </a>
-        </section>
+        </div>
       </div>
     </div>
   );

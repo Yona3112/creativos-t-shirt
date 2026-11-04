@@ -562,6 +562,283 @@ export function InteractiveShirt3D({
     setZoom((z) => clamp(Math.round((z + delta) * 100) / 100, 0.85, 2.35));
   };
 
+  if (!isStoreOwner) {
+    return (
+      <div className="relative select-none space-y-3">
+        {/* BARRA SUPERIOR TIPO BOUTIQUE (Cámara 3D + Zoom + Giro) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-900/95 px-3 py-2 text-white shadow-md backdrop-blur-md">
+          <div className="flex items-center gap-1">
+            {(
+              [
+                [0, '👕 Frente'],
+                [38, '📐 Perfil'],
+                [180, '🔄 Espalda']
+              ] as const
+            ).map(([angle, lbl]) => (
+              <button
+                key={lbl}
+                type="button"
+                onClick={() => setTargetAngleY(angle)}
+                className={`rounded-xl px-2.5 py-1.5 text-xs font-extrabold transition ${
+                  targetAngleY === angle
+                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                    : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.75))}
+              className={`rounded-xl px-2.5 py-1.5 text-xs font-extrabold transition ${
+                zoom > 1.35
+                  ? 'bg-sky-400 text-slate-950'
+                  : 'bg-white/10 text-slate-200 hover:bg-white/20'
+              }`}
+            >
+              {zoom > 1.35 ? '🔭 Alejar' : '🔍 Acercar Diseño'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode((m) => (m === 'orbit' ? 'wind' : 'orbit'))}
+              className={`rounded-xl px-2.5 py-1.5 text-xs font-extrabold transition ${
+                mode === 'orbit'
+                  ? 'bg-emerald-400 text-slate-950'
+                  : 'bg-white/10 text-slate-200 hover:bg-white/20'
+              }`}
+            >
+              {mode === 'orbit' ? '🔄 Girando 360°' : '🌬️ Giro 360°'}
+            </button>
+          </div>
+        </div>
+
+        {/* ESCENARIO SHOWROOM DEL CLIENTE */}
+        <div className="relative overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 p-4 text-white shadow-inner">
+          {stockBadge && (
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-extrabold text-amber-300 backdrop-blur-sm">
+                ✨ Probador Virtual 3D
+              </span>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold shadow-sm ${
+                  stockBadge.available
+                    ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-400/50'
+                    : 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/50'
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    stockBadge.available ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                  }`}
+                />
+                {stockBadge.text}
+              </span>
+            </div>
+          )}
+
+          <div
+            className="relative mx-auto flex w-full max-w-[360px] items-center justify-center"
+            style={{ aspectRatio: '1 / 1' }}
+          >
+            <div
+              className="studio-aura-pulse pointer-events-none absolute inset-6 rounded-full blur-2xl transition-colors duration-700"
+              style={{
+                background: `radial-gradient(circle, ${hex}88 0%, #38bdf833 55%, transparent 75%)`
+              }}
+            />
+            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/50 blur-md" />
+
+            <WebGLShirtCanvas
+              hex={hex}
+              designUrl={designUrl || null}
+              placement={placement}
+              designScale={designScale}
+              designOffsetX={designOffsetX}
+              designOffsetY={designOffsetY}
+              zoom={zoom}
+              onZoomChange={(nextZ) => setZoom(nextZ)}
+              autoMotion={autoMotion && zoom <= 1.25}
+              mode={mode}
+              targetAngleY={targetAngleY}
+              touchAction="rotate"
+            />
+          </div>
+
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-center text-xs font-medium text-slate-300">
+            <span>🖐 Desliza la camisa para girarla en 360°</span>
+            <span>·</span>
+            <span className="font-extrabold text-white">
+              {brandName} · Color {colorName}
+            </span>
+          </div>
+
+          {/* SLIDE DE COLORES ESTILO BOUTIQUE DENTRO DEL ESCAPARATE */}
+          {colorOptions && colorOptions.length > 0 && onSelectColor && (
+            <div className="mt-3 rounded-2xl border border-white/15 bg-white/10 p-2.5 backdrop-blur-md">
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-amber-300">
+                <span>🎨 1. Toca para cambiar el color de camisa</span>
+                <span className="text-white">{colorName}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {colorOptions.length > 3 && (
+                  <button
+                    type="button"
+                    onClick={() => slideColors(-1)}
+                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-lg bg-white/15 text-sm font-extrabold text-white hover:bg-white/25"
+                    aria-label="Anterior color"
+                  >
+                    ‹
+                  </button>
+                )}
+                <div
+                  ref={colorSlideRef}
+                  className="flex flex-1 snap-x snap-mandatory items-center gap-2 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
+                  {colorOptions.map((c) => {
+                    const active = activeColorId ? c.id === activeColorId : c.name === colorName;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => onSelectColor(c.id)}
+                        className={`flex shrink-0 snap-start items-center gap-2 rounded-full border px-3 py-1.5 text-left text-xs font-extrabold transition ${
+                          active
+                            ? 'scale-105 border-amber-400 bg-white text-slate-950 shadow-lg ring-2 ring-amber-400/60'
+                            : 'border-white/20 bg-slate-900/70 text-white hover:bg-slate-900'
+                        }`}
+                      >
+                        <span
+                          className="relative h-5 w-5 shrink-0 rounded-full border border-black/25 shadow-inner"
+                          style={{ backgroundColor: c.hex }}
+                        />
+                        <div className="leading-none">
+                          <div>{c.name}</div>
+                          {c.stockText && (
+                            <div
+                              className={`mt-0.5 text-[10px] font-bold ${
+                                active
+                                  ? c.available
+                                    ? 'text-emerald-700'
+                                    : 'text-amber-700'
+                                  : c.available
+                                  ? 'text-emerald-300'
+                                  : 'text-amber-300'
+                              }`}
+                            >
+                              {c.stockText}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {colorOptions.length > 3 && (
+                  <button
+                    type="button"
+                    onClick={() => slideColors(1)}
+                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-lg bg-white/15 text-sm font-extrabold text-white hover:bg-white/25"
+                    aria-label="Siguiente color"
+                  >
+                    ›
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* GALERÍA DE DISEÑOS DISPONIBLES PARA EL CLIENTE (1 CLIC = PROBAR EN 3D) */}
+        {catalogDesigns && catalogDesigns.length > 0 && (
+          <div className="rounded-3xl border-2 border-indigo-950/15 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 p-3.5 text-white shadow-md">
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
+                  ✨ Paso 2
+                </span>
+                <span className="text-sm font-extrabold text-white">
+                  Toca un Diseño para Probarlo en tu Camisa
+                </span>
+              </div>
+              {catalogDesigns.length >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => setShowcaseActive((v) => !v)}
+                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-extrabold transition active:scale-95 ${
+                    showcaseActive
+                      ? 'bg-amber-400 text-slate-950 shadow ring-2 ring-amber-200'
+                      : 'bg-white/15 text-white hover:bg-white/25'
+                  }`}
+                >
+                  <span>{showcaseActive ? '⏸ Pausar Desfile' : '🎬 Ver Desfile Automático'}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 pt-1 sm:flex-wrap sm:overflow-visible">
+              {catalogDesigns.map((d, idx) => {
+                const isSelected =
+                  (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
+                  (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    style={{ animationDelay: `${(idx % 6) * 160}ms` }}
+                    onClick={() => {
+                      setShowcaseActive(false);
+                      onSelectCatalogDesign?.(d);
+                    }}
+                    disabled={!d.imageUrl}
+                    className={`catalog-card-motion group relative flex w-[122px] shrink-0 snap-start flex-col rounded-2xl border-2 p-2 text-left transition ${
+                      isSelected
+                        ? 'border-amber-400 bg-white/15 shadow-lg ring-2 ring-amber-400/60'
+                        : 'border-white/15 bg-white/5 hover:border-amber-300/70 hover:bg-white/10'
+                    }`}
+                  >
+                    <div
+                      className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-white/15 p-1.5 shadow-inner transition duration-300 group-hover:scale-[1.03]"
+                      style={{ backgroundColor: hex }}
+                    >
+                      {d.imageUrl ? (
+                        <img
+                          src={d.imageUrl}
+                          alt={d.name}
+                          className="h-full w-full object-contain drop-shadow-md transition-transform duration-300 group-hover:scale-110"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span className="text-[10px] font-bold text-slate-300">Cargando...</span>
+                      )}
+                      <span className="absolute bottom-1 left-1 rounded-md bg-black/75 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-300">
+                        {d.placement === 'back' ? 'Espalda A3' : 'Frente A3'}
+                      </span>
+                      {isSelected && (
+                        <span className="absolute left-1 top-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-extrabold text-slate-950 shadow">
+                          ✓ Puesto
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1.5 w-full truncate text-center text-xs font-extrabold text-white">
+                      {d.name}
+                    </div>
+                    <div className="mt-0.5 w-full text-center text-[10px] font-bold text-amber-300">
+                      {isSelected ? 'Estampado activo' : 'Tocar para probar'}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="relative select-none">
       {onUploadFile && (
