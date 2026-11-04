@@ -30,6 +30,15 @@ export interface FirebaseConfig {
 
 const LS_FB_CFG = 'cgs_firebase';
 
+export const DEFAULT_FIREBASE_CONFIG: FirebaseConfig = {
+  apiKey: "AIzaSyDvEMiRNipixAZboMKxUYkKu_lGq9nzkcM",
+  authDomain: "creativos-t-shirt.firebaseapp.com",
+  projectId: "creativos-t-shirt",
+  storageBucket: "creativos-t-shirt.firebasestorage.app",
+  messagingSenderId: "1065069374241",
+  appId: "1:1065069374241:web:cc9d56b971738ba316ac60"
+};
+
 export function getFirebaseConfig(): FirebaseConfig | null {
   try {
     const raw = localStorage.getItem(LS_FB_CFG);
@@ -53,7 +62,8 @@ export function getFirebaseConfig(): FirebaseConfig | null {
       appId: (import.meta.env.VITE_FIREBASE_APP_ID as string) || ''
     };
   }
-  return null;
+  // Default preconfigurado del proyecto del usuario
+  return DEFAULT_FIREBASE_CONFIG;
 }
 
 export function saveFirebaseConfig(cfg: FirebaseConfig | null): void {
