@@ -4,7 +4,7 @@ import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, isWholesale, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
-import { compressImage, applyBackgroundRemoval } from '../lib/image';
+import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { addressOneLine, createOrder, quickCustomer, updateBrand, updateSettings } from '../lib/actions';
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
@@ -161,12 +161,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     setDraft((d) => ({ ...d, lines: d.lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
   const removeLine = (id: string) => setDraft((d) => ({ ...d, lines: d.lines.filter((l) => l.id !== id) }));
 
+  const [procMsg, setProcMsg] = useState<string | null>(null);
+
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
     try {
       const shouldRemoveBg = draft.removeBg ?? true;
-      const raw = await compressImage(f, 560, 0.82, false);
-      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 42) : raw;
+      const raw = await compressImage(f, 1400, 0.92, false);
+      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 34) : raw;
       set({
         rawPhoto: raw,
         photo: processed,
@@ -174,7 +176,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       });
       toast(
         shouldRemoveBg
-          ? 'Diseño agregado sin fondo · Arrastra o usa +/− para ajustarlo en 3D'
+          ? 'Diseño sin fondo agregado (colores internos protegidos)'
           : 'Diseño agregado a la camisa 3D'
       );
     } catch (e) {
@@ -190,10 +192,39 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       return;
     }
     try {
-      const updated = nextRemove ? await applyBackgroundRemoval(base, true, 42) : base;
+      const updated = nextRemove ? await applyBackgroundRemoval(base, true, 34) : base;
       set({ removeBg: nextRemove, photo: updated });
     } catch {
       set({ removeBg: nextRemove });
+    }
+  };
+
+  const handleAiBgNewOrder = async () => {
+    const base = draft.rawPhoto || draft.photo;
+    if (!base) return;
+    try {
+      setProcMsg('Procesando recorte IA profesional...');
+      const res = await removeBackgroundWithAI(base, (m) => setProcMsg(m));
+      set({ photo: res, removeBg: true });
+      toast('Fondo eliminado con IA preservando todos los colores');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setProcMsg(null);
+    }
+  };
+
+  const handleUpscale4KNewOrder = async () => {
+    if (!draft.photo) return;
+    try {
+      setProcMsg('Escalando diseño a 4K Ultra HD...');
+      const { dataUrl, width, height } = await upscaleImageTo4K(draft.photo, 2560);
+      set({ photo: dataUrl });
+      toast(`Diseño escalado a 4K Ultra HD (${width}×${height} px)`);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setProcMsg(null);
     }
   };
 
@@ -375,11 +406,37 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             checked={draft.removeBg ?? true}
             onChange={(e) => void toggleRemoveBg(e.target.checked)}
           />
-          <span>🪄 Quitar fondo (JPG/PNG) y dejarlo igual al color de la camisa</span>
+          <span>🪄 Quitar fondo exterior (protege colores y letras internas del diseño)</span>
         </label>
+
+        {procMsg && (
+          <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-900">
+            <span className="h-2.5 w-2.5 animate-ping rounded-full bg-sky-600" />
+            <span>{procMsg}</span>
+          </div>
+        )}
 
         {draft.photo && (
           <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                className="btn-soft min-h-[42px] text-xs font-extrabold"
+                onClick={() => void handleAiBgNewOrder()}
+                disabled={!!procMsg}
+              >
+                🤖 Quitar Fondo con IA Pro
+              </button>
+              <button
+                type="button"
+                className="btn-soft min-h-[42px] text-xs font-extrabold"
+                onClick={() => void handleUpscale4KNewOrder()}
+                disabled={!!procMsg}
+              >
+                ✨ Escalar Diseño a 4K Ultra HD
+              </button>
+            </div>
+
             <div>
               <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                 Ubicación en la camisa 3D
@@ -398,15 +455,35 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               </div>
             </div>
 
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-600">Tamaño rápido:</span>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  className="rounded-xl bg-white px-2.5 py-1 text-xs font-extrabold text-slate-800 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => set({ designScale: 1, designOffsetX: 0, designOffsetY: 0 })}
+                >
+                  📄 Estándar A4 (100%)
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-sky-600 px-3 py-1 text-xs font-extrabold text-white shadow-sm"
+                  onClick={() => set({ designScale: 2.75, designOffsetX: 0, designOffsetY: 2 })}
+                >
+                  📐 Tamaño A3 Completo (Máx)
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div>
                 <label className="label">
-                  Tamaño ({Math.round((draft.designScale ?? 1) * 100)}%)
+                  Tamaño ({(draft.designScale ?? 1) >= 2.5 ? `A3 · ${Math.round((draft.designScale ?? 1) * 100)}%` : `${Math.round((draft.designScale ?? 1) * 100)}%`})
                 </label>
                 <input
                   type="range"
-                  min="0.35"
-                  max="1.85"
+                  min="0.30"
+                  max="3.00"
                   step="0.05"
                   className="w-full accent-slate-900"
                   value={draft.designScale ?? 1}
@@ -417,8 +494,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 <label className="label">Mover Izq. / Der.</label>
                 <input
                   type="range"
-                  min="-22"
-                  max="22"
+                  min="-24"
+                  max="24"
                   step="1"
                   className="w-full accent-slate-900"
                   value={draft.designOffsetX ?? 0}
@@ -429,8 +506,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 <label className="label">Mover Arriba / Abajo</label>
                 <input
                   type="range"
-                  min="-22"
-                  max="24"
+                  min="-24"
+                  max="26"
                   step="1"
                   className="w-full accent-slate-900"
                   value={draft.designOffsetY ?? 0}

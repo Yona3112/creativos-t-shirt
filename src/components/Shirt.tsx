@@ -203,11 +203,15 @@ void main() {
   }
 
   // 1. Oclusión Ambiental (AO) real horneada del modelo 3D escaneado (pliegues y costuras reales)
+  // Normalizamos la cara trasera (v_objPos.z < 0.0) para que la espalda se vea igual de iluminada que el frente
   float bakedAO = 1.0;
   if (u_hasAoMap == 1) {
     vec3 aoSample = texture2D(u_aoMap, v_uv).rgb;
     float rawAO = (aoSample.r + aoSample.g + aoSample.b) / 3.0;
-    bakedAO = mix(1.0, rawAO, 0.85);
+    if (v_objPos.z < 0.0) {
+      rawAO = clamp(rawAO * 1.48 + 0.24, 0.0, 1.0);
+    }
+    bakedAO = mix(1.0, rawAO, 0.78);
   }
 
   // 2. Micro-relieve real de tejido de algodón (Normal Map 8x8 de shirt_baked.glb)
@@ -219,66 +223,62 @@ void main() {
     fabricGrain = (nSample.x + nSample.y) * 0.015;
   }
 
-  vec3 base = clamp(u_baseColor + vec3(fabricGrain), 0.0, 1.0);
+  vec3 fabricBase = clamp(u_baseColor + vec3(fabricGrain), 0.0, 1.0);
+  vec3 decalColor = fabricBase;
   float decalMask = 0.0;
 
-  // 3. Proyección 3D del diseño / logo sobre el pecho o la espalda (respeta los pliegues 3D)
+  // 3. Proyección 3D del diseño / logo sobre el pecho o la espalda (soporta hasta tamaño A3 completo)
   if (u_hasDecal == 1 && !interior) {
     bool isBackTarget = (u_decalOnBack == 1);
     float sideZ = isBackTarget ? -v_objPos.z : v_objPos.z;
     float sideNz = isBackTarget ? -v_objNorm.z : v_objNorm.z;
 
-    // Solo proyectar en la cara frontal o trasera del torso (sin filtrarse a mangas ni espalda opuesta)
-    if (sideZ > 0.01 && sideNz > 0.12 && abs(v_objPos.x) < 0.44) {
+    // Solo proyectar en la cara frontal o trasera del torso (permitiendo ancho completo A3)
+    if (sideZ > -0.02 && sideNz > 0.04 && abs(v_objPos.x) < 0.49) {
       float sideX = isBackTarget ? -v_objPos.x : v_objPos.x;
       float du = (sideX - u_decalRect.x) / u_decalRect.z + 0.5;
       float dv = (u_decalRect.y - v_objPos.y) / u_decalRect.w + 0.5;
 
       if (du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0) {
         vec4 tex = texture2D(u_decalTex, vec2(du, dv));
-        float angleFade = smoothstep(0.12, 0.30, sideNz);
+        float angleFade = smoothstep(0.04, 0.22, sideNz);
         float alpha = tex.a * angleFade;
-        // Donde el fondo fue eliminado (alpha == 0), queda exactamente el color y textura de la camisa
-        base = mix(base, tex.rgb, alpha);
+        decalColor = tex.rgb;
         decalMask = alpha;
       }
     }
   }
 
-  // 4. Iluminación de Estudio Fotográfico de 3 Puntos + Sheen de Algodón Peinado
+  // 4. Iluminación de Estudio Fotográfico Simétrica (Frente y Espalda con el mismo brillo limpio)
   vec3 V = normalize(-v_viewPos);
-  vec3 L_key = normalize(vec3(0.42, 0.68, 0.72));
-  vec3 L_fill = normalize(vec3(-0.62, 0.25, 0.58));
-  vec3 L_top = normalize(vec3(0.0, 0.92, 0.25));
+  vec3 L_key = normalize(vec3(0.38, 0.62, 0.78));
+  vec3 L_fill = normalize(vec3(-0.55, 0.30, 0.65));
+  vec3 L_top = normalize(vec3(0.0, 0.90, 0.35));
 
-  // Half-Lambert suave para evitar sombras duras o aspecto plástico
   float ndlKey = max(dot(N, L_key), 0.0);
-  float wrapKey = ndlKey * 0.68 + 0.32;
+  float wrapKey = ndlKey * 0.62 + 0.38;
   float ndlFill = max(dot(N, L_fill), 0.0);
   float ndlTop = max(dot(N, L_top), 0.0);
 
-  // Sheen aterciopelado de fibra de algodón en los bordes curvos (Fresnel suave)
+  // Sheen aterciopelado de fibra de algodón en los bordes curvos
   float ndv = max(dot(N, V), 0.0);
-  float cottonSheen = pow(1.0 - ndv, 3.2) * 0.14 * (1.0 - decalMask * 0.5);
+  float cottonSheen = pow(1.0 - ndv, 3.0) * 0.14;
 
-  // Ligero brillo satinado sobre la tinta del diseño (estilo impresión DTF real)
-  vec3 H = normalize(L_key + V);
-  float inkSpec = pow(max(dot(N, H), 0.0), 28.0) * 0.08 * decalMask;
-
-  float lighting = 0.34 + 0.54 * wrapKey + 0.18 * ndlFill + 0.09 * ndlTop;
-
-  // En el diseño impreso aplicamos también la oclusión de los pliegues para que no se vea plano
-  float effectiveAO = mix(bakedAO, mix(1.0, bakedAO, 0.72), decalMask);
-  lighting *= effectiveAO;
-
+  // Iluminación de la tela de algodón
+  float fabricLight = (0.40 + 0.50 * wrapKey + 0.18 * ndlFill + 0.08 * ndlTop) * bakedAO;
   if (interior) {
-    // El interior del cuello/mangas se ve más oscuro por sombra natural de cavidad
-    lighting *= 0.52;
+    fabricLight *= 0.55;
   }
+  vec3 litFabric = fabricBase * fabricLight + vec3(cottonSheen);
 
-  vec3 finalColor = base * lighting + vec3(cottonSheen + inkSpec);
+  // Iluminación de la tinta del diseño (DTF / Serigrafía): mantiene 100% vivos los colores en Frente y Espalda
+  vec3 H = normalize(L_key + V);
+  float inkSpec = pow(max(dot(N, H), 0.0), 28.0) * 0.05;
+  float inkLight = clamp(0.92 + 0.14 * wrapKey, 0.90, 1.04) * mix(1.0, bakedAO, 0.16);
+  vec3 litInk = (decalColor + vec3(fabricGrain * 0.4)) * inkLight + vec3(inkSpec);
 
-  // Corrección tonal suave para mantener colores fieles
+  vec3 finalColor = mix(litFabric, litInk, decalMask);
+
   gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
 }
 `;
@@ -349,10 +349,10 @@ function computeDecalRect3D(
   offsetY: number,
   aspect: number
 ): [number, number, number, number] {
-  const s = clamp(scale, 0.35, 1.85);
+  const s = clamp(scale, 0.30, 3.00);
   let baseX = 0.0;
-  let baseY = 0.14;
-  let widthX = 0.38 * s;
+  let baseY = 0.12;
+  let widthX = 0.35 * s;
 
   if (placement === 'pocket') {
     baseX = 0.165;
@@ -360,17 +360,17 @@ function computeDecalRect3D(
     widthX = 0.165 * s;
   } else if (placement === 'full') {
     baseX = 0.0;
-    baseY = 0.07;
-    widthX = 0.50 * s;
+    baseY = 0.05;
+    widthX = 0.44 * s;
   } else if (placement === 'back') {
     baseX = 0.0;
-    baseY = 0.14;
-    widthX = 0.40 * s;
+    baseY = 0.09;
+    widthX = 0.36 * s;
   }
 
   const heightY = widthX / Math.max(0.25, aspect);
-  const centerX = clamp(baseX + offsetX * 0.011, -0.28, 0.28);
-  const centerY = clamp(baseY - offsetY * 0.014, -0.45, 0.36);
+  const centerX = clamp(baseX + offsetX * 0.012, -0.34, 0.34);
+  const centerY = clamp(baseY - offsetY * 0.015, -0.52, 0.40);
   return [centerX, centerY, widthX, heightY];
 }
 
@@ -462,7 +462,7 @@ export function InteractiveShirt3D({
   }, [placement]);
 
   const adjustScale = (delta: number) => {
-    const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.35, 1.85);
+    const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.30, 3.00);
     onDesignChange?.({ scale: next });
   };
 
@@ -492,8 +492,8 @@ export function InteractiveShirt3D({
         </div>
       )}
 
-      {/* Disposición de Estudio: Panel Izquierdo (Cámara/Zoom) + Camisa 3D Central + Panel Derecho (Diseño) */}
-      <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[156px_1fr_168px]">
+      {/* Disposición de Estudio: Panel Izquierdo (Cámara/Zoom) + Camisa 3D Central (1:1 sin estirar) + Panel Derecho (Diseño/A3) */}
+      <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[146px_1fr_164px]">
         {/* PANEL LATERAL IZQUIERDO: Ángulo 3D, Zoom de Camisa y Movimiento */}
         <div className="order-2 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:order-1 md:flex-col md:items-stretch">
           <div className="w-full">
@@ -591,9 +591,12 @@ export function InteractiveShirt3D({
           </div>
         </div>
 
-        {/* ESCENARIO CENTRAL: Prenda 3D Real (shirt_baked.glb) */}
+        {/* ESCENARIO CENTRAL: Proporción 1:1 exacta (nunca se estira ni deforma) */}
         <div className="order-1 flex flex-col items-center justify-center md:order-2">
-          <div className="relative h-[350px] w-full max-w-[390px] sm:h-[390px]">
+          <div
+            className="relative mx-auto w-full max-w-[380px]"
+            style={{ aspectRatio: '1 / 1' }}
+          >
             <WebGLShirtCanvas
               hex={hex}
               designUrl={designUrl || null}
@@ -609,8 +612,8 @@ export function InteractiveShirt3D({
               touchAction={touchAction}
               onMoveDesign={(dx, dy) => {
                 onDesignChange?.({
-                  offsetX: clamp(designOffsetX + dx, -22, 22),
-                  offsetY: clamp(designOffsetY + dy, -22, 24)
+                  offsetX: clamp(designOffsetX + dx, -24, 24),
+                  offsetY: clamp(designOffsetY + dy, -24, 26)
                 });
               }}
             />
@@ -628,7 +631,7 @@ export function InteractiveShirt3D({
           </div>
         </div>
 
-        {/* PANEL LATERAL DERECHO: Controles intuitivos del Diseño / Logo */}
+        {/* PANEL LATERAL DERECHO: Controles intuitivos del Diseño y Botón directo Tamaño A3 */}
         <div className="order-3 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:flex-col md:items-stretch">
           <div className="w-full">
             <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
@@ -666,14 +669,16 @@ export function InteractiveShirt3D({
           <div className="w-full border-t border-slate-100 pt-2">
             <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
               <span>Tamaño Diseño</span>
-              <span className="font-bold text-slate-700">{Math.round(designScale * 100)}%</span>
+              <span className="font-bold text-slate-700">
+                {designScale >= 2.5 ? `A3 (${Math.round(designScale * 100)}%)` : `${Math.round(designScale * 100)}%`}
+              </span>
             </div>
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 disabled={!designUrl || !onDesignChange}
-                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-base font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
-                onClick={() => adjustScale(-0.12)}
+                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
+                onClick={() => adjustScale(-0.15)}
                 title="Hacer diseño más pequeño"
               >
                 − Pequeño
@@ -681,21 +686,45 @@ export function InteractiveShirt3D({
               <button
                 type="button"
                 disabled={!designUrl || !onDesignChange}
-                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-base font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
-                onClick={() => adjustScale(0.12)}
+                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-xs font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
+                onClick={() => adjustScale(0.15)}
                 title="Hacer diseño más grande"
               >
                 + Grande
               </button>
             </div>
-            <button
-              type="button"
-              disabled={!designUrl || !onDesignChange}
-              className="mt-1.5 min-h-[34px] w-full rounded-xl bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
-              onClick={() => onDesignChange?.({ scale: 1, offsetX: 0, offsetY: 0 })}
-            >
-              ↺ Centrar Diseño
-            </button>
+
+            {/* Botón directo a Tamaño A3 Completo de una sola vez */}
+            <div className="mt-1.5 grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                className={`min-h-[34px] rounded-xl px-2 py-1 text-[11px] font-extrabold transition disabled:opacity-40 ${
+                  designScale >= 2.5
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+                }`}
+                onClick={() =>
+                  onDesignChange?.({
+                    scale: 2.75,
+                    offsetX: 0,
+                    offsetY: 2
+                  })
+                }
+                title="Establecer tamaño máximo de hoja A3 de una sola vez"
+              >
+                📐 Tamaño A3
+              </button>
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                className="min-h-[34px] rounded-xl bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                onClick={() => onDesignChange?.({ scale: 1, offsetX: 0, offsetY: 0 })}
+                title="Restablecer a tamaño estándar A4 centrado"
+              >
+                ↺ Estándar A4
+              </button>
+            </div>
           </div>
 
           {onDesignChange && (
@@ -1043,6 +1072,14 @@ function WebGLShirtCanvas({
         }
       }
 
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const cw = Math.max(240, Math.round((canvas.clientWidth || 360) * dpr));
+      const ch = Math.max(240, Math.round((canvas.clientHeight || 360) * dpr));
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+      }
+
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -1050,7 +1087,7 @@ function WebGLShirtCanvas({
       if (st.indexCount > 0) {
         const proj = createMat4Perspective(
           (32 * Math.PI) / 180,
-          canvas.width / canvas.height,
+          canvas.width / Math.max(1, canvas.height),
           0.1,
           20.0
         );

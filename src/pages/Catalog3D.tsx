@@ -3,7 +3,7 @@ import { useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
-import { compressImage, applyBackgroundRemoval } from '../lib/image';
+import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
 import { copyText } from '../lib/csv';
@@ -86,6 +86,9 @@ export default function Catalog3D() {
   const [rawDesignUrl, setRawDesignUrl] = useState<string | null>(null);
   const [designUrl, setDesignUrl] = useState<string | null>(null);
   const [removeBg, setRemoveBg] = useState(true);
+  const [bgTolerance, setBgTolerance] = useState(34);
+  const [processingMsg, setProcessingMsg] = useState<string | null>(null);
+  const [is4K, setIs4K] = useState(false);
   const [photoId, setPhotoId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<DecalPlacement>('center');
   const [scale, setScale] = useState(1);
@@ -142,8 +145,9 @@ export default function Catalog3D() {
   const onUploadDesign = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const raw = await compressImage(file, 560, 0.82, false);
-      const processed = removeBg ? await applyBackgroundRemoval(raw, true, 42) : raw;
+      setIs4K(false);
+      const raw = await compressImage(file, 1400, 0.92, false);
+      const processed = removeBg ? await applyBackgroundRemoval(raw, true, bgTolerance) : raw;
       const id = uid();
       await savePhoto(id, processed, 0);
       void uploadPhotoNow(id, processed);
@@ -152,7 +156,7 @@ export default function Catalog3D() {
       setDesignUrl(processed);
       toast(
         removeBg
-          ? 'Diseño sin fondo aplicado a la camisa 3D · Arrastra o usa +/− para ajustarlo'
+          ? 'Diseño sin fondo aplicado (colores internos protegidos)'
           : 'Diseño aplicado a la camisa 3D'
       );
     } catch (e) {
@@ -162,12 +166,13 @@ export default function Catalog3D() {
     }
   };
 
-  const handleToggleRemoveBg = async (next: boolean) => {
+  const handleToggleRemoveBg = async (next: boolean, tol = bgTolerance) => {
     setRemoveBg(next);
+    setBgTolerance(tol);
     const base = rawDesignUrl || designUrl;
     if (!base) return;
     try {
-      const updated = next ? await applyBackgroundRemoval(base, true, 42) : base;
+      const updated = next ? await applyBackgroundRemoval(base, true, tol) : base;
       setDesignUrl(updated);
       if (photoId) {
         await savePhoto(photoId, updated, 0);
@@ -175,6 +180,44 @@ export default function Catalog3D() {
       }
     } catch {
       /* mantener actual */
+    }
+  };
+
+  const handleAiRemoveBg = async () => {
+    const base = rawDesignUrl || designUrl;
+    if (!base) return;
+    try {
+      setProcessingMsg('Iniciando IA de recorte profesional...');
+      const aiResult = await removeBackgroundWithAI(base, (msg) => setProcessingMsg(msg));
+      setDesignUrl(aiResult);
+      setRemoveBg(true);
+      if (photoId) {
+        await savePhoto(photoId, aiResult, 0);
+        void uploadPhotoNow(photoId, aiResult);
+      }
+      toast('Fondo eliminado con IA preservando todos los detalles del diseño');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setProcessingMsg(null);
+    }
+  };
+
+  const handleUpscale4K = async () => {
+    if (!designUrl) return;
+    try {
+      setProcessingMsg('Escalando y enfocando diseño a 4K Ultra HD...');
+      const { dataUrl, width, height } = await upscaleImageTo4K(designUrl, 2560);
+      setDesignUrl(dataUrl);
+      setIs4K(true);
+      if (photoId) {
+        await savePhoto(photoId, dataUrl, 0);
+      }
+      toast(`Diseño escalado a 4K Ultra HD (${width}×${height} px)`);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setProcessingMsg(null);
     }
   };
 
@@ -379,7 +422,16 @@ export default function Catalog3D() {
 
       {/* Probar diseño sobre la camisa 3D */}
       <section className="card space-y-3">
-        <h2 className="section-title mb-0">1 · Diseño sobre la Camisa 3D (Quitar Fondo, Colocar y Escalar)</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-title mb-0">
+            1 · Diseño sobre la Camisa 3D (Quitar Fondo IA, Escalado 4K y Tamaño A3)
+          </h2>
+          {is4K && (
+            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-extrabold text-emerald-900">
+              ✨ 4K Ultra HD Activo
+            </span>
+          )}
+        </div>
         <input
           ref={fileRef}
           type="file"
@@ -398,6 +450,7 @@ export default function Catalog3D() {
                 setDesignUrl(null);
                 setRawDesignUrl(null);
                 setPhotoId(null);
+                setIs4K(false);
               }}
             >
               Quitar
@@ -405,15 +458,71 @@ export default function Catalog3D() {
           )}
         </div>
 
-        <label className="flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
-          <input
-            type="checkbox"
-            className="h-5 w-5 accent-slate-900"
-            checked={removeBg}
-            onChange={(e) => void handleToggleRemoveBg(e.target.checked)}
-          />
-          <span>🪄 Quitar fondo (JPG/PNG) y dejarlo igual al color de la camisa</span>
-        </label>
+        {processingMsg && (
+          <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-900">
+            <span className="h-2.5 w-2.5 animate-ping rounded-full bg-sky-600" />
+            <span>{processingMsg}</span>
+          </div>
+        )}
+
+        <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <label className="flex min-h-[42px] cursor-pointer items-center gap-3 text-sm font-semibold text-slate-800">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-slate-900"
+              checked={removeBg}
+              onChange={(e) => void handleToggleRemoveBg(e.target.checked, bgTolerance)}
+            />
+            <span>
+              🪄 Quitar fondo exterior (protege colores y letras internas del diseño)
+            </span>
+          </label>
+
+          {designUrl && removeBg && (
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <span className="text-xs font-bold text-slate-600">
+                Sensibilidad de borde ({bgTolerance}):
+              </span>
+              <input
+                type="range"
+                min="12"
+                max="75"
+                step="2"
+                className="flex-1 accent-slate-900"
+                value={bgTolerance}
+                onChange={(e) => void handleToggleRemoveBg(true, parseInt(e.target.value, 10))}
+              />
+            </div>
+          )}
+
+          {designUrl && (
+            <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-3">
+              <button
+                type="button"
+                className="btn-soft min-h-[42px] text-xs font-extrabold"
+                onClick={() => void handleAiRemoveBg()}
+                disabled={!!processingMsg}
+              >
+                🤖 Quitar Fondo con IA Pro
+              </button>
+              <button
+                type="button"
+                className="btn-soft min-h-[42px] text-xs font-extrabold"
+                onClick={() => void handleUpscale4K()}
+                disabled={!!processingMsg}
+              >
+                ✨ Escalar Diseño a 4K
+              </button>
+              <a
+                href={designUrl}
+                download={`diseno-4k-${brand?.code || 'camisa'}.png`}
+                className="btn-ghost flex min-h-[42px] items-center justify-center text-xs font-extrabold"
+              >
+                ⬇ Descargar PNG Transparente
+              </a>
+            </div>
+          )}
+        </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {PLACEMENTS.map((p) => (
@@ -433,42 +542,89 @@ export default function Catalog3D() {
         </div>
 
         {designUrl && (
-          <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-3">
-            <div>
-              <label className="label">Tamaño ({Math.round(scale * 100)}%)</label>
-              <input
-                type="range"
-                min="0.35"
-                max="1.85"
-                step="0.05"
-                className="w-full accent-slate-900"
-                value={scale}
-                onChange={(e) => setScale(parseFloat(e.target.value))}
-              />
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-600">
+                Tamaño rápido de impresión:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                    scale <= 0.75 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                  }`}
+                  onClick={() => setScale(0.65)}
+                >
+                  Logo Pequeño (65%)
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                    scale > 0.75 && scale < 2.2 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                  }`}
+                  onClick={() => {
+                    setScale(1);
+                    setOffsetX(0);
+                    setOffsetY(0);
+                  }}
+                >
+                  📄 Estándar A4 (100%)
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                    scale >= 2.2 ? 'bg-sky-600 text-white shadow' : 'bg-sky-100 text-sky-900'
+                  }`}
+                  onClick={() => {
+                    setScale(2.75);
+                    setOffsetX(0);
+                    setOffsetY(2);
+                  }}
+                >
+                  📐 Tamaño A3 Completo (Máx)
+                </button>
+              </div>
             </div>
-            <div>
-              <label className="label">Mover Izq. / Der.</label>
-              <input
-                type="range"
-                min="-22"
-                max="22"
-                step="1"
-                className="w-full accent-slate-900"
-                value={offsetX}
-                onChange={(e) => setOffsetX(parseFloat(e.target.value))}
-              />
-            </div>
-            <div>
-              <label className="label">Mover Arriba / Abajo</label>
-              <input
-                type="range"
-                min="-22"
-                max="24"
-                step="1"
-                className="w-full accent-slate-900"
-                value={offsetY}
-                onChange={(e) => setOffsetY(parseFloat(e.target.value))}
-              />
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">
+                  Tamaño ({scale >= 2.5 ? `A3 · ${Math.round(scale * 100)}%` : `${Math.round(scale * 100)}%`})
+                </label>
+                <input
+                  type="range"
+                  min="0.30"
+                  max="3.00"
+                  step="0.05"
+                  className="w-full accent-slate-900"
+                  value={scale}
+                  onChange={(e) => setScale(parseFloat(e.target.value))}
+                />
+              </div>
+              <div>
+                <label className="label">Mover Izq. / Der.</label>
+                <input
+                  type="range"
+                  min="-24"
+                  max="24"
+                  step="1"
+                  className="w-full accent-slate-900"
+                  value={offsetX}
+                  onChange={(e) => setOffsetX(parseFloat(e.target.value))}
+                />
+              </div>
+              <div>
+                <label className="label">Mover Arriba / Abajo</label>
+                <input
+                  type="range"
+                  min="-24"
+                  max="26"
+                  step="1"
+                  className="w-full accent-slate-900"
+                  value={offsetY}
+                  onChange={(e) => setOffsetY(parseFloat(e.target.value))}
+                />
+              </div>
             </div>
           </div>
         )}
@@ -902,42 +1058,86 @@ export function CustomerCatalogView({
             ))}
           </div>
           {designUrl && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="label">Tamaño ({Math.round(scale * 100)}%)</label>
-                <input
-                  type="range"
-                  min="0.35"
-                  max="1.85"
-                  step="0.05"
-                  className="w-full accent-slate-900"
-                  value={scale}
-                  onChange={(e) => setScale(parseFloat(e.target.value))}
-                />
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-600">Tamaño rápido:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                      scale <= 0.75 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                    }`}
+                    onClick={() => setScale(0.65)}
+                  >
+                    Logo Pequeño
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                      scale > 0.75 && scale < 2.2 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                    }`}
+                    onClick={() => {
+                      setScale(1);
+                      setOffsetX(0);
+                      setOffsetY(0);
+                    }}
+                  >
+                    📄 Estándar A4
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                      scale >= 2.2 ? 'bg-sky-600 text-white shadow' : 'bg-sky-100 text-sky-900'
+                    }`}
+                    onClick={() => {
+                      setScale(2.75);
+                      setOffsetX(0);
+                      setOffsetY(2);
+                    }}
+                  >
+                    📐 Tamaño A3 (Máx)
+                  </button>
+                </div>
               </div>
-              <div>
-                <label className="label">Mover Izq. / Der.</label>
-                <input
-                  type="range"
-                  min="-22"
-                  max="22"
-                  step="1"
-                  className="w-full accent-slate-900"
-                  value={offsetX}
-                  onChange={(e) => setOffsetX(parseFloat(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="label">Mover Arriba / Abajo</label>
-                <input
-                  type="range"
-                  min="-22"
-                  max="24"
-                  step="1"
-                  className="w-full accent-slate-900"
-                  value={offsetY}
-                  onChange={(e) => setOffsetY(parseFloat(e.target.value))}
-                />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div>
+                  <label className="label">
+                    Tamaño ({scale >= 2.5 ? `A3 · ${Math.round(scale * 100)}%` : `${Math.round(scale * 100)}%`})
+                  </label>
+                  <input
+                    type="range"
+                    min="0.30"
+                    max="3.00"
+                    step="0.05"
+                    className="w-full accent-slate-900"
+                    value={scale}
+                    onChange={(e) => setScale(parseFloat(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Mover Izq. / Der.</label>
+                  <input
+                    type="range"
+                    min="-24"
+                    max="24"
+                    step="1"
+                    className="w-full accent-slate-900"
+                    value={offsetX}
+                    onChange={(e) => setOffsetX(parseFloat(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Mover Arriba / Abajo</label>
+                  <input
+                    type="range"
+                    min="-24"
+                    max="26"
+                    step="1"
+                    className="w-full accent-slate-900"
+                    value={offsetY}
+                    onChange={(e) => setOffsetY(parseFloat(e.target.value))}
+                  />
+                </div>
               </div>
             </div>
           )}
