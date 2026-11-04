@@ -235,8 +235,6 @@ function floodFillExteriorBackground(
   const bgMax = Math.max(bgR, bgG, bgB);
   const bgMin = Math.min(bgR, bgG, bgB);
   const bgIsNeutral = bgMax - bgMin < 28;
-  const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
-  const bgIsDark = bgLum < 65;
 
   const colorDist = (r: number, g: number, b: number): number => {
     const dr = r - bgR;
