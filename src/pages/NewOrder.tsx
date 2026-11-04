@@ -219,21 +219,45 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       {/* 2. Color */}
       <section className="card">
         <h2 className="section-title">2 · Color</h2>
-        <div className="flex items-center gap-3">
-          <ShirtPreview hex={color?.hex || '#e5e7eb'} size={130} label={color ? `${color.name}` : ''} />
+        <div className="flex flex-col items-center gap-3 sm:flex-row">
+          <ShirtPreview hex={color?.hex || '#e5e7eb'} size={135} label={color ? `${color.name}` : ''} designUrl={draft.photo} />
           <div className="flex flex-1 flex-wrap gap-2">
-            {colors.map((c) => (
-              <button
-                key={c.id}
-                className={`flex h-12 w-12 items-center justify-center rounded-full border-2 ${c.id === color?.id ? 'border-brand-700 ring-2 ring-brand-300' : 'border-slate-200'}`}
-                onClick={() => setColorId(c.id)}
-                aria-label={c.name}
-                title={c.name}
-              >
-                <span className="h-9 w-9 rounded-full border border-black/15" style={{ background: c.hex }} />
-              </button>
-            ))}
-            <button className="flex h-12 items-center rounded-full border-2 border-dashed border-brand-300 px-3 text-sm font-bold text-brand-700" onClick={() => setColorModal(true)}>
+            {colors.map((c) => {
+              const totalC = brand
+                ? settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
+                : 0;
+              const active = c.id === color?.id;
+              return (
+                <button
+                  key={c.id}
+                  className={`flex min-h-[48px] items-center gap-2 rounded-2xl border-2 px-3 py-1.5 text-left transition ${
+                    active ? 'border-brand-700 bg-brand-700 text-white shadow' : 'border-slate-200 bg-white text-slate-800'
+                  }`}
+                  onClick={() => setColorId(c.id)}
+                  aria-label={c.name}
+                  title={c.name}
+                >
+                  <span className="h-6 w-6 shrink-0 rounded-full border border-black/15" style={{ background: c.hex }} />
+                  <div>
+                    <div className="text-xs font-bold leading-tight">{c.name}</div>
+                    <div
+                      className={`text-[11px] font-semibold ${
+                        active
+                          ? totalC > 0
+                            ? 'text-emerald-300'
+                            : 'text-amber-300'
+                          : totalC > 0
+                          ? 'text-emerald-600'
+                          : 'text-amber-600'
+                      }`}
+                    >
+                      {totalC > 0 ? `${totalC} en stock` : 'Disponible pronto'}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+            <button className="flex min-h-[48px] items-center rounded-2xl border-2 border-dashed border-brand-300 px-3 text-sm font-bold text-brand-700" onClick={() => setColorModal(true)}>
               + Nuevo color
             </button>
           </div>
@@ -277,10 +301,23 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           {settings.sizes.map((sz) => {
             const st = brand && color ? stock.get(vkey(brand.id, color.id, sz)) || 0 : 0;
+            const active = sz === size;
             return (
-              <button key={sz} className={`chip flex-col gap-0 py-1 ${sz === size ? 'chip-on' : 'chip-off'}`} onClick={() => setSize(sz)}>
-                <span className="text-lg leading-tight">{sz}</span>
-                <span className={`text-xs font-semibold ${sz === size ? 'text-brand-100' : st > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>{st}</span>
+              <button key={sz} className={`chip flex-col gap-0.5 py-2 ${active ? 'chip-on' : 'chip-off'}`} onClick={() => setSize(sz)}>
+                <span className="text-lg font-extrabold leading-tight">{sz}</span>
+                <span
+                  className={`text-[11px] font-bold ${
+                    active
+                      ? st > 0
+                        ? 'text-emerald-300'
+                        : 'text-amber-300'
+                      : st > 0
+                      ? 'text-emerald-600'
+                      : 'text-amber-600'
+                  }`}
+                >
+                  {st > 0 ? `${st} disp.` : 'Disponible pronto'}
+                </span>
               </button>
             );
           })}

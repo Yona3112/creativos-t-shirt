@@ -56,7 +56,6 @@ export function ShirtPreview({
               d="M78 22 L54 29 L14 54 L32 95 L56 84 L56 194 Q110 200 164 194 L164 84 L188 95 L206 54 L166 29 L142 22 C135 38 123 45 110 45 C97 45 85 38 78 22 Z"
               fill="url(#shirt3d-folds)"
             />
-            {/* Cuello interior realista */}
             <path
               d="M78 22 Q110 32 142 22 C135 38 123 45 110 45 C97 45 85 38 78 22 Z"
               fill="rgba(0,0,0,0.22)"
@@ -83,7 +82,11 @@ export function ShirtPreview({
   );
 }
 
-/** Estudio 3D interactivo con movimiento suave por física, rotación táctil, vista frente/espalda y probador de diseño. */
+/**
+ * Estudio 3D interactivo de 60/120 FPS reales:
+ * Actualiza las matrices CSS 3D y la iluminación SVG directamente en el DOM (sin re-renderizar React en cada frame),
+ * con física de resorte amortiguado e inercia táctil suave.
+ */
 export function InteractiveShirt3D({
   hex,
   colorName,
@@ -92,7 +95,8 @@ export function InteractiveShirt3D({
   placement = 'center',
   designScale = 1,
   designOffsetY = 0,
-  autoMotion = true
+  autoMotion = true,
+  stockBadge
 }: {
   hex: string;
   colorName: string;
@@ -102,41 +106,85 @@ export function InteractiveShirt3D({
   designScale?: number;
   designOffsetY?: number;
   autoMotion?: boolean;
+  stockBadge?: { available: boolean; text: string } | null;
 }) {
   const [side, setSide] = useState<'front' | 'back'>('front');
-  const [pose, setPose] = useState({ rx: 4, ry: -12, floatY: 0, lightX: 35 });
-  const targetRef = useRef({ rx: 4, ry: -12 });
-  const currentRef = useRef({ rx: 4, ry: -12 });
-  const draggingRef = useRef(false);
-  const pointerStartRef = useRef({ x: 0, y: 0, rx: 0, ry: 0 });
+
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const shadowRef = useRef<HTMLDivElement>(null);
+  const specGradRef = useRef<SVGRadialGradientElement>(null);
+  const depthLayerRef = useRef<SVGPathElement>(null);
+
+  const physRef = useRef({
+    rx: 4,
+    ry: -12,
+    vx: 0,
+    vy: 0,
+    targetRx: 4,
+    targetRy: -12,
+    flipOffset: 0,
+    dragging: false,
+    lastX: 0,
+    lastY: 0
+  });
 
   useEffect(() => {
     if (placement === 'back') setSide('back');
     else setSide('front');
   }, [placement]);
 
+  const switchSide = (next: 'front' | 'back') => {
+    if (next !== side) {
+      // Impulso suave de giro al voltear la prenda
+      physRef.current.vy += next === 'back' ? 14 : -14;
+      setSide(next);
+    }
+  };
+
   useEffect(() => {
     let raf = 0;
     const t0 = performance.now();
-    const tick = (now: number) => {
+
+    const animate = (now: number) => {
       const elapsed = (now - t0) / 1000;
-      if (!draggingRef.current && autoMotion) {
-        targetRef.current.ry = Math.sin(elapsed * 1.15) * 18;
-        targetRef.current.rx = Math.cos(elapsed * 0.85) * 6 + 3;
+      const p = physRef.current;
+
+      if (!p.dragging && autoMotion) {
+        p.targetRy = Math.sin(elapsed * 1.1) * 19;
+        p.targetRx = Math.cos(elapsed * 0.85) * 5.5 + 3;
       }
-      currentRef.current.rx += (targetRef.current.rx - currentRef.current.rx) * 0.12;
-      currentRef.current.ry += (targetRef.current.ry - currentRef.current.ry) * 0.12;
-      const floatY = Math.sin(elapsed * 1.8) * 5;
-      const lightX = 50 - currentRef.current.ry * 1.4;
-      setPose({
-        rx: currentRef.current.rx,
-        ry: currentRef.current.ry,
-        floatY,
-        lightX: Math.max(10, Math.min(90, lightX))
-      });
-      raf = requestAnimationFrame(tick);
+
+      // Física de resorte amortiguado (stiffness + damping)
+      const ax = (p.targetRx - p.rx) * 0.085;
+      const ay = (p.targetRy - p.ry) * 0.085;
+      p.vx = (p.vx + ax) * 0.82;
+      p.vy = (p.vy + ay) * 0.82;
+      p.rx += p.vx;
+      p.ry += p.vy;
+
+      const floatY = Math.sin(elapsed * 1.9) * 5.5;
+      const lightX = Math.max(12, Math.min(88, 50 - p.ry * 1.35));
+
+      if (bodyRef.current) {
+        bodyRef.current.style.transform = `translate3d(0, ${floatY.toFixed(2)}px, 0) rotateX(${p.rx.toFixed(
+          2
+        )}deg) rotateY(${p.ry.toFixed(2)}deg)`;
+      }
+      if (shadowRef.current) {
+        const sScale = (1 - floatY * 0.012).toFixed(3);
+        shadowRef.current.style.transform = `translate3d(${(-p.ry * 0.75).toFixed(1)}px, 0, 0) scale(${sScale})`;
+      }
+      if (specGradRef.current) {
+        specGradRef.current.setAttribute('cx', `${lightX.toFixed(1)}%`);
+      }
+      if (depthLayerRef.current) {
+        depthLayerRef.current.setAttribute('transform', `translate(${(p.ry * 0.13).toFixed(2)}, 2.5)`);
+      }
+
+      raf = requestAnimationFrame(animate);
     };
-    raf = requestAnimationFrame(tick);
+
+    raf = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf);
   }, [autoMotion]);
 
@@ -147,24 +195,12 @@ export function InteractiveShirt3D({
     const baseScale = Math.max(0.5, Math.min(1.6, designScale));
     const yShift = designOffsetY;
     if (placement === 'pocket') {
-      return {
-        left: '61%',
-        top: `${36 + yShift}%`,
-        width: `${15 * baseScale}%`
-      };
+      return { left: '61%', top: `${36 + yShift}%`, width: `${15 * baseScale}%` };
     }
     if (placement === 'full') {
-      return {
-        left: '50%',
-        top: `${48 + yShift}%`,
-        width: `${42 * baseScale}%`
-      };
+      return { left: '50%', top: `${48 + yShift}%`, width: `${42 * baseScale}%` };
     }
-    return {
-      left: '50%',
-      top: `${44 + yShift}%`,
-      width: `${31 * baseScale}%`
-    };
+    return { left: '50%', top: `${44 + yShift}%`, width: `${31 * baseScale}%` };
   };
 
   const showDecalOnCurrentSide =
@@ -174,81 +210,94 @@ export function InteractiveShirt3D({
 
   return (
     <div className="relative flex flex-col items-center select-none">
-      {/* Controles rápidos de vista 3D */}
-      <div className="z-10 mb-2 flex items-center gap-2">
-        <button
-          type="button"
-          className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-            side === 'front'
-              ? 'bg-slate-900 text-white shadow'
-              : 'bg-white/90 text-slate-700 ring-1 ring-slate-200'
-          }`}
-          onClick={() => setSide('front')}
-        >
-          Vista Frente
-        </button>
-        <button
-          type="button"
-          className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-            side === 'back'
-              ? 'bg-slate-900 text-white shadow'
-              : 'bg-white/90 text-slate-700 ring-1 ring-slate-200'
-          }`}
-          onClick={() => setSide('back')}
-        >
-          Vista Espalda
-        </button>
+      {/* Barra superior del visor: Frente / Espalda + Estado de stock en vivo */}
+      <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-2">
+        <div className="inline-flex rounded-full bg-slate-200/80 p-1">
+          <button
+            type="button"
+            className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
+              side === 'front' ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
+            }`}
+            onClick={() => switchSide('front')}
+          >
+            Vista Frente
+          </button>
+          <button
+            type="button"
+            className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
+              side === 'back' ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
+            }`}
+            onClick={() => switchSide('back')}
+          >
+            Vista Espalda
+          </button>
+        </div>
+
+        {stockBadge && (
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold ${
+              stockBadge.available
+                ? 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300'
+                : 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                stockBadge.available ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+              }`}
+            />
+            {stockBadge.text}
+          </span>
+        )}
       </div>
 
-      {/* Escenario 3D interactivo */}
+      {/* Escenario 3D interactivo acelerado por GPU */}
       <div
-        className="relative flex h-[320px] w-full max-w-[340px] cursor-grab items-center justify-center touch-none active:cursor-grabbing sm:h-[360px]"
+        className="relative flex h-[310px] w-full max-w-[340px] cursor-grab items-center justify-center touch-none active:cursor-grabbing sm:h-[350px]"
         style={{ perspective: '950px' }}
         onPointerDown={(e: any) => {
-          draggingRef.current = true;
-          pointerStartRef.current = {
-            x: e.clientX,
-            y: e.clientY,
-            rx: targetRef.current.rx,
-            ry: targetRef.current.ry
-          };
+          const p = physRef.current;
+          p.dragging = true;
+          p.lastX = e.clientX;
+          p.lastY = e.clientY;
+          p.targetRx = p.rx;
+          p.targetRy = p.ry;
           if (e.currentTarget?.setPointerCapture) {
             e.currentTarget.setPointerCapture(e.pointerId);
           }
         }}
         onPointerMove={(e: any) => {
-          if (!draggingRef.current) return;
-          const dx = e.clientX - pointerStartRef.current.x;
-          const dy = e.clientY - pointerStartRef.current.y;
-          targetRef.current.ry = Math.max(-38, Math.min(38, pointerStartRef.current.ry + dx * 0.35));
-          targetRef.current.rx = Math.max(-18, Math.min(22, pointerStartRef.current.rx - dy * 0.22));
+          const p = physRef.current;
+          if (!p.dragging) return;
+          const dx = e.clientX - p.lastX;
+          const dy = e.clientY - p.lastY;
+          p.lastX = e.clientX;
+          p.lastY = e.clientY;
+          p.targetRy = Math.max(-42, Math.min(42, p.targetRy + dx * 0.42));
+          p.targetRx = Math.max(-20, Math.min(22, p.targetRx - dy * 0.28));
         }}
         onPointerUp={() => {
-          draggingRef.current = false;
+          physRef.current.dragging = false;
         }}
         onPointerCancel={() => {
-          draggingRef.current = false;
+          physRef.current.dragging = false;
         }}
       >
         {/* Sombra dinámica en el piso */}
         <div
-          className="pointer-events-none absolute bottom-3 h-6 w-48 rounded-full bg-slate-900/20 blur-md transition-transform duration-75"
-          style={{
-            transform: `translateX(${-pose.ry * 0.7}px) scale(${1 - pose.floatY * 0.012})`
-          }}
+          ref={shadowRef}
+          className="pointer-events-none absolute bottom-3 h-6 w-48 rounded-full bg-slate-900/20 blur-md will-change-transform"
         />
 
-        {/* Cuerpo 3D con transformación suave */}
+        {/* Cuerpo 3D */}
         <div
-          className="relative h-[290px] w-[290px] sm:h-[325px] sm:w-[325px]"
-          style={{
-            transformStyle: 'preserve-3d',
-            transform: `translateY(${pose.floatY}px) rotateX(${pose.rx}deg) rotateY(${pose.ry}deg)`
-          }}
+          ref={bodyRef}
+          className="relative h-[285px] w-[285px] will-change-transform sm:h-[320px] sm:w-[320px]"
+          style={{ transformStyle: 'preserve-3d' }}
         >
           <svg viewBox="0 0 240 240" className="h-full w-full overflow-visible">
             <defs>
-              <radialGradient id="spec3d" cx={`${pose.lightX}%`} cy="28%" r="65%">
+              <radialGradient ref={specGradRef} id="spec3d" cx="35%" cy="28%" r="65%">
                 <stop offset="0%" stopColor="#ffffff" stopOpacity={isLight ? '0.28' : '0.18'} />
                 <stop offset="55%" stopColor="#000000" stopOpacity="0" />
                 <stop offset="100%" stopColor="#000000" stopOpacity="0.28" />
@@ -263,26 +312,18 @@ export function InteractiveShirt3D({
                 <stop offset="100%" stopColor="#000000" stopOpacity="0.24" />
               </linearGradient>
               <filter id="drop3d" x="-20%" y="-15%" width="140%" height="140%">
-                <feDropShadow
-                  dx={String(-pose.ry * 0.22)}
-                  dy="12"
-                  stdDeviation="8"
-                  floodColor="#0f172a"
-                  floodOpacity="0.28"
-                />
+                <feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#0f172a" floodOpacity="0.26" />
               </filter>
             </defs>
 
             <g filter="url(#drop3d)">
-              {/* Capa trasera de grosor 3D */}
               <path
+                ref={depthLayerRef}
                 d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
                 fill="#0f172a"
                 fillOpacity="0.25"
-                transform={`translate(${pose.ry * 0.12}, 2.5)`}
               />
 
-              {/* Silueta principal de la camisa */}
               <path
                 d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
                 fill={hex}
@@ -290,16 +331,14 @@ export function InteractiveShirt3D({
                 strokeOpacity="0.3"
                 strokeWidth="2"
                 strokeLinejoin="round"
-                style={{ transition: 'fill 300ms cubic-bezier(0.22, 1, 0.36, 1)' }}
+                style={{ transition: 'fill 280ms cubic-bezier(0.22, 1, 0.36, 1)' }}
               />
 
-              {/* Iluminación especular 3D que reacciona al giro */}
               <path
                 d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
                 fill="url(#spec3d)"
               />
 
-              {/* Pliegues verticales naturales de tela */}
               <path
                 d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
                 fill="url(#drape3d)"
@@ -307,7 +346,6 @@ export function InteractiveShirt3D({
 
               {side === 'front' ? (
                 <>
-                  {/* Cuello frontal con etiqueta interna */}
                   <path
                     d="M84 24 Q120 35 156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
                     fill="rgba(0,0,0,0.26)"
@@ -322,7 +360,6 @@ export function InteractiveShirt3D({
                 </>
               ) : (
                 <>
-                  {/* Cuello alto de espalda */}
                   <path
                     d="M84 24 Q120 31 156 24"
                     fill="none"
@@ -330,16 +367,10 @@ export function InteractiveShirt3D({
                     strokeWidth="6"
                     strokeLinecap="round"
                   />
-                  <path
-                    d="M88 30 Q120 37 152 30"
-                    fill="none"
-                    stroke={stroke}
-                    strokeWidth="1.5"
-                  />
+                  <path d="M88 30 Q120 37 152 30" fill="none" stroke={stroke} strokeWidth="1.5" />
                 </>
               )}
 
-              {/* Costuras de mangas y dobladillo */}
               <path d="M60 93 L58 32 M180 93 L182 32" stroke={stroke} strokeWidth="1.6" />
               <path
                 d="M62 206 Q120 213 178 206"
@@ -351,7 +382,6 @@ export function InteractiveShirt3D({
             </g>
           </svg>
 
-          {/* Estampado / Diseño aplicado sobre el plano 3D del pecho/espalda */}
           {showDecalOnCurrentSide && (
             <div
               className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-150"
@@ -359,7 +389,7 @@ export function InteractiveShirt3D({
                 left: decalStyle.left,
                 top: decalStyle.top,
                 width: decalStyle.width,
-                transform: `translate(-50%, -50%) translateZ(8px)`
+                transform: 'translate(-50%, -50%) translateZ(8px)'
               }}
             >
               <img
