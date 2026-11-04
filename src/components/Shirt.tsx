@@ -1132,9 +1132,21 @@ function WebGLShirtCanvas({
       raf = requestAnimationFrame(render);
     };
 
+    const onWheelNative = (e: WheelEvent) => {
+      if (!stateRef.current.onZoomChange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY < 0 ? 0.14 : -0.14;
+      const next = clamp(Math.round((stateRef.current.zoom + delta) * 100) / 100, 0.85, 2.35);
+      stateRef.current.onZoomChange(next);
+    };
+
+    canvas.addEventListener('wheel', onWheelNative, { passive: false });
+
     raf = requestAnimationFrame(render);
     return () => {
       disposed = true;
+      canvas.removeEventListener('wheel', onWheelNative);
       cancelAnimationFrame(raf);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1147,14 +1159,7 @@ function WebGLShirtCanvas({
       ref={canvasRef}
       width={res}
       height={res}
-      className="h-full w-full cursor-grab touch-none drop-shadow-xl active:cursor-grabbing"
-      onWheel={(e: any) => {
-        if (!stateRef.current.onZoomChange) return;
-        e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.14 : -0.14;
-        const next = clamp(Math.round((stateRef.current.zoom + delta) * 100) / 100, 0.85, 2.35);
-        stateRef.current.onZoomChange(next);
-      }}
+      className="h-full w-full cursor-grab touch-none overscroll-none drop-shadow-xl active:cursor-grabbing"
       onPointerDown={(e: any) => {
         const r = rotRef.current;
         r.dragging = true;
