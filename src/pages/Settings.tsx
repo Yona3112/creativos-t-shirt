@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import type { AppState } from '../lib/types';
-import { engine, getState, replaceState, useAppState, useStock, useSyncStatus } from '../lib/store';
+import { engine, firebaseEngine, getState, replaceState, useAppState, useStock, useSyncStatus } from '../lib/store';
 import { updateSettings } from '../lib/actions';
-import { getConfig, pairingLink, saveConfig } from '../lib/sync';
+import { getConfig, pairingLink, saveConfig, firebasePairingLink } from '../lib/sync';
+import { getFirebaseConfig, saveFirebaseConfig, type FirebaseConfig } from '../lib/firebaseSync';
 import { activeBrands, brandColors, skuOf, vkey } from '../lib/inventory';
 import { copyText, downloadText, toCSV } from '../lib/csv';
 import { authenticateBoxful, getBoxfulConfig, saveBoxfulConfig, type BoxfulConfig } from '../lib/boxful';
@@ -19,6 +20,103 @@ export default function SettingsPage() {
   const [supaUrl, setSupaUrl] = useState(initialCfg?.url || '');
   const [supaKey, setSupaKey] = useState(initialCfg?.key || '');
   const [testing, setTesting] = useState(false);
+
+  // Firebase Cloud State
+  const initialFb = getFirebaseConfig();
+  const [fbApiKey, setFbApiKey] = useState(initialFb?.apiKey || '');
+  const [fbAuthDomain, setFbAuthDomain] = useState(initialFb?.authDomain || '');
+  const [fbProjectId, setFbProjectId] = useState(initialFb?.projectId || '');
+  const [fbStorageBucket, setFbStorageBucket] = useState(initialFb?.storageBucket || '');
+  const [fbMessagingSenderId, setFbMessagingSenderId] = useState(initialFb?.messagingSenderId || '');
+  const [fbAppId, setFbAppId] = useState(initialFb?.appId || '');
+  const [fbJsonInput, setFbJsonInput] = useState('');
+  const [testingFb, setTestingFb] = useState(false);
+
+  const parseFirebaseSnippet = (text: string) => {
+    try {
+      // Intentar JSON directo
+      const parsed = JSON.parse(text);
+      if (parsed.projectId || parsed.apiKey) {
+        if (parsed.apiKey) setFbApiKey(parsed.apiKey);
+        if (parsed.authDomain) setFbAuthDomain(parsed.authDomain);
+        if (parsed.projectId) setFbProjectId(parsed.projectId);
+        if (parsed.storageBucket) setFbStorageBucket(parsed.storageBucket);
+        if (parsed.messagingSenderId) setFbMessagingSenderId(parsed.messagingSenderId);
+        if (parsed.appId) setFbAppId(parsed.appId);
+        toast('Configuración de Firebase detectada');
+        return;
+      }
+    } catch {
+      // Parsear formato JS (const firebaseConfig = { apiKey: "..." })
+    }
+
+    const extract = (key: string) => {
+      const match = text.match(new RegExp(`${key}["']?\\s*:\\s*["']([^"']+)["']`));
+      return match ? match[1] : '';
+    };
+
+    const kApiKey = extract('apiKey');
+    const kAuthDomain = extract('authDomain');
+    const kProjectId = extract('projectId');
+    const kStorageBucket = extract('storageBucket');
+    const kSenderId = extract('messagingSenderId');
+    const kAppId = extract('appId');
+
+    if (kApiKey || kProjectId) {
+      if (kApiKey) setFbApiKey(kApiKey);
+      if (kAuthDomain) setFbAuthDomain(kAuthDomain);
+      if (kProjectId) setFbProjectId(kProjectId);
+      if (kStorageBucket) setFbStorageBucket(kStorageBucket);
+      if (kSenderId) setFbMessagingSenderId(kSenderId);
+      if (kAppId) setFbAppId(kAppId);
+      toast('Configuración de Firebase extraída');
+    } else {
+      toast('No se reconocieron las claves de Firebase en el texto pegado', 'error');
+    }
+  };
+
+  const connectFirebase = async () => {
+    const cfg: FirebaseConfig = {
+      apiKey: fbApiKey.trim(),
+      authDomain: fbAuthDomain.trim(),
+      projectId: fbProjectId.trim(),
+      storageBucket: fbStorageBucket.trim(),
+      messagingSenderId: fbMessagingSenderId.trim(),
+      appId: fbAppId.trim(),
+    };
+    if (!cfg.apiKey || !cfg.projectId) {
+      return toast('Ingresa al menos apiKey y projectId de Firebase', 'error');
+    }
+    setTestingFb(true);
+    const err = await firebaseEngine.testConnection(cfg);
+    setTestingFb(false);
+    if (err) return toast(`Error Firebase: ${err}`, 'error');
+
+    saveFirebaseConfig(cfg);
+    await firebaseEngine.start(cfg);
+    toast('🔥 Conectado en vivo a Google Firebase Firestore');
+  };
+
+  const disconnectFirebase = async () => {
+    saveFirebaseConfig(null);
+    await firebaseEngine.stop();
+    toast('Firebase desconectado. Modo local activado', 'info');
+  };
+
+  const copyFirebasePairing = async () => {
+    const cfg: FirebaseConfig = {
+      apiKey: fbApiKey.trim(),
+      authDomain: fbAuthDomain.trim(),
+      projectId: fbProjectId.trim(),
+      storageBucket: fbStorageBucket.trim(),
+      messagingSenderId: fbMessagingSenderId.trim(),
+      appId: fbAppId.trim(),
+    };
+    if (!cfg.apiKey || !cfg.projectId) return toast('Guarda primero la conexión a Firebase', 'error');
+    const link = firebasePairingLink(cfg);
+    await copyText(link);
+    toast('Enlace copiado para conectar el Taller vía Firebase');
+  };
 
   const initialBoxful = getBoxfulConfig();
   const [bxEnv, setBxEnv] = useState<'prod' | 'dev'>(initialBoxful?.env || 'prod');
@@ -155,11 +253,106 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-4 pb-6">
-      {/* Conexión en Vivo a Supabase */}
-      <section className="card space-y-3 border-2 border-brand-200">
+      {/* Conexión en Vivo a Google Firebase */}
+      <section className="card space-y-3 border-2 border-amber-300 bg-gradient-to-b from-amber-50/50 to-white">
         <div className="flex items-center justify-between">
-          <h2 className="section-title mb-0">⚡ Conexión en Vivo a Supabase</h2>
-          <span className="rounded-full bg-brand-100 px-3 py-1 text-xs font-extrabold text-brand-900">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🔥</span>
+            <div>
+              <h2 className="section-title mb-0">Google Firebase (Recomendado)</h2>
+              <p className="text-xs text-slate-500">Sincronización en tiempo real sin límites de cobro ni banners de Netlify</p>
+            </div>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-xs font-extrabold ${firebaseEngine.connected ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
+            {firebaseEngine.connected ? 'CONECTADO A FIREBASE' : 'NO CONECTADO'}
+          </span>
+        </div>
+
+        {/* Pegado Rápido */}
+        <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-3">
+          <label className="text-xs font-bold text-amber-900 block mb-1">
+            ⚡ Pegado Rápido (Copia el bloque 'firebaseConfig' desde Firebase Console)
+          </label>
+          <div className="flex gap-2">
+            <textarea
+              className="input font-mono text-xs flex-1 h-14 resize-none"
+              placeholder={`const firebaseConfig = {\n  apiKey: "AIzaSy...",\n  projectId: "tu-proyecto",\n  ...\n};`}
+              value={fbJsonInput}
+              onChange={(e) => setFbJsonInput(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-soft shrink-0 self-center text-xs py-2 px-3 font-bold"
+              onClick={() => {
+                if (!fbJsonInput.trim()) return toast('Pega primero el código en el recuadro', 'error');
+                parseFirebaseSnippet(fbJsonInput);
+              }}
+            >
+              Autocompletar
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div>
+            <label className="label text-xs">Project ID</label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="mi-tienda-firebase"
+              value={fbProjectId}
+              onChange={(e) => setFbProjectId(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label text-xs">API Key</label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="AIzaSy..."
+              value={fbApiKey}
+              onChange={(e) => setFbApiKey(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label text-xs">Auth Domain (opcional)</label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="mi-tienda.firebaseapp.com"
+              value={fbAuthDomain}
+              onChange={(e) => setFbAuthDomain(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label text-xs">Storage Bucket (opcional)</label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="mi-tienda.appspot.com"
+              value={fbStorageBucket}
+              onChange={(e) => setFbStorageBucket(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 pt-1">
+          <button className="btn-primary bg-amber-600 hover:bg-amber-700" onClick={connectFirebase} disabled={testingFb}>
+            {testingFb ? 'Probando Firebase...' : '🔥 Conectar y Sincronizar'}
+          </button>
+          <button className="btn-soft" onClick={copyFirebasePairing}>
+            🔗 Copiar Enlace Taller (Firebase)
+          </button>
+        </div>
+
+        {firebaseEngine.connected && (
+          <button className="btn-ghost w-full text-xs text-rose-600 font-semibold" onClick={disconnectFirebase}>
+            Desconectar de Firebase
+          </button>
+        )}
+      </section>
+
+      {/* Conexión en Vivo a Supabase (Alternativa) */}
+      <section className="card space-y-3 border border-slate-200">
+        <div className="flex items-center justify-between">
+          <h2 className="section-title mb-0 text-slate-700">⚡ Conexión a Supabase (Opcional)</h2>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-extrabold text-slate-700">
             {status.toUpperCase()}
           </span>
         </div>

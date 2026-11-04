@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Sincronización del estado de la tienda (inventario, pedidos, catálogo)
+    match /cgs_sync/{document} {
+      allow read, write: if true;
+    }
+    // Fotos de diseños y guías de envío
+    match /cgs_photos/{photoId} {
+      allow read, write: if true;
+    }
+    // Catálogo público accesible para clientes
+    match /cgs_catalog/{document} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

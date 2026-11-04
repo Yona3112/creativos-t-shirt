@@ -4,6 +4,14 @@ import { contentSignature, mergeStates, normalize } from './merge';
 import { db } from './db';
 import { getDeviceId } from './ids';
 import { buildPublicCatalog, LIVE_CATALOG_KEY } from './publicCatalog';
+import {
+  getFirebaseConfig,
+  uploadPhotoNowFirebase,
+  fetchSharedPhotoFirebase,
+  type FirebaseConfig
+} from './firebaseSync';
+
+export type { FirebaseConfig };
 
 /**
  * Devuelve true cuando la URL es de la Tienda Pública (#tienda / #catalogo).
@@ -71,14 +79,24 @@ export function pairingLink(cfg: SupaConfig): string {
   return `${location.origin}${location.pathname}#conectar=${token}`;
 }
 
+export function firebasePairingLink(cfg: FirebaseConfig): string {
+  const token = b64urlEncode(JSON.stringify({ fb: cfg }));
+  return `${location.origin}${location.pathname}#conectar=${token}`;
+}
+
 /** Lee el hash de emparejamiento, guarda la conexión y limpia la URL. */
 export function consumePairingHash(): boolean {
   const m = location.hash.match(/conectar=([A-Za-z0-9_-]+)/);
   if (!m) return false;
   try {
-    const data = JSON.parse(b64urlDecode(m[1])) as { u: string; k: string };
-    if (data.u && data.k && /^https:\/\//.test(data.u)) {
-      saveConfig({ url: data.u, key: data.k });
+    const rawObj = JSON.parse(b64urlDecode(m[1])) as { u?: string; k?: string; fb?: FirebaseConfig };
+    if (rawObj.fb && rawObj.fb.apiKey && rawObj.fb.projectId) {
+      localStorage.setItem('cgs_firebase', JSON.stringify(rawObj.fb));
+      history.replaceState(null, '', location.pathname + location.search);
+      return true;
+    }
+    if (rawObj.u && rawObj.k && /^https:\/\//.test(rawObj.u)) {
+      saveConfig({ url: rawObj.u, key: rawObj.k });
       history.replaceState(null, '', location.pathname + location.search);
       return true;
     }
@@ -314,6 +332,9 @@ export class SyncEngine {
 }
 
 export async function uploadPhotoNow(id: string, data: string): Promise<void> {
+  if (getFirebaseConfig()) {
+    return uploadPhotoNowFirebase(id, data);
+  }
   const cfg = getConfig();
   if (!cfg || !navigator.onLine) return;
   try {
@@ -328,6 +349,9 @@ export async function uploadPhotoNow(id: string, data: string): Promise<void> {
 export async function fetchSharedPhoto(id: string): Promise<string | null> {
   const local = await db.photos.get(id);
   if (local?.data) return local.data;
+  if (getFirebaseConfig()) {
+    return fetchSharedPhotoFirebase(id);
+  }
   const cfg = getConfig();
   if (!cfg || !navigator.onLine) return null;
   try {

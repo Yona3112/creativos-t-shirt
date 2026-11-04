@@ -4,6 +4,7 @@ import { createInitialState } from './seed';
 import { normalize } from './merge';
 import { loadState, saveState } from './db';
 import { SyncEngine, getConfig, isPublicStorefrontHash } from './sync';
+import { FirebaseSyncEngine, getFirebaseConfig } from './firebaseSync';
 import { computeStock } from './inventory';
 import { getDeviceId } from './ids';
 
@@ -51,6 +52,24 @@ export const engine = new SyncEngine({
   }
 });
 
+export const firebaseEngine = new FirebaseSyncEngine({
+  getState: () => state,
+  applyRemote: (s) => {
+    state = { ...s, _by: getDeviceId(), _at: Date.now() };
+    persistSoon();
+    emit();
+  },
+  onStatus: (s, d) => {
+    syncStatus = s;
+    syncDetail = d || '';
+    syncListeners.forEach((l) => l());
+  },
+  onPhotos: () => {
+    photoVersion++;
+    photoListeners.forEach((l) => l());
+  }
+});
+
 export async function initStore(): Promise<void> {
   if (isPublicStorefrontHash()) {
     // Seguridad: en la Tienda 3D del cliente (#tienda) NO cargamos ni sincronizamos
@@ -64,8 +83,13 @@ export async function initStore(): Promise<void> {
   state = normalize(saved);
   ready = true;
   emit();
-  const cfg = getConfig();
-  if (cfg) void engine.start(cfg);
+  const fbCfg = getFirebaseConfig();
+  if (fbCfg) {
+    void firebaseEngine.start(fbCfg);
+  } else {
+    const cfg = getConfig();
+    if (cfg) void engine.start(cfg);
+  }
 }
 
 export function getState(): AppState {
@@ -79,7 +103,8 @@ export function update(fn: (s: AppState) => AppState): void {
   state = { ...next, _by: getDeviceId(), _at: Date.now() };
   persistSoon();
   emit();
-  engine.schedulePush();
+  if (firebaseEngine.connected) firebaseEngine.schedulePush();
+  else engine.schedulePush();
 }
 
 /** Reemplaza todo el estado (restaurar respaldo). */
@@ -87,7 +112,8 @@ export function replaceState(s: AppState): void {
   state = { ...normalize(s), _by: getDeviceId(), _at: Date.now() };
   void saveState(state);
   emit();
-  engine.schedulePush();
+  if (firebaseEngine.connected) firebaseEngine.schedulePush();
+  else engine.schedulePush();
 }
 
 export function notifyPhotos(): void {
