@@ -4,6 +4,10 @@ import { contrastText } from '../lib/inventory';
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
 export type MotionMode = 'wind' | 'walk' | 'orbit';
 
+function clamp(x: number, a: number, b: number): number {
+  return x < a ? a : x > b ? b : x;
+}
+
 function hexToRgbNorm(hex: string): [number, number, number] {
   const clean = (hex || '#111827').replace('#', '');
   const full =
@@ -18,303 +22,107 @@ function hexToRgbNorm(hex: string): [number, number, number] {
 }
 
 /* ============================================================================
- * GENERADOR DE MALLA 3D VOLUMÉTRICA (GHOST MANNEQUIN / PERSONAJE INVISIBLE)
- * Construye una prenda 3D cerrada en hombros, costados y mangas, y ABIERTA en
- * cuello, puños y ruedo inferior, con normales suaves y coordenadas UV.
+ * CARGADOR BINARIO GLTF 2.0 (.GLB) — MODELO 3D REAL ESCANEADO (shirt_baked.glb)
+ * Extrae los 10,513 vértices, 19,517 triángulos, mapa de normales de algodón
+ * (1024x1024) y mapa de Oclusión Ambiental horneado (1024x1024) del modelo real.
  * ========================================================================== */
 
-interface MeshData {
+interface RealShirtGLB {
   positions: Float32Array;
   normals: Float32Array;
   uvs: Float32Array;
   indices: Uint16Array;
+  normalImg: HTMLImageElement | null;
+  aoImg: HTMLImageElement | null;
 }
 
-function clamp(x: number, a: number, b: number): number {
-  return x < a ? a : x > b ? b : x;
-}
+let cachedGLB: RealShirtGLB | null = null;
+let loadingPromise: Promise<RealShirtGLB> | null = null;
 
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
-/**
- * Evalúa si un punto (x, y) pertenece a la silueta anatómica de la camisa
- * y devuelve:
- * - thickness: grosor Z en ese punto (0 en las costuras cerradas laterales/hombros, > 0 en el interior y en las aberturas huecas)
- * - inside: true si está dentro de la prenda (para la capa dada: front o back)
- * - fold: pliegue estático natural de caída de tela
- */
-function sampleGarmentVolume(
-  x: number,
-  y: number,
-  isFront: boolean
-): { inside: boolean; z: number; fold: number; isCollar: number } {
-  const ax = Math.abs(x);
-
-  // Límites verticales globales
-  if (y < -0.92 || y > 0.82) {
-    return { inside: false, z: 0, fold: 0, isCollar: 0 };
-  }
-
-  // 1. Torso vs Mangas
-  // El torso tiene semiancho ~0.46 en cintura, ensanchándose a 0.50 en pecho (y=0.25) y hombros
-  const torsoHalfW =
-    0.455 +
-    0.035 * Math.exp(-Math.pow((y - 0.22) / 0.28, 2)) +
-    0.02 * smoothstep(-0.3, -0.9, y);
-
-  // Línea superior de hombro / manga exterior: baja desde (ax=0.24, y=0.78) hasta (ax=0.96, y=0.22)
-  let topLimit = 0.78;
-  if (ax <= 0.24) {
-    topLimit = 0.78;
-  } else if (ax <= 0.52) {
-    // Caída de hombro
-    topLimit = 0.78 - ((ax - 0.24) / 0.28) * 0.13;
-  } else {
-    // Borde superior de manga (ángulo natural de 38 grados)
-    topLimit = 0.65 - ((ax - 0.52) / 0.44) * 0.43;
-  }
-
-  if (y > topLimit) {
-    return { inside: false, z: 0, fold: 0, isCollar: 0 };
-  }
-
-  // 2. Recorte del cuello (Crew Neck 3D):
-  // En el frente el cuello baja hasta y = 0.46 (curva U profunda);
-  // En la espalda el cuello es alto (baja solo hasta y = 0.70), dejando ver el interior trasero desde el frente!
-  const neckRadiusX = 0.245;
-  let isCollar = 0;
-  if (ax < neckRadiusX) {
-    const nx = ax / neckRadiusX;
-    const neckCurve = Math.sqrt(Math.max(0, 1 - nx * nx));
-    const neckThreshold = isFront ? 0.77 - 0.30 * neckCurve : 0.78 - 0.075 * neckCurve;
-    if (y > neckThreshold) {
-      return { inside: false, z: 0, fold: 0, isCollar: 0 };
-    }
-    // Banda acanalada del cuello (collar rib) alrededor del borde del cuello
-    const distToNeck = neckThreshold - y;
-    if (distToNeck < 0.055) {
-      isCollar = 1 - distToNeck / 0.055;
-    }
-  }
-
-  // 3. Región del Torso vs Región de la Manga
-  if (ax <= torsoHalfW && y <= 0.66) {
-    // Estamos en el torso
-    // Dobladillo inferior curvo
-    const hemY = -0.88 - 0.03 * (1 - Math.pow(ax / torsoHalfW, 2));
-    if (y < hemY) {
-      return { inside: false, z: 0, fold: 0, isCollar: 0 };
-    }
-
-    // Perfil cilíndrico horizontal: se cierra suavemente en los costados (ax -> torsoHalfW)
-    // EXCEPTO en la unión con la manga (y entre 0.14 y 0.65), donde el volumen continúa hacia el hombro/manga
-    const sideRatio = clamp(ax / torsoHalfW, 0, 1);
-    const armholeBlend = smoothstep(0.08, 0.28, y) * (1 - smoothstep(0.60, 0.75, y));
-    const effectiveRatio = sideRatio * (1 - 0.48 * armholeBlend);
-    const cylProfile = Math.sqrt(Math.max(0, 1 - effectiveRatio * effectiveRatio));
-
-    // Cierre suave en la costura superior del hombro (solo para ax > neckRadiusX)
-    let shoulderSeam = 1;
-    if (ax >= neckRadiusX - 0.01) {
-      const distTop = clamp((topLimit - y) / 0.08, 0, 1);
-      shoulderSeam = Math.sqrt(distTop);
-    }
-
-    // Contorno anatómico: pecho ligeramente más prominente arriba, espalda con volumen escapular
-    const anatomyZ = isFront
-      ? 0.27 + 0.055 * Math.exp(-Math.pow((y - 0.22) / 0.32, 2))
-      : 0.24 + 0.045 * Math.exp(-Math.pow((y - 0.28) / 0.34, 2));
-
-    // Pliegues verticales naturales de caída + pliegues diagonales desde la sisa
-    const drape =
-      0.012 * Math.sin(x * 18.0 + y * 2.5) * smoothstep(0.35, -0.85, y) +
-      0.010 * Math.cos(x * 31.0 - y * 4.0) * smoothstep(0.1, -0.85, y);
-    const armpitDist = Math.hypot(ax - 0.44, y - 0.16);
-    const armpitCrease =
-      0.016 *
-      Math.sin((ax - 0.2) * 28 + (y - 0.16) * 22) *
-      Math.exp(-Math.pow(armpitDist / 0.22, 2));
-
-    const fold = drape + armpitCrease;
-    const collarBump = isCollar > 0 ? 0.014 * Math.sin(isCollar * Math.PI) : 0;
-    const zMag = anatomyZ * cylProfile * shoulderSeam + fold + collarBump;
-
-    return {
-      inside: true,
-      z: isFront ? zMag : -zMag,
-      fold,
-      isCollar
+function decodeBlobToImage(blob: Blob): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
     };
-  }
-
-  // 4. Región de la Manga (ax > torsoHalfW o esquina de hombro)
-  // Eje central de la manga desde el hombro (0.44, 0.45) hacia el puño (0.86, 0.05)
-  const x0 = 0.44;
-  const y0 = 0.44;
-  const dirX = 0.80;
-  const dirY = -0.60; // vector unitario a lo largo de la manga
-  const perpX = 0.60;
-  const perpY = 0.80; // vector unitario perpendicular al tubo de la manga
-
-  const dx = ax - x0;
-  const dy = y - y0;
-  const along = dx * dirX + dy * dirY; // distancia a lo largo de la manga (0 .. 0.50)
-  const across = dx * perpX + dy * perpY; // distancia transversal al eje de la manga
-
-  const maxSleeveLen = 0.46;
-  if (along < -0.18 || along > maxSleeveLen) {
-    return { inside: false, z: 0, fold: 0, isCollar: 0 };
-  }
-
-  // Radio del tubo de la manga (se estrecha suavemente hacia el puño)
-  const tSleeve = clamp(along / maxSleeveLen, 0, 1);
-  const sleeveRadius = 0.21 * (1 - 0.20 * tSleeve);
-
-  if (Math.abs(across) > sleeveRadius) {
-    return { inside: false, z: 0, fold: 0, isCollar: 0 };
-  }
-
-  // Transición bajo la axila para evitar picos entre torso y manga
-  if (ax < torsoHalfW + 0.06 && y < 0.14) {
-    return { inside: false, z: 0, fold: 0, isCollar: 0 };
-  }
-
-  // Perfil cilíndrico transversal de la manga:
-  // Se cierra a 0 en el borde superior e inferior de la manga (across -> ±sleeveRadius),
-  // pero queda ABIERTO en el puño (along == maxSleeveLen) para que la manga sea hueca en 3D!
-  const rNorm = clamp(across / sleeveRadius, -1, 1);
-  const sleeveCyl = Math.sqrt(Math.max(0, 1 - rNorm * rNorm));
-  const sleeveFold = 0.008 * Math.sin(along * 26 + across * 18);
-  const zSleeve = (0.19 * (1 - 0.15 * tSleeve)) * sleeveCyl + sleeveFold;
-
-  return {
-    inside: true,
-    z: isFront ? zSleeve : -zSleeve,
-    fold: sleeveFold,
-    isCollar: 0
-  };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
 }
 
-let cachedMesh: MeshData | null = null;
+async function loadRealShirtGLB(): Promise<RealShirtGLB> {
+  if (cachedGLB) return cachedGLB;
+  if (loadingPromise) return loadingPromise;
 
-function buildGarmentMesh(): MeshData {
-  if (cachedMesh) return cachedMesh;
+  loadingPromise = (async () => {
+    const res = await fetch('/shirt_baked.glb');
+    if (!res.ok) throw new Error('No se pudo cargar shirt_baked.glb');
+    const buf = await res.arrayBuffer();
+    const dv = new DataView(buf);
 
-  const NX = 112;
-  const NY = 112;
-  const minX = -0.96;
-  const maxX = 0.96;
-  const minY = -0.92;
-  const maxY = 0.82;
+    const jsonLen = dv.getUint32(12, true);
+    const jsonBytes = new Uint8Array(buf, 20, jsonLen);
+    const gltf = JSON.parse(new TextDecoder().decode(jsonBytes));
 
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
+    const binStart = 20 + jsonLen + 8;
+    const bvs = gltf.bufferViews as { byteOffset: number; byteLength: number }[];
 
-  const buildShell = (isFront: boolean) => {
-    const vertIndex = new Int32Array(NX * NY).fill(-1);
-    const zGrid = new Float32Array(NX * NY);
-    const insideGrid = new Uint8Array(NX * NY);
-    const collarGrid = new Float32Array(NX * NY);
+    const rawPos = new Float32Array(buf, binStart + bvs[0].byteOffset, bvs[0].byteLength / 4);
+    const rawNorm = new Float32Array(buf, binStart + bvs[1].byteOffset, bvs[1].byteLength / 4);
+    const rawUv = new Float32Array(buf, binStart + bvs[2].byteOffset, bvs[2].byteLength / 4);
+    const rawIdx = new Uint16Array(buf, binStart + bvs[3].byteOffset, bvs[3].byteLength / 2);
 
-    for (let j = 0; j < NY; j++) {
-      const v = j / (NY - 1);
-      const y = minY + v * (maxY - minY);
-      for (let i = 0; i < NX; i++) {
-        const u = i / (NX - 1);
-        const x = minX + u * (maxX - minX);
-        const idx = j * NX + i;
-        const sample = sampleGarmentVolume(x, y, isFront);
-        if (sample.inside) {
-          insideGrid[idx] = 1;
-          zGrid[idx] = sample.z;
-          collarGrid[idx] = sample.isCollar;
-        }
-      }
+    // Centrar y normalizar escala del modelo escaneado para encuadre de estudio
+    const positions = new Float32Array(rawPos.length);
+    const scale = 2.72;
+    const offsetY = 0.045;
+    for (let i = 0; i < rawPos.length; i += 3) {
+      positions[i] = rawPos[i] * scale;
+      positions[i + 1] = (rawPos[i + 1] + offsetY) * scale;
+      positions[i + 2] = rawPos[i + 2] * scale;
     }
 
-    const dxStep = (maxX - minX) / (NX - 1);
-    const dyStep = (maxY - minY) / (NY - 1);
+    const normals = new Float32Array(rawNorm);
+    const uvs = new Float32Array(rawUv);
+    const indices = new Uint16Array(rawIdx);
 
-    for (let j = 0; j < NY; j++) {
-      const v = j / (NY - 1);
-      const y = minY + v * (maxY - minY);
-      for (let i = 0; i < NX; i++) {
-        const idx = j * NX + i;
-        if (!insideGrid[idx]) continue;
+    let normalImg: HTMLImageElement | null = null;
+    let aoImg: HTMLImageElement | null = null;
 
-        const u = i / (NX - 1);
-        const x = minX + u * (maxX - minX);
-        const z = zGrid[idx];
-
-        // Derivadas finitas para la normal 3D suave
-        const zL = i > 0 && insideGrid[idx - 1] ? zGrid[idx - 1] : 0;
-        const zR = i < NX - 1 && insideGrid[idx + 1] ? zGrid[idx + 1] : 0;
-        const zD = j > 0 && insideGrid[idx - NX] ? zGrid[idx - NX] : 0;
-        const zU = j < NY - 1 && insideGrid[idx + NX] ? zGrid[idx + NX] : 0;
-
-        const dzdx = (zR - zL) / (2 * dxStep);
-        const dzdy = (zU - zD) / (2 * dyStep);
-
-        let nx = -dzdx;
-        let ny = -dzdy;
-        let nz = 1.0;
-        if (!isFront) {
-          nx = dzdx;
-          ny = dzdy;
-          nz = -1.0;
-        }
-        const len = Math.hypot(nx, ny, nz) || 1;
-        nx /= len;
-        ny /= len;
-        nz /= len;
-
-        const vIdx = positions.length / 3;
-        vertIndex[idx] = vIdx;
-        positions.push(x, y, z);
-        normals.push(nx, ny, nz);
-        // Guardamos en uv: (x normalizado de pecho, y normalizado de pecho), con signo en U para distinguir Frente vs Espalda
-        const chestU = (x + 0.45) / 0.9; // 0..1 en el ancho del torso
-        const chestV = 1 - (y + 0.88) / 1.66; // 0 arriba .. 1 abajo
-        uvs.push(isFront ? chestU : chestU + 10.0, chestV + (collarGrid[idx] > 0.2 ? 10.0 : 0.0));
-      }
+    if (bvs[4]) {
+      const normalBytes = new Uint8Array(buf, binStart + bvs[4].byteOffset, bvs[4].byteLength);
+      normalImg = await decodeBlobToImage(new Blob([normalBytes], { type: 'image/jpeg' }));
+    }
+    if (bvs[5]) {
+      const aoBytes = new Uint8Array(buf, binStart + bvs[5].byteOffset, bvs[5].byteLength);
+      aoImg = await decodeBlobToImage(new Blob([aoBytes], { type: 'image/jpeg' }));
     }
 
-    for (let j = 0; j < NY - 1; j++) {
-      for (let i = 0; i < NX - 1; i++) {
-        const a = vertIndex[j * NX + i];
-        const b = vertIndex[j * NX + i + 1];
-        const c = vertIndex[(j + 1) * NX + i];
-        const d = vertIndex[(j + 1) * NX + i + 1];
-        if (a >= 0 && b >= 0 && c >= 0 && d >= 0) {
-          if (isFront) {
-            indices.push(a, b, c, b, d, c);
-          } else {
-            indices.push(a, c, b, b, c, d);
-          }
-        }
-      }
-    }
-  };
+    cachedGLB = {
+      positions,
+      normals,
+      uvs,
+      indices,
+      normalImg,
+      aoImg
+    };
+    return cachedGLB;
+  })();
 
-  buildShell(true);
-  buildShell(false);
-
-  cachedMesh = {
-    positions: new Float32Array(positions),
-    normals: new Float32Array(normals),
-    uvs: new Float32Array(uvs),
-    indices: new Uint16Array(indices)
-  };
-  return cachedMesh;
+  return loadingPromise;
 }
 
 /* ============================================================================
- * SHADERS WEBGL 3D (ILUMINACIÓN PBR DE ALGODÓN + PLIEGUES VIVOS + ESTAMPADO UV)
+ * SHADERS WEBGL PBR REALISTA:
+ * - Geometría 3D escaneada de shirt_baked.glb
+ * - Mapa de Oclusión Ambiental (AO) real horneado en los pliegues y costuras
+ * - Mapa de Normales de punto de algodón (1024x1024 repetido 8x8)
+ * - Proyección de diseño / logo en espacio 3D sobre pecho o espalda sin distorsión
  * ========================================================================== */
 
 const VERT_SRC = `
@@ -326,127 +134,158 @@ uniform mat4 u_proj;
 uniform mat4 u_view;
 uniform float u_time;
 uniform float u_mode;
+uniform float u_motionActive;
 
-varying vec3 v_pos;
-varying vec3 v_norm;
+varying vec3 v_viewPos;
+varying vec3 v_viewNorm;
+varying vec3 v_objPos;
+varying vec3 v_objNorm;
 varying vec2 v_uv;
-varying float v_wave;
 
 void main() {
   vec3 p = a_pos;
   vec3 n = a_norm;
 
-  // Ondas reales 3D en los vértices de la tela (viento / caminata)
-  float lowerWeight = clamp((0.55 - p.y) / 1.4, 0.0, 1.0);
-  float windWave = sin(u_time * 2.6 + p.x * 7.5 + p.y * 4.0) * 0.016 * lowerWeight
-                 + cos(u_time * 1.9 - p.x * 12.0 + p.y * 6.0) * 0.009 * lowerWeight;
+  v_objPos = a_pos;
+  v_objNorm = a_norm;
 
-  if (u_mode > 0.5 && u_mode < 1.5) {
-    // Modo Caminata de Personaje Invisible: torsión opuesta entre hombros y cadera
-    float twist = sin(u_time * 3.2) * 0.16 * p.y;
-    float c = cos(twist);
-    float s = sin(twist);
-    p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
-    n = vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
-    windWave += sin(u_time * 6.4 + p.x * 9.0) * 0.012 * lowerWeight;
+  if (u_motionActive > 0.5) {
+    // Movimiento sutil y orgánico de tela real (sin deformar ni romper la malla)
+    float lowerFactor = clamp((0.45 - p.y) / 1.25, 0.0, 1.0);
+    float breeze = sin(u_time * 2.2 + p.x * 4.5 + p.y * 3.0) * 0.008 * lowerFactor
+                 + cos(u_time * 1.6 - p.x * 6.0 + p.y * 4.0) * 0.005 * lowerFactor;
+
+    if (u_mode > 0.5 && u_mode < 1.5) {
+      // Balanceo suave de caminata de maniquí invisible
+      float twist = sin(u_time * 3.0) * 0.08 * p.y;
+      float c = cos(twist);
+      float s = sin(twist);
+      p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
+      n = vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
+    }
+
+    p.z += breeze;
   }
 
-  p.z += (n.z >= 0.0 ? 1.0 : -1.0) * windWave;
-
-  vec4 viewPos = u_view * vec4(p, 1.0);
-  v_pos = viewPos.xyz;
-  v_norm = mat3(u_view) * n;
+  vec4 vp = u_view * vec4(p, 1.0);
+  v_viewPos = vp.xyz;
+  v_viewNorm = mat3(u_view) * n;
   v_uv = a_uv;
-  v_wave = windWave;
 
-  gl_Position = u_proj * viewPos;
+  gl_Position = u_proj * vp;
 }
 `;
 
 const FRAG_SRC = `
 precision highp float;
 
-varying vec3 v_pos;
-varying vec3 v_norm;
+varying vec3 v_viewPos;
+varying vec3 v_viewNorm;
+varying vec3 v_objPos;
+varying vec3 v_objNorm;
 varying vec2 v_uv;
-varying float v_wave;
 
 uniform vec3 u_baseColor;
 uniform sampler2D u_decalTex;
+uniform sampler2D u_normalMap;
+uniform sampler2D u_aoMap;
 uniform int u_hasDecal;
+uniform int u_hasNormalMap;
+uniform int u_hasAoMap;
 uniform int u_decalOnBack;
-uniform vec4 u_decalRect; // (centerU, centerV, widthU, heightV)
+uniform vec4 u_decalRect; // (centerX, centerY, widthX, heightY) en espacio 3D del torso
 
 void main() {
-  bool isBackShell = v_uv.x > 5.0;
-  float rawU = isBackShell ? (v_uv.x - 10.0) : v_uv.x;
-  bool isCollar = v_uv.y > 5.0;
-  float rawV = isCollar ? (v_uv.y - 10.0) : v_uv.y;
-
-  vec3 N = normalize(v_norm);
+  vec3 N = normalize(v_viewNorm);
   bool interior = !gl_FrontFacing;
   if (interior) {
     N = -N;
   }
 
-  // Micro-textura de tejido de algodón peinado + acanalado en el cuello
-  float weave = sin(rawU * 260.0) * sin(rawV * 260.0) * 0.018;
-  if (isCollar) {
-    weave += sin(rawU * 140.0) * 0.04;
+  // 1. Oclusión Ambiental (AO) real horneada del modelo 3D escaneado (pliegues y costuras reales)
+  float bakedAO = 1.0;
+  if (u_hasAoMap == 1) {
+    vec3 aoSample = texture2D(u_aoMap, v_uv).rgb;
+    float rawAO = (aoSample.r + aoSample.g + aoSample.b) / 3.0;
+    bakedAO = mix(1.0, rawAO, 0.85);
   }
 
-  vec3 base = u_baseColor + vec3(weave);
+  // 2. Micro-relieve real de tejido de algodón (Normal Map 8x8 de shirt_baked.glb)
+  float fabricGrain = 0.0;
+  if (u_hasNormalMap == 1) {
+    vec2 tiledUV = fract(v_uv * 8.0);
+    vec3 nSample = texture2D(u_normalMap, tiledUV).rgb * 2.0 - 1.0;
+    N = normalize(N + vec3(nSample.x, nSample.y, 0.0) * 0.24);
+    fabricGrain = (nSample.x + nSample.y) * 0.015;
+  }
 
-  // Aplicación del diseño / logo 3D sobre la superficie curva del pecho o espalda
+  vec3 base = clamp(u_baseColor + vec3(fabricGrain), 0.0, 1.0);
+  float decalMask = 0.0;
+
+  // 3. Proyección 3D del diseño / logo sobre el pecho o la espalda (respeta los pliegues 3D)
   if (u_hasDecal == 1 && !interior) {
-    bool targetSide = (u_decalOnBack == 1) ? isBackShell : (!isBackShell);
-    if (targetSide) {
-      //En la espalda invertimos X para que el diseño no salga espejado al girar 180 grados
-      float sideU = isBackShell ? (1.0 - rawU) : rawU;
-      float du = (sideU - u_decalRect.x) / u_decalRect.z + 0.5;
-      float dv = (rawV - u_decalRect.y) / u_decalRect.w + 0.5;
+    bool isBackTarget = (u_decalOnBack == 1);
+    float sideZ = isBackTarget ? -v_objPos.z : v_objPos.z;
+    float sideNz = isBackTarget ? -v_objNorm.z : v_objNorm.z;
+
+    // Solo proyectar en la cara frontal o trasera del torso (sin filtrarse a mangas ni espalda opuesta)
+    if (sideZ > 0.01 && sideNz > 0.12 && abs(v_objPos.x) < 0.44) {
+      float sideX = isBackTarget ? -v_objPos.x : v_objPos.x;
+      float du = (sideX - u_decalRect.x) / u_decalRect.z + 0.5;
+      float dv = (u_decalRect.y - v_objPos.y) / u_decalRect.w + 0.5;
+
       if (du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0) {
         vec4 tex = texture2D(u_decalTex, vec2(du, dv));
-        // Donde el fondo fue eliminado (tex.a == 0), queda exactamente el color de la camisa
-        base = mix(base, tex.rgb, tex.a);
+        float angleFade = smoothstep(0.12, 0.30, sideNz);
+        float alpha = tex.a * angleFade;
+        // Donde el fondo fue eliminado (alpha == 0), queda exactamente el color y textura de la camisa
+        base = mix(base, tex.rgb, alpha);
+        decalMask = alpha;
       }
     }
   }
 
-  // Etiqueta tejida interna ("CREATIVOS") en el interior del cuello trasero
-  if (interior && isBackShell && rawU > 0.42 && rawU < 0.58 && rawV > 0.07 && rawV < 0.145) {
-    base = vec3(0.95, 0.96, 0.98);
-    if (rawV > 0.095 && rawV < 0.115 && rawU > 0.44 && rawU < 0.56) {
-      base = vec3(0.12, 0.16, 0.24);
-    }
-  }
+  // 4. Iluminación de Estudio Fotográfico de 3 Puntos + Sheen de Algodón Peinado
+  vec3 V = normalize(-v_viewPos);
+  vec3 L_key = normalize(vec3(0.42, 0.68, 0.72));
+  vec3 L_fill = normalize(vec3(-0.62, 0.25, 0.58));
+  vec3 L_top = normalize(vec3(0.0, 0.92, 0.25));
 
-  // Iluminación tridimensional de estudio (3 puntos: Key Light, Fill Light, Rim Fresnel)
-  vec3 V = normalize(-v_pos);
-  vec3 L1 = normalize(vec3(0.45, 0.65, 0.85));
-  vec3 L2 = normalize(vec3(-0.65, 0.25, 0.55));
-  vec3 L3 = normalize(vec3(0.0, 0.85, -0.75));
+  // Half-Lambert suave para evitar sombras duras o aspecto plástico
+  float ndlKey = max(dot(N, L_key), 0.0);
+  float wrapKey = ndlKey * 0.68 + 0.32;
+  float ndlFill = max(dot(N, L_fill), 0.0);
+  float ndlTop = max(dot(N, L_top), 0.0);
 
-  float diff1 = max(dot(N, L1), 0.0);
-  float diff2 = max(dot(N, L2), 0.0) * 0.38;
-  float rim = pow(1.0 - max(dot(N, V), 0.0), 2.6) * 0.28;
-  float backRim = max(dot(N, L3), 0.0) * 0.18;
+  // Sheen aterciopelado de fibra de algodón en los bordes curvos (Fresnel suave)
+  float ndv = max(dot(N, V), 0.0);
+  float cottonSheen = pow(1.0 - ndv, 3.2) * 0.14 * (1.0 - decalMask * 0.5);
 
-  // Sombra de pliegues dinámicos 3D
-  float foldShade = 1.0 + v_wave * 4.2;
+  // Ligero brillo satinado sobre la tinta del diseño (estilo impresión DTF real)
+  vec3 H = normalize(L_key + V);
+  float inkSpec = pow(max(dot(N, H), 0.0), 28.0) * 0.08 * decalMask;
 
-  float lighting = (0.44 + 0.54 * diff1 + diff2) * foldShade;
+  float lighting = 0.34 + 0.54 * wrapKey + 0.18 * ndlFill + 0.09 * ndlTop;
 
-  // Si estamos viendo el INTERIOR hueco de la prenda (cuello, mangas o ruedo), oscurecemos por oclusión ambiental
+  // En el diseño impreso aplicamos también la oclusión de los pliegues para que no se vea plano
+  float effectiveAO = mix(bakedAO, mix(1.0, bakedAO, 0.72), decalMask);
+  lighting *= effectiveAO;
+
   if (interior) {
-    lighting *= 0.42;
-    rim *= 0.15;
+    // El interior del cuello/mangas se ve más oscuro por sombra natural de cavidad
+    lighting *= 0.52;
   }
 
-  vec3 finalColor = base * lighting + vec3(rim + backRim) * (0.35 + 0.65 * base);
+  vec3 finalColor = base * lighting + vec3(cottonSheen + inkSpec);
+
+  // Corrección tonal suave para mantener colores fieles
   gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
 }
 `;
+
+/* ============================================================================
+ * MATRICES DE CÁMARA 3D CON SOPORTE DE ZOOM Y ENCUADRE
+ * ========================================================================== */
 
 function createMat4Perspective(fovRad: number, aspect: number, near: number, far: number): Float32Array {
   const f = 1.0 / Math.tan(fovRad / 2);
@@ -459,18 +298,23 @@ function createMat4Perspective(fovRad: number, aspect: number, near: number, far
   ]);
 }
 
-function createMat4ModelView(rxDeg: number, ryDeg: number, tz: number, ty: number): Float32Array {
-  const rx = (rxDeg * Math.PI) / 180;
-  const ry = (ryDeg * Math.PI) / 180;
+function createMat4ModelView(
+  rotXDeg: number,
+  rotYDeg: number,
+  tz: number,
+  ty = 0,
+  tx = 0
+): Float32Array {
+  const rx = (rotXDeg * Math.PI) / 180;
+  const ry = (rotYDeg * Math.PI) / 180;
   const cx = Math.cos(rx), sx = Math.sin(rx);
   const cy = Math.cos(ry), sy = Math.sin(ry);
 
-  // R = Rx * Ry
   return new Float32Array([
     cy, sx * sy, -cx * sy, 0,
     0, cx, sx, 0,
     sy, -sx * cy, cx * cy, 0,
-    0, ty, tz, 1
+    tx, ty, tz, 1
   ]);
 }
 
@@ -481,7 +325,7 @@ function compileProgram(gl: WebGLRenderingContext): WebGLProgram | null {
     gl.shaderSource(s, src);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.warn(gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
       return null;
     }
     return s;
@@ -498,7 +342,7 @@ function compileProgram(gl: WebGLRenderingContext): WebGLProgram | null {
   return prog;
 }
 
-function computeDecalRect(
+function computeDecalRect3D(
   placement: DecalPlacement,
   scale: number,
   offsetX: number,
@@ -506,25 +350,33 @@ function computeDecalRect(
   aspect: number
 ): [number, number, number, number] {
   const s = clamp(scale, 0.35, 1.85);
-  let baseU = 0.5;
-  let baseV = 0.39;
-  let wU = 0.34 * s;
+  let baseX = 0.0;
+  let baseY = 0.14;
+  let widthX = 0.38 * s;
 
   if (placement === 'pocket') {
-    baseU = 0.64;
-    baseV = 0.31;
-    wU = 0.16 * s;
+    baseX = 0.165;
+    baseY = 0.25;
+    widthX = 0.165 * s;
   } else if (placement === 'full') {
-    baseU = 0.5;
-    baseV = 0.43;
-    wU = 0.48 * s;
+    baseX = 0.0;
+    baseY = 0.07;
+    widthX = 0.50 * s;
+  } else if (placement === 'back') {
+    baseX = 0.0;
+    baseY = 0.14;
+    widthX = 0.40 * s;
   }
 
-  const hV = (wU / Math.max(0.25, aspect)) * 0.85;
-  const centerU = clamp(baseU + offsetX * 0.01, 0.22, 0.78);
-  const centerV = clamp(baseV + offsetY * 0.01, 0.22, 0.74);
-  return [centerU, centerV, wU, hV];
+  const heightY = widthX / Math.max(0.25, aspect);
+  const centerX = clamp(baseX + offsetX * 0.011, -0.28, 0.28);
+  const centerY = clamp(baseY - offsetY * 0.014, -0.45, 0.36);
+  return [centerX, centerY, widthX, heightY];
 }
+
+/* ============================================================================
+ * COMPONENTES PÚBLICOS: ShirtPreview & InteractiveShirt3D (CON PANELES LATERALES Y ZOOM)
+ * ========================================================================== */
 
 export function ShirtPreview({
   hex,
@@ -555,6 +407,7 @@ export function ShirtPreview({
           designScale={designScale}
           designOffsetX={designOffsetX}
           designOffsetY={designOffsetY}
+          zoom={1}
           autoMotion
           compact
         />
@@ -565,7 +418,8 @@ export function ShirtPreview({
 }
 
 /**
- * Visor WebGL 3D Real (360° completos + Arrastre de Diseño sobre la prenda + Zoom + Controles de tamaño).
+ * Estudio 3D Interactivo con modelo escaneado real (`shirt_baked.glb`),
+ * controles intuitivos a los lados y Zoom de acercamiento para ver el diseño y la tela.
  */
 export function InteractiveShirt3D({
   hex,
@@ -588,13 +442,19 @@ export function InteractiveShirt3D({
   designScale?: number;
   designOffsetX?: number;
   designOffsetY?: number;
-  onDesignChange?: (patch: { scale?: number; offsetX?: number; offsetY?: number; placement?: DecalPlacement }) => void;
+  onDesignChange?: (patch: {
+    scale?: number;
+    offsetX?: number;
+    offsetY?: number;
+    placement?: DecalPlacement;
+  }) => void;
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
 }) {
   const [mode, setMode] = useState<MotionMode>('wind');
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
-  const [targetAngleY, setTargetAngleY] = useState<number | null>(null);
+  const [targetAngleY, setTargetAngleY] = useState<number | null>(0);
+  const [zoom, setZoom] = useState<number>(1);
 
   useEffect(() => {
     if (placement === 'back') setTargetAngleY(180);
@@ -606,55 +466,17 @@ export function InteractiveShirt3D({
     onDesignChange?.({ scale: next });
   };
 
+  const adjustZoom = (delta: number) => {
+    setZoom((z) => clamp(Math.round((z + delta) * 100) / 100, 0.85, 2.35));
+  };
+
   return (
-    <div className="relative flex flex-col items-center select-none">
-      {/* Barra superior: Ángulos 3D (Frente / Perfil / Espalda) + Animación + Stock en vivo */}
-      <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-1.5">
-        <div className="inline-flex rounded-full bg-slate-200/90 p-1">
-          {(
-            [
-              [0, 'Frente'],
-              [42, 'Perfil 3D'],
-              [180, 'Espalda']
-            ] as const
-          ).map(([angle, lbl]) => (
-            <button
-              key={lbl}
-              type="button"
-              className={`rounded-full px-3 py-1 text-xs font-bold transition ${
-                targetAngleY === angle ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
-              }`}
-              onClick={() => setTargetAngleY(angle)}
-            >
-              {lbl}
-            </button>
-          ))}
-        </div>
-
-        <div className="inline-flex rounded-full bg-slate-200/90 p-1">
-          {(
-            [
-              ['wind', '🌬️ Tela 3D'],
-              ['walk', '🚶 Caminata'],
-              ['orbit', '🔄 Giro 360°']
-            ] as const
-          ).map(([id, lbl]) => (
-            <button
-              key={id}
-              type="button"
-              className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${
-                mode === id ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
-              }`}
-              onClick={() => setMode(id)}
-            >
-              {lbl}
-            </button>
-          ))}
-        </div>
-
-        {stockBadge && (
+    <div className="relative select-none">
+      {/* Cabecera compacta con estado de stock en vivo */}
+      {stockBadge && (
+        <div className="mb-2 flex items-center justify-center">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs font-extrabold shadow-sm ${
               stockBadge.available
                 ? 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300'
                 : 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
@@ -667,101 +489,254 @@ export function InteractiveShirt3D({
             />
             {stockBadge.text}
           </span>
-        )}
-      </div>
-
-      {/* Controles directos sobre el visor cuando hay un diseño cargado */}
-      {designUrl && onDesignChange && (
-        <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-white/95 px-2.5 py-1.5 shadow-sm">
-          <button
-            type="button"
-            className={`rounded-xl px-2.5 py-1.5 text-xs font-bold transition ${
-              touchAction === 'rotate'
-                ? 'bg-slate-900 text-white'
-                : 'bg-slate-100 text-slate-700'
-            }`}
-            onClick={() => setTouchAction('rotate')}
-          >
-            🖐 Girar 3D
-          </button>
-          <button
-            type="button"
-            className={`rounded-xl px-2.5 py-1.5 text-xs font-bold transition ${
-              touchAction === 'moveDesign'
-                ? 'bg-sky-600 text-white'
-                : 'bg-slate-100 text-slate-700'
-            }`}
-            onClick={() => setTouchAction('moveDesign')}
-          >
-            ✥ Mover Diseño
-          </button>
-          <span className="mx-0.5 text-slate-300">|</span>
-          <button
-            type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-base font-extrabold text-slate-800 active:scale-95"
-            onClick={() => adjustScale(-0.12)}
-            title="Hacer diseño más pequeño"
-          >
-            −
-          </button>
-          <span className="min-w-[44px] text-center text-xs font-extrabold text-slate-700">
-            {Math.round(designScale * 100)}%
-          </span>
-          <button
-            type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-base font-extrabold text-slate-800 active:scale-95"
-            onClick={() => adjustScale(0.12)}
-            title="Hacer diseño más grande"
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600"
-            onClick={() => onDesignChange({ scale: 1, offsetX: 0, offsetY: 0 })}
-            title="Centrar diseño"
-          >
-            ↺ Centrar
-          </button>
         </div>
       )}
 
-      {/* Lienzo WebGL 3D Real */}
-      <div className="relative h-[340px] w-full max-w-[380px] sm:h-[380px]">
-        <WebGLShirtCanvas
-          hex={hex}
-          designUrl={designUrl || null}
-          placement={placement}
-          designScale={designScale}
-          designOffsetX={designOffsetX}
-          designOffsetY={designOffsetY}
-          autoMotion={autoMotion && touchAction !== 'moveDesign'}
-          mode={mode}
-          targetAngleY={targetAngleY}
-          touchAction={touchAction}
-          onMoveDesign={(dx, dy) => {
-            onDesignChange?.({
-              offsetX: clamp(designOffsetX + dx, -22, 22),
-              offsetY: clamp(designOffsetY + dy, -22, 24)
-            });
-          }}
-        />
-      </div>
+      {/* Disposición de Estudio: Panel Izquierdo (Cámara/Zoom) + Camisa 3D Central + Panel Derecho (Diseño) */}
+      <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[156px_1fr_168px]">
+        {/* PANEL LATERAL IZQUIERDO: Ángulo 3D, Zoom de Camisa y Movimiento */}
+        <div className="order-2 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:order-1 md:flex-col md:items-stretch">
+          <div className="w-full">
+            <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+              Ángulo 3D
+            </div>
+            <div className="grid grid-cols-3 gap-1 md:grid-cols-1">
+              {(
+                [
+                  [0, '👕 Frente'],
+                  [38, '📐 Perfil 3D'],
+                  [180, '🔄 Espalda']
+                ] as const
+              ).map(([angle, lbl]) => (
+                <button
+                  key={lbl}
+                  type="button"
+                  className={`min-h-[36px] rounded-xl px-2.5 py-1 text-left text-xs font-bold transition ${
+                    targetAngleY === angle
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  onClick={() => setTargetAngleY(angle)}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div className="mt-1 flex items-center gap-2 text-xs font-semibold text-slate-500">
-        <span>
-          {touchAction === 'moveDesign'
-            ? '✥ Arrastra sobre la camisa para colocar el diseño'
-            : '🖐 Arrastra 360° para girar la prenda en 3D real'}
-        </span>
-        <span>·</span>
-        <span className="font-bold text-slate-800">
-          {brandName} · {colorName}
-        </span>
+          {/* Controles de ZOOM de la Camisa */}
+          <div className="w-full border-t border-slate-100 pt-2">
+            <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+              <span>Zoom Camisa</span>
+              <span className="font-bold text-slate-700">{Math.round(zoom * 100)}%</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-sm font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95"
+                onClick={() => adjustZoom(-0.2)}
+                title="Alejar camisa"
+              >
+                🔍−
+              </button>
+              <button
+                type="button"
+                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-sm font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95"
+                onClick={() => adjustZoom(0.2)}
+                title="Acercar camisa para ver el diseño"
+              >
+                🔍+
+              </button>
+            </div>
+            <button
+              type="button"
+              className={`mt-1.5 min-h-[34px] w-full rounded-xl px-2 py-1 text-xs font-bold transition ${
+                zoom > 1.35
+                  ? 'bg-sky-600 text-white shadow-sm'
+                  : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+              }`}
+              onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.75))}
+            >
+              {zoom > 1.35 ? '🔭 Ver Camisa Completa' : '🎯 Acercar al Diseño'}
+            </button>
+          </div>
+
+          {/* Modo de movimiento 3D */}
+          <div className="w-full border-t border-slate-100 pt-2">
+            <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+              Movimiento
+            </div>
+            <div className="grid grid-cols-3 gap-1 md:grid-cols-1">
+              {(
+                [
+                  ['wind', '🌬️ Tela Viva'],
+                  ['walk', '🚶 Caminata'],
+                  ['orbit', '🔄 Giro 360°']
+                ] as const
+              ).map(([id, lbl]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`min-h-[34px] rounded-xl px-2.5 py-1 text-left text-xs font-bold transition ${
+                    mode === id
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  onClick={() => setMode(id)}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ESCENARIO CENTRAL: Prenda 3D Real (shirt_baked.glb) */}
+        <div className="order-1 flex flex-col items-center justify-center md:order-2">
+          <div className="relative h-[350px] w-full max-w-[390px] sm:h-[390px]">
+            <WebGLShirtCanvas
+              hex={hex}
+              designUrl={designUrl || null}
+              placement={placement}
+              designScale={designScale}
+              designOffsetX={designOffsetX}
+              designOffsetY={designOffsetY}
+              zoom={zoom}
+              onZoomChange={(nextZ) => setZoom(nextZ)}
+              autoMotion={autoMotion && touchAction !== 'moveDesign' && zoom <= 1.25}
+              mode={mode}
+              targetAngleY={targetAngleY}
+              touchAction={touchAction}
+              onMoveDesign={(dx, dy) => {
+                onDesignChange?.({
+                  offsetX: clamp(designOffsetX + dx, -22, 22),
+                  offsetY: clamp(designOffsetY + dy, -22, 24)
+                });
+              }}
+            />
+          </div>
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-1.5 text-center text-xs font-semibold text-slate-500">
+            <span>
+              {touchAction === 'moveDesign'
+                ? '✥ Arrastra sobre el pecho/espalda para mover el diseño'
+                : '🖐 Arrastra para girar 360° · Rueda del mouse para Zoom'}
+            </span>
+            <span>·</span>
+            <span className="font-bold text-slate-800">
+              {brandName} · {colorName}
+            </span>
+          </div>
+        </div>
+
+        {/* PANEL LATERAL DERECHO: Controles intuitivos del Diseño / Logo */}
+        <div className="order-3 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:flex-col md:items-stretch">
+          <div className="w-full">
+            <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+              Al arrastrar
+            </div>
+            <div className="grid grid-cols-2 gap-1 md:grid-cols-1">
+              <button
+                type="button"
+                className={`min-h-[38px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                  touchAction === 'rotate'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+                onClick={() => setTouchAction('rotate')}
+              >
+                🖐 Girar Camisa 3D
+              </button>
+              <button
+                type="button"
+                disabled={!designUrl}
+                className={`min-h-[38px] rounded-xl px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                  !designUrl
+                    ? 'cursor-not-allowed bg-slate-50 text-slate-300'
+                    : touchAction === 'moveDesign'
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
+                }`}
+                onClick={() => setTouchAction('moveDesign')}
+              >
+                ✥ Mover Diseño
+              </button>
+            </div>
+          </div>
+
+          <div className="w-full border-t border-slate-100 pt-2">
+            <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+              <span>Tamaño Diseño</span>
+              <span className="font-bold text-slate-700">{Math.round(designScale * 100)}%</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-base font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
+                onClick={() => adjustScale(-0.12)}
+                title="Hacer diseño más pequeño"
+              >
+                − Pequeño
+              </button>
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                className="flex h-9 flex-1 items-center justify-center rounded-xl bg-slate-100 text-base font-extrabold text-slate-800 hover:bg-slate-200 active:scale-95 disabled:opacity-40"
+                onClick={() => adjustScale(0.12)}
+                title="Hacer diseño más grande"
+              >
+                + Grande
+              </button>
+            </div>
+            <button
+              type="button"
+              disabled={!designUrl || !onDesignChange}
+              className="mt-1.5 min-h-[34px] w-full rounded-xl bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+              onClick={() => onDesignChange?.({ scale: 1, offsetX: 0, offsetY: 0 })}
+            >
+              ↺ Centrar Diseño
+            </button>
+          </div>
+
+          {onDesignChange && (
+            <div className="w-full border-t border-slate-100 pt-2">
+              <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                Zona Rápida
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {(
+                  [
+                    ['center', 'Pecho'],
+                    ['pocket', 'Logo Izq.'],
+                    ['full', 'Grande'],
+                    ['back', 'Espalda']
+                  ] as const
+                ).map(([id, lbl]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`min-h-[32px] rounded-lg px-1.5 py-1 text-[11px] font-bold transition ${
+                      placement === id
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                    onClick={() => onDesignChange({ placement: id, offsetX: 0, offsetY: 0 })}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
+
+/* ============================================================================
+ * LIENZO WEBGL 3D QUE RENDERIZA EL MODELO ESCANEADO REAL (shirt_baked.glb)
+ * ========================================================================== */
 
 function WebGLShirtCanvas({
   hex,
@@ -770,6 +745,8 @@ function WebGLShirtCanvas({
   designScale = 1,
   designOffsetX = 0,
   designOffsetY = 0,
+  zoom = 1,
+  onZoomChange,
   autoMotion = true,
   mode = 'wind',
   targetAngleY = null,
@@ -783,6 +760,8 @@ function WebGLShirtCanvas({
   designScale?: number;
   designOffsetX?: number;
   designOffsetY?: number;
+  zoom?: number;
+  onZoomChange?: (nextZoom: number) => void;
   autoMotion?: boolean;
   mode?: MotionMode;
   targetAngleY?: number | null;
@@ -798,12 +777,17 @@ function WebGLShirtCanvas({
     designScale,
     designOffsetX,
     designOffsetY,
+    zoom,
+    onZoomChange,
     autoMotion,
     mode,
     touchAction,
     onMoveDesign,
     hasDecal: false,
-    decalAspect: 1
+    hasNormalMap: false,
+    hasAoMap: false,
+    decalAspect: 1,
+    indexCount: 0
   });
   stateRef.current = {
     hex,
@@ -811,20 +795,26 @@ function WebGLShirtCanvas({
     designScale,
     designOffsetX,
     designOffsetY,
+    zoom,
+    onZoomChange,
     autoMotion,
     mode,
     touchAction,
     onMoveDesign,
     hasDecal: stateRef.current.hasDecal,
-    decalAspect: stateRef.current.decalAspect
+    hasNormalMap: stateRef.current.hasNormalMap,
+    hasAoMap: stateRef.current.hasAoMap,
+    decalAspect: stateRef.current.decalAspect,
+    indexCount: stateRef.current.indexCount
   };
 
   const rotRef = useRef({
-    rx: 8,
-    ry: -18,
+    rx: 5,
+    ry: -14,
     vx: 0,
     vy: 0,
     baseRy: 0,
+    smoothZoom: zoom,
     dragging: false,
     lastX: 0,
     lastY: 0
@@ -839,22 +829,23 @@ function WebGLShirtCanvas({
 
   const glRef = useRef<{
     gl: WebGLRenderingContext;
-    tex: WebGLTexture | null;
+    decalTex: WebGLTexture | null;
   } | null>(null);
 
-  // Actualizar textura WebGL cuando cambia el diseño
+  // Actualizar textura del diseño (Decal) cuando cambia designUrl
   useEffect(() => {
     const ctx = glRef.current;
     if (!ctx) return;
-    const { gl, tex } = ctx;
-    if (!designUrl || !tex) {
+    const { gl, decalTex } = ctx;
+    if (!designUrl || !decalTex) {
       stateRef.current.hasDecal = false;
       return;
     }
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, decalTex);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -878,35 +869,15 @@ function WebGLShirtCanvas({
     if (!prog) return;
     gl.useProgram(prog);
 
-    const mesh = buildGarmentMesh();
+    const posBuf = gl.createBuffer();
+    const normBuf = gl.createBuffer();
+    const uvBuf = gl.createBuffer();
+    const idxBuf = gl.createBuffer();
 
-    const makeBuf = (target: number, data: ArrayBufferView) => {
-      const b = gl.createBuffer();
-      gl.bindBuffer(target, b);
-      gl.bufferData(target, data, gl.STATIC_DRAW);
-      return b;
-    };
-
-    const posBuf = makeBuf(gl.ARRAY_BUFFER, mesh.positions);
-    const normBuf = makeBuf(gl.ARRAY_BUFFER, mesh.normals);
-    const uvBuf = makeBuf(gl.ARRAY_BUFFER, mesh.uvs);
-    const idxBuf = makeBuf(gl.ELEMENT_ARRAY_BUFFER, mesh.indices);
-
-    const bindAttr = (buf: WebGLBuffer | null, name: string, size: number) => {
-      const loc = gl.getAttribLocation(prog, name);
-      if (loc < 0) return;
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
-    };
-
-    bindAttr(posBuf, 'a_pos', 3);
-    bindAttr(normBuf, 'a_norm', 3);
-    bindAttr(uvBuf, 'a_uv', 2);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Textura 0: Diseño del usuario (Decal)
+    const decalTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, decalTex);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
@@ -919,13 +890,46 @@ function WebGLShirtCanvas({
       new Uint8Array([0, 0, 0, 0])
     );
 
-    glRef.current = { gl, tex };
+    // Textura 1: Normal Map de algodón real (1024x1024 de shirt_baked.glb)
+    const normalTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, normalTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([128, 128, 255, 255])
+    );
 
-    // Si ya había un designUrl al montar, cargarlo
-    if (designUrl && tex) {
+    // Textura 2: Ambient Occlusion Map real (1024x1024 de shirt_baked.glb)
+    const aoTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, aoTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([255, 255, 255, 255])
+    );
+
+    glRef.current = { gl, decalTex };
+
+    // Si ya había un diseño al montar, cargarlo en TEXTURE0
+    if (designUrl && decalTex) {
       const img = new Image();
       img.onload = () => {
-        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, decalTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -937,14 +941,72 @@ function WebGLShirtCanvas({
       img.src = designUrl;
     }
 
+    let disposed = false;
+
+    // Cargar el modelo 3D real shirt_baked.glb y sus texturas horneadas
+    void loadRealShirtGLB().then((glbData) => {
+      if (disposed) return;
+
+      const bindAttr = (buf: WebGLBuffer | null, data: Float32Array, name: string, size: number) => {
+        const loc = gl.getAttribLocation(prog, name);
+        if (loc < 0) return;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+      };
+
+      bindAttr(posBuf, glbData.positions, 'a_pos', 3);
+      bindAttr(normBuf, glbData.normals, 'a_norm', 3);
+      bindAttr(uvBuf, glbData.uvs, 'a_uv', 2);
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, glbData.indices, gl.STATIC_DRAW);
+      stateRef.current.indexCount = glbData.indices.length;
+
+      if (glbData.normalImg && normalTex) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, normalTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, glbData.normalImg);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        stateRef.current.hasNormalMap = true;
+      }
+
+      if (glbData.aoImg && aoTex) {
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, aoTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, glbData.aoImg);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        stateRef.current.hasAoMap = true;
+      }
+    });
+
     const uProj = gl.getUniformLocation(prog, 'u_proj');
     const uView = gl.getUniformLocation(prog, 'u_view');
     const uTime = gl.getUniformLocation(prog, 'u_time');
     const uMode = gl.getUniformLocation(prog, 'u_mode');
+    const uMotionActive = gl.getUniformLocation(prog, 'u_motionActive');
     const uBaseColor = gl.getUniformLocation(prog, 'u_baseColor');
+    const uDecalTex = gl.getUniformLocation(prog, 'u_decalTex');
+    const uNormalMap = gl.getUniformLocation(prog, 'u_normalMap');
+    const uAoMap = gl.getUniformLocation(prog, 'u_aoMap');
     const uHasDecal = gl.getUniformLocation(prog, 'u_hasDecal');
+    const uHasNormalMap = gl.getUniformLocation(prog, 'u_hasNormalMap');
+    const uHasAoMap = gl.getUniformLocation(prog, 'u_hasAoMap');
     const uDecalOnBack = gl.getUniformLocation(prog, 'u_decalOnBack');
     const uDecalRect = gl.getUniformLocation(prog, 'u_decalRect');
+
+    gl.uniform1i(uDecalTex, 0);
+    gl.uniform1i(uNormalMap, 1);
+    gl.uniform1i(uAoMap, 2);
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
@@ -957,22 +1019,25 @@ function WebGLShirtCanvas({
       const st = stateRef.current;
       const r = rotRef.current;
 
+      // Interpolación suave de Zoom
+      r.smoothZoom += (st.zoom - r.smoothZoom) * 0.14;
+
       if (!r.dragging) {
         if (st.autoMotion) {
           if (st.mode === 'orbit') {
-            r.ry = (r.ry + 0.55) % 360;
+            r.ry = (r.ry + 0.5) % 360;
           } else if (st.mode === 'walk') {
-            const target = r.baseRy + Math.sin(elapsed * 3.2) * 18;
-            r.ry += (target - r.ry) * 0.1;
-            r.rx += (6 + Math.abs(Math.cos(elapsed * 3.2)) * 5 - r.rx) * 0.1;
-          } else {
-            const target = r.baseRy + Math.sin(elapsed * 1.15) * 24;
+            const target = r.baseRy + Math.sin(elapsed * 3.0) * 16;
             r.ry += (target - r.ry) * 0.08;
-            r.rx += (7 + Math.cos(elapsed * 0.85) * 4 - r.rx) * 0.08;
+            r.rx += (4 + Math.abs(Math.cos(elapsed * 3.0)) * 4 - r.rx) * 0.08;
+          } else {
+            const target = r.baseRy + Math.sin(elapsed * 1.1) * 20;
+            r.ry += (target - r.ry) * 0.07;
+            r.rx += (5 + Math.cos(elapsed * 0.8) * 3 - r.rx) * 0.07;
           }
         } else {
           r.ry += r.vy;
-          r.rx = clamp(r.rx + r.vx, -32, 38);
+          r.rx = clamp(r.rx + r.vx, -28, 32);
           r.vx *= 0.90;
           r.vy *= 0.90;
         }
@@ -982,43 +1047,63 @@ function WebGLShirtCanvas({
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-      const proj = createMat4Perspective((34 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 20.0);
-      const bounceY =
-        st.autoMotion && st.mode === 'walk'
-          ? Math.abs(Math.sin(elapsed * 3.2)) * 0.045 - 0.02
-          : Math.sin(elapsed * 1.8) * 0.025;
-      const view = createMat4ModelView(r.rx, r.ry, -3.15, bounceY);
+      if (st.indexCount > 0) {
+        const proj = createMat4Perspective(
+          (32 * Math.PI) / 180,
+          canvas.width / canvas.height,
+          0.1,
+          20.0
+        );
+        // Al hacer zoom (> 1), la cámara se acerca desde -3.05 hasta -1.30 y encuadra la zona del pecho
+        const camZ = -3.05 / clamp(r.smoothZoom, 0.85, 2.35);
+        const zoomFocusY = r.smoothZoom > 1.05 ? -(r.smoothZoom - 1.0) * 0.14 : 0;
+        const bounceY =
+          st.autoMotion && st.mode === 'walk'
+            ? Math.abs(Math.sin(elapsed * 3.0)) * 0.03 - 0.015
+            : st.autoMotion
+            ? Math.sin(elapsed * 1.6) * 0.015
+            : 0;
 
-      gl.uniformMatrix4fv(uProj, false, proj);
-      gl.uniformMatrix4fv(uView, false, view);
-      gl.uniform1f(uTime, elapsed);
-      gl.uniform1f(uMode, st.mode === 'walk' ? 1.0 : st.mode === 'orbit' ? 2.0 : 0.0);
+        const view = createMat4ModelView(r.rx, r.ry, camZ, bounceY + zoomFocusY);
 
-      const [cr, cg, cb] = hexToRgbNorm(st.hex);
-      gl.uniform3f(uBaseColor, cr, cg, cb);
+        gl.uniformMatrix4fv(uProj, false, proj);
+        gl.uniformMatrix4fv(uView, false, view);
+        gl.uniform1f(uTime, elapsed);
+        gl.uniform1f(uMode, st.mode === 'walk' ? 1.0 : st.mode === 'orbit' ? 2.0 : 0.0);
+        gl.uniform1f(uMotionActive, st.autoMotion ? 1.0 : 0.0);
 
-      gl.uniform1i(uHasDecal, st.hasDecal ? 1 : 0);
-      gl.uniform1i(uDecalOnBack, st.placement === 'back' ? 1 : 0);
-      const rect = computeDecalRect(
-        st.placement,
-        st.designScale,
-        st.designOffsetX,
-        st.designOffsetY,
-        st.decalAspect
-      );
-      gl.uniform4f(uDecalRect, rect[0], rect[1], rect[2], rect[3]);
+        const [cr, cg, cb] = hexToRgbNorm(st.hex);
+        gl.uniform3f(uBaseColor, cr, cg, cb);
 
-      gl.drawElements(gl.TRIANGLES, mesh.indices.length, gl.UNSIGNED_SHORT, 0);
+        gl.uniform1i(uHasDecal, st.hasDecal ? 1 : 0);
+        gl.uniform1i(uHasNormalMap, st.hasNormalMap ? 1 : 0);
+        gl.uniform1i(uHasAoMap, st.hasAoMap ? 1 : 0);
+        gl.uniform1i(uDecalOnBack, st.placement === 'back' ? 1 : 0);
+
+        const rect = computeDecalRect3D(
+          st.placement,
+          st.designScale,
+          st.designOffsetX,
+          st.designOffsetY,
+          st.decalAspect
+        );
+        gl.uniform4f(uDecalRect, rect[0], rect[1], rect[2], rect[3]);
+
+        gl.drawElements(gl.TRIANGLES, st.indexCount, gl.UNSIGNED_SHORT, 0);
+      }
 
       raf = requestAnimationFrame(render);
     };
 
     raf = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(raf);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const res = compact ? 320 : 640;
+  const res = compact ? 320 : 680;
 
   return (
     <canvas
@@ -1026,6 +1111,13 @@ function WebGLShirtCanvas({
       width={res}
       height={res}
       className="h-full w-full cursor-grab touch-none drop-shadow-xl active:cursor-grabbing"
+      onWheel={(e: any) => {
+        if (!stateRef.current.onZoomChange) return;
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.14 : -0.14;
+        const next = clamp(Math.round((stateRef.current.zoom + delta) * 100) / 100, 0.85, 2.35);
+        stateRef.current.onZoomChange(next);
+      }}
       onPointerDown={(e: any) => {
         const r = rotRef.current;
         r.dragging = true;
@@ -1050,7 +1142,7 @@ function WebGLShirtCanvas({
         } else {
           r.ry += dx * 0.55;
           r.baseRy = r.ry;
-          r.rx = clamp(r.rx + dy * 0.35, -32, 38);
+          r.rx = clamp(r.rx + dy * 0.35, -28, 32);
           r.vy = dx * 0.18;
           r.vx = dy * 0.12;
         }
