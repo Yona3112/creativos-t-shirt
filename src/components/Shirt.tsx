@@ -4,7 +4,7 @@ import { contrastText } from '../lib/inventory';
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
 export type MotionMode = 'wind' | 'walk' | 'orbit';
 
-function hexToRgb(hex: string): [number, number, number] {
+function hexToRgbNorm(hex: string): [number, number, number] {
   const clean = (hex || '#111827').replace('#', '');
   const full =
     clean.length === 3
@@ -14,452 +14,558 @@ function hexToRgb(hex: string): [number, number, number] {
           .join('')
       : clean.padEnd(6, '0');
   const num = parseInt(full.slice(0, 6), 16) || 0;
-  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+  return [((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255];
 }
 
-/** Trazo anatómico realista de camiseta en maniquí invisible (Ghost Mannequin). */
-function traceGarmentSilhouette(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  // Hombro izquierdo externo desde el cuello
-  ctx.moveTo(192, 62);
-  ctx.bezierCurveTo(156, 68, 118, 80, 92, 96);
-  // Manga izquierda exterior (caída anatómica natural)
-  ctx.bezierCurveTo(68, 112, 42, 156, 26, 202);
-  // Abertura de puño izquierdo con curva de volumen
-  ctx.bezierCurveTo(46, 216, 74, 226, 98, 232);
-  // Interior de manga izquierda hacia la sisa (axila)
-  ctx.bezierCurveTo(108, 206, 116, 184, 122, 174);
-  // Costado izquierdo del torso (caída natural con ligero entalle)
-  ctx.bezierCurveTo(118, 248, 116, 350, 112, 456);
-  // Dobladillo inferior curvo 3D
-  ctx.bezierCurveTo(185, 474, 327, 474, 400, 456);
-  // Costado derecho del torso hacia la sisa derecha
-  ctx.bezierCurveTo(396, 350, 394, 248, 390, 174);
-  // Interior de manga derecha
-  ctx.bezierCurveTo(396, 184, 404, 206, 414, 232);
-  // Abertura de puño derecho
-  ctx.bezierCurveTo(438, 226, 466, 216, 486, 202);
-  // Manga derecha exterior hacia hombro derecho
-  ctx.bezierCurveTo(470, 156, 444, 112, 420, 96);
-  // Hombro derecho hacia el cuello
-  ctx.bezierCurveTo(394, 80, 356, 68, 320, 62);
-  // Borde superior del cuello trasero (maniquí invisible)
-  ctx.bezierCurveTo(286, 52, 226, 52, 192, 62);
-  ctx.closePath();
+/* ============================================================================
+ * GENERADOR DE MALLA 3D VOLUMÉTRICA (GHOST MANNEQUIN / PERSONAJE INVISIBLE)
+ * Construye una prenda 3D cerrada en hombros, costados y mangas, y ABIERTA en
+ * cuello, puños y ruedo inferior, con normales suaves y coordenadas UV.
+ * ========================================================================== */
+
+interface MeshData {
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  indices: Uint16Array;
+}
+
+function clamp(x: number, a: number, b: number): number {
+  return x < a ? a : x > b ? b : x;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 /**
- * Dibuja una prenda realista estilo Ghost Mannequin (Personaje Invisible) en un contexto 512x520,
- * con cavidad 3D en cuello/puños/dobladillo, volumen anatómico de pecho/hombros, pliegues reales de tela
- * y estampado integrado en los pliegues.
+ * Evalúa si un punto (x, y) pertenece a la silueta anatómica de la camisa
+ * y devuelve:
+ * - thickness: grosor Z en ese punto (0 en las costuras cerradas laterales/hombros, > 0 en el interior y en las aberturas huecas)
+ * - inside: true si está dentro de la prenda (para la capa dada: front o back)
+ * - fold: pliegue estático natural de caída de tela
  */
-function renderGhostMannequinFrame(
-  ctx: CanvasRenderingContext2D,
-  opts: {
-    hex: string;
-    side: 'front' | 'back';
-    ry: number;
-    rx: number;
-    phase: number;
-    mode: MotionMode;
-    designImg: HTMLImageElement | null;
-    placement: DecalPlacement;
-    designScale: number;
-    designOffsetY: number;
+function sampleGarmentVolume(
+  x: number,
+  y: number,
+  isFront: boolean
+): { inside: boolean; z: number; fold: number; isCollar: number } {
+  const ax = Math.abs(x);
+
+  // Límites verticales globales
+  if (y < -0.92 || y > 0.82) {
+    return { inside: false, z: 0, fold: 0, isCollar: 0 };
   }
-) {
-  const W = 512;
-  const H = 520;
-  ctx.clearRect(0, 0, W, H);
 
-  const [r, g, b] = hexToRgb(opts.hex);
-  const lum = (r * 299 + g * 587 + b * 114) / 1000;
-  const isDark = lum < 90;
+  // 1. Torso vs Mangas
+  // El torso tiene semiancho ~0.46 en cintura, ensanchándose a 0.50 en pecho (y=0.25) y hombros
+  const torsoHalfW =
+    0.455 +
+    0.035 * Math.exp(-Math.pow((y - 0.22) / 0.28, 2)) +
+    0.02 * smoothstep(-0.3, -0.9, y);
 
-  // Parallax 3D entre el frente y el interior hueco del cuello/ruedos
-  const parallaxX = opts.ry * 0.42;
-  const parallaxY = opts.rx * 0.28;
-  const wave = Math.sin(opts.phase * 2.2);
-  const walkSwing = opts.mode === 'walk' ? Math.sin(opts.phase * 3.2) : 0;
-
-  ctx.save();
-
-  // 1. Hueco inferior (interior trasero del dobladillo que da efecto de "personaje invisible")
-  ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(256 - parallaxX * 0.4, 456 - parallaxY * 0.3, 142, 16, 0, 0, Math.PI * 2);
-  ctx.fillStyle = `rgb(${Math.max(0, Math.round(r * 0.38))}, ${Math.max(
-    0,
-    Math.round(g * 0.38)
-  )}, ${Math.max(0, Math.round(b * 0.38))})`;
-  ctx.fill();
-  ctx.restore();
-
-  // 2. Huecos de los puños (efecto manga hueca 3D)
-  ctx.save();
-  ctx.fillStyle = `rgb(${Math.max(0, Math.round(r * 0.32))}, ${Math.max(
-    0,
-    Math.round(g * 0.32)
-  )}, ${Math.max(0, Math.round(b * 0.32))})`;
-  ctx.beginPath();
-  ctx.ellipse(62, 217, 36, 9, 0.38, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(450, 217, 36, 9, -0.38, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // 3. Recorte de la silueta anatómica principal
-  traceGarmentSilhouette(ctx);
-  ctx.save();
-  ctx.clip();
-
-  // Color base de la tela
-  ctx.fillStyle = opts.hex;
-  ctx.fillRect(0, 0, W, H);
-
-  // 4. Iluminación volumétrica 3D de estudio (pecho cilíndrico + hombros + caída)
-  const lightCenterX = 256 - opts.ry * 3.2;
-  const lightCenterY = 195 - opts.rx * 2.2;
-  const chestGlow = ctx.createRadialGradient(lightCenterX, lightCenterY, 18, 256, 260, 275);
-  if (isDark) {
-    // En telas oscuras (Negro, Azul Marino, Vino) resaltamos el brillo de algodón de estudio
-    chestGlow.addColorStop(0, 'rgba(255,255,255,0.22)');
-    chestGlow.addColorStop(0.45, 'rgba(255,255,255,0.06)');
-    chestGlow.addColorStop(0.78, 'rgba(0,0,0,0.18)');
-    chestGlow.addColorStop(1, 'rgba(0,0,0,0.48)');
+  // Línea superior de hombro / manga exterior: baja desde (ax=0.24, y=0.78) hasta (ax=0.96, y=0.22)
+  let topLimit = 0.78;
+  if (ax <= 0.24) {
+    topLimit = 0.78;
+  } else if (ax <= 0.52) {
+    // Caída de hombro
+    topLimit = 0.78 - ((ax - 0.24) / 0.28) * 0.13;
   } else {
-    chestGlow.addColorStop(0, 'rgba(255,255,255,0.34)');
-    chestGlow.addColorStop(0.45, 'rgba(255,255,255,0.05)');
-    chestGlow.addColorStop(0.8, 'rgba(15,23,42,0.12)');
-    chestGlow.addColorStop(1, 'rgba(15,23,42,0.32)');
+    // Borde superior de manga (ángulo natural de 38 grados)
+    topLimit = 0.65 - ((ax - 0.52) / 0.44) * 0.43;
   }
-  ctx.fillStyle = chestGlow;
-  ctx.fillRect(0, 0, W, H);
 
-  // Sombreado cilíndrico lateral del torso (volumen de maniquí invisible)
-  const torsoCyl = ctx.createLinearGradient(110, 0, 402, 0);
-  torsoCyl.addColorStop(0, 'rgba(0,0,0,0.32)');
-  torsoCyl.addColorStop(0.14, 'rgba(255,255,255,0.08)');
-  torsoCyl.addColorStop(0.32, 'rgba(0,0,0,0.02)');
-  torsoCyl.addColorStop(0.5, 'rgba(255,255,255,0.10)');
-  torsoCyl.addColorStop(0.68, 'rgba(0,0,0,0.02)');
-  torsoCyl.addColorStop(0.86, 'rgba(255,255,255,0.07)');
-  torsoCyl.addColorStop(1, 'rgba(0,0,0,0.34)');
-  ctx.fillStyle = torsoCyl;
-  ctx.fillRect(105, 60, 302, 420);
+  if (y > topLimit) {
+    return { inside: false, z: 0, fold: 0, isCollar: 0 };
+  }
 
-  // 5. Estampado / Diseño aplicado sobre el pecho o espalda (ANTES de las sombras de pliegues para realismo total)
-  const showDecal =
-    !!opts.designImg &&
-    ((opts.side === 'front' && opts.placement !== 'back') ||
-      (opts.side === 'back' && opts.placement === 'back'));
+  // 2. Recorte del cuello (Crew Neck 3D):
+  // En el frente el cuello baja hasta y = 0.46 (curva U profunda);
+  // En la espalda el cuello es alto (baja solo hasta y = 0.70), dejando ver el interior trasero desde el frente!
+  const neckRadiusX = 0.245;
+  let isCollar = 0;
+  if (ax < neckRadiusX) {
+    const nx = ax / neckRadiusX;
+    const neckCurve = Math.sqrt(Math.max(0, 1 - nx * nx));
+    const neckThreshold = isFront ? 0.77 - 0.30 * neckCurve : 0.78 - 0.075 * neckCurve;
+    if (y > neckThreshold) {
+      return { inside: false, z: 0, fold: 0, isCollar: 0 };
+    }
+    // Banda acanalada del cuello (collar rib) alrededor del borde del cuello
+    const distToNeck = neckThreshold - y;
+    if (distToNeck < 0.055) {
+      isCollar = 1 - distToNeck / 0.055;
+    }
+  }
 
-  if (showDecal && opts.designImg) {
-    const img = opts.designImg;
-    const aspect = img.naturalWidth / Math.max(1, img.naturalHeight);
-    const s = Math.max(0.5, Math.min(1.5, opts.designScale));
-    let targetW = 152 * s;
-    let centerX = 256 + parallaxX * 0.25;
-    let centerY = 225 + opts.designOffsetY * 3.2;
-
-    if (opts.placement === 'pocket') {
-      targetW = 72 * s;
-      centerX = 312 + parallaxX * 0.2;
-      centerY = 182 + opts.designOffsetY * 2.5;
-    } else if (opts.placement === 'full') {
-      targetW = 205 * s;
-      centerY = 248 + opts.designOffsetY * 3.2;
+  // 3. Región del Torso vs Región de la Manga
+  if (ax <= torsoHalfW && y <= 0.66) {
+    // Estamos en el torso
+    // Dobladillo inferior curvo
+    const hemY = -0.88 - 0.03 * (1 - Math.pow(ax / torsoHalfW, 2));
+    if (y < hemY) {
+      return { inside: false, z: 0, fold: 0, isCollar: 0 };
     }
 
-    const targetH = targetW / aspect;
+    // Perfil cilíndrico horizontal: se cierra suavemente en los costados (ax -> torsoHalfW)
+    // EXCEPTO en la unión con la manga (y entre 0.14 y 0.65), donde el volumen continúa hacia el hombro/manga
+    const sideRatio = clamp(ax / torsoHalfW, 0, 1);
+    const armholeBlend = smoothstep(0.08, 0.28, y) * (1 - smoothstep(0.60, 0.75, y));
+    const effectiveRatio = sideRatio * (1 - 0.48 * armholeBlend);
+    const cylProfile = Math.sqrt(Math.max(0, 1 - effectiveRatio * effectiveRatio));
 
-    // Deformación sutil por tiras verticales para seguir la curvatura 3D del pecho y la onda de la tela
-    const slices = 18;
-    const sliceW = targetW / slices;
-    const srcSliceW = img.naturalWidth / slices;
-
-    ctx.save();
-    for (let i = 0; i < slices; i++) {
-      const u = (i + 0.5) / slices - 0.5; // -0.5 a +0.5
-      // Curvatura de cilindro de pecho + onda de viento en vivo
-      const archY = Math.cos(u * Math.PI) * 5 - 3;
-      const rippleY = Math.sin(opts.phase * 2.6 + u * 5.2) * 2.2;
-      const dx = centerX - targetW / 2 + i * sliceW;
-      const dy = centerY - targetH / 2 + archY + rippleY;
-
-      ctx.drawImage(
-        img,
-        i * srcSliceW,
-        0,
-        srcSliceW,
-        img.naturalHeight,
-        dx,
-        dy,
-        sliceW + 0.6,
-        targetH
-      );
+    // Cierre suave en la costura superior del hombro (solo para ax > neckRadiusX)
+    let shoulderSeam = 1;
+    if (ax >= neckRadiusX - 0.01) {
+      const distTop = clamp((topLimit - y) / 0.08, 0, 1);
+      shoulderSeam = Math.sqrt(distTop);
     }
-    ctx.restore();
+
+    // Contorno anatómico: pecho ligeramente más prominente arriba, espalda con volumen escapular
+    const anatomyZ = isFront
+      ? 0.27 + 0.055 * Math.exp(-Math.pow((y - 0.22) / 0.32, 2))
+      : 0.24 + 0.045 * Math.exp(-Math.pow((y - 0.28) / 0.34, 2));
+
+    // Pliegues verticales naturales de caída + pliegues diagonales desde la sisa
+    const drape =
+      0.012 * Math.sin(x * 18.0 + y * 2.5) * smoothstep(0.35, -0.85, y) +
+      0.010 * Math.cos(x * 31.0 - y * 4.0) * smoothstep(0.1, -0.85, y);
+    const armpitDist = Math.hypot(ax - 0.44, y - 0.16);
+    const armpitCrease =
+      0.016 *
+      Math.sin((ax - 0.2) * 28 + (y - 0.16) * 22) *
+      Math.exp(-Math.pow(armpitDist / 0.22, 2));
+
+    const fold = drape + armpitCrease;
+    const collarBump = isCollar > 0 ? 0.014 * Math.sin(isCollar * Math.PI) : 0;
+    const zMag = anatomyZ * cylProfile * shoulderSeam + fold + collarBump;
+
+    return {
+      inside: true,
+      z: isFront ? zMag : -zMag,
+      fold,
+      isCollar
+    };
   }
 
-  // 6. Pliegues dinámicos de tela (ondas suaves de viento y tensión en pecho/axilas/cintura)
-  ctx.save();
-  const foldCount = 7;
-  for (let i = 0; i < foldCount; i++) {
-    const t = i / (foldCount - 1);
-    const baseX = 142 + t * 228;
-    const sway = Math.sin(opts.phase * 2.2 + i * 1.15) * (5 + t * 3) + walkSwing * 4;
-    const fx = baseX + sway;
+  // 4. Región de la Manga (ax > torsoHalfW o esquina de hombro)
+  // Eje central de la manga desde el hombro (0.44, 0.45) hacia el puño (0.86, 0.05)
+  const x0 = 0.44;
+  const y0 = 0.44;
+  const dirX = 0.80;
+  const dirY = -0.60; // vector unitario a lo largo de la manga
+  const perpX = 0.60;
+  const perpY = 0.80; // vector unitario perpendicular al tubo de la manga
 
-    const foldGrad = ctx.createLinearGradient(fx - 18, 120, fx + 18, 450);
-    foldGrad.addColorStop(0, 'rgba(0,0,0,0)');
-    foldGrad.addColorStop(0.35, isDark ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.12)');
-    foldGrad.addColorStop(0.55, isDark ? 'rgba(0,0,0,0.20)' : 'rgba(15,23,42,0.09)');
-    foldGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  const dx = ax - x0;
+  const dy = y - y0;
+  const along = dx * dirX + dy * dirY; // distancia a lo largo de la manga (0 .. 0.50)
+  const across = dx * perpX + dy * perpY; // distancia transversal al eje de la manga
 
-    ctx.fillStyle = foldGrad;
-    ctx.beginPath();
-    ctx.moveTo(baseX - 16, 110);
-    ctx.quadraticCurveTo(fx, 285, baseX + sway * 1.3 - 12, 465);
-    ctx.lineTo(baseX + sway * 1.3 + 16, 465);
-    ctx.quadraticCurveTo(fx + 14, 285, baseX + 16, 110);
-    ctx.closePath();
-    ctx.fill();
+  const maxSleeveLen = 0.46;
+  if (along < -0.18 || along > maxSleeveLen) {
+    return { inside: false, z: 0, fold: 0, isCollar: 0 };
   }
 
-  // Pliegues anatómicos de tensión desde las sisas (axilas) hacia el pecho
-  const drawCrease = (x1: number, y1: number, cx: number, cy: number, x2: number, y2: number, alpha: number) => {
-    ctx.save();
-    ctx.strokeStyle = `rgba(0,0,0,${alpha})`;
-    ctx.lineWidth = 6;
-    ctx.lineCap = 'round';
-    ctx.filter = 'blur(3px)';
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.quadraticCurveTo(cx, cy + wave * 2, x2, y2);
-    ctx.stroke();
+  // Radio del tubo de la manga (se estrecha suavemente hacia el puño)
+  const tSleeve = clamp(along / maxSleeveLen, 0, 1);
+  const sleeveRadius = 0.21 * (1 - 0.20 * tSleeve);
 
-    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1 - 3);
-    ctx.quadraticCurveTo(cx, cy - 3 + wave * 2, x2, y2 - 3);
-    ctx.stroke();
-    ctx.restore();
+  if (Math.abs(across) > sleeveRadius) {
+    return { inside: false, z: 0, fold: 0, isCollar: 0 };
+  }
+
+  // Transición bajo la axila para evitar picos entre torso y manga
+  if (ax < torsoHalfW + 0.06 && y < 0.14) {
+    return { inside: false, z: 0, fold: 0, isCollar: 0 };
+  }
+
+  // Perfil cilíndrico transversal de la manga:
+  // Se cierra a 0 en el borde superior e inferior de la manga (across -> ±sleeveRadius),
+  // pero queda ABIERTO en el puño (along == maxSleeveLen) para que la manga sea hueca en 3D!
+  const rNorm = clamp(across / sleeveRadius, -1, 1);
+  const sleeveCyl = Math.sqrt(Math.max(0, 1 - rNorm * rNorm));
+  const sleeveFold = 0.008 * Math.sin(along * 26 + across * 18);
+  const zSleeve = (0.19 * (1 - 0.15 * tSleeve)) * sleeveCyl + sleeveFold;
+
+  return {
+    inside: true,
+    z: isFront ? zSleeve : -zSleeve,
+    fold: sleeveFold,
+    isCollar: 0
+  };
+}
+
+let cachedMesh: MeshData | null = null;
+
+function buildGarmentMesh(): MeshData {
+  if (cachedMesh) return cachedMesh;
+
+  const NX = 112;
+  const NY = 112;
+  const minX = -0.96;
+  const maxX = 0.96;
+  const minY = -0.92;
+  const maxY = 0.82;
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  const buildShell = (isFront: boolean) => {
+    const vertIndex = new Int32Array(NX * NY).fill(-1);
+    const zGrid = new Float32Array(NX * NY);
+    const insideGrid = new Uint8Array(NX * NY);
+    const collarGrid = new Float32Array(NX * NY);
+
+    for (let j = 0; j < NY; j++) {
+      const v = j / (NY - 1);
+      const y = minY + v * (maxY - minY);
+      for (let i = 0; i < NX; i++) {
+        const u = i / (NX - 1);
+        const x = minX + u * (maxX - minX);
+        const idx = j * NX + i;
+        const sample = sampleGarmentVolume(x, y, isFront);
+        if (sample.inside) {
+          insideGrid[idx] = 1;
+          zGrid[idx] = sample.z;
+          collarGrid[idx] = sample.isCollar;
+        }
+      }
+    }
+
+    const dxStep = (maxX - minX) / (NX - 1);
+    const dyStep = (maxY - minY) / (NY - 1);
+
+    for (let j = 0; j < NY; j++) {
+      const v = j / (NY - 1);
+      const y = minY + v * (maxY - minY);
+      for (let i = 0; i < NX; i++) {
+        const idx = j * NX + i;
+        if (!insideGrid[idx]) continue;
+
+        const u = i / (NX - 1);
+        const x = minX + u * (maxX - minX);
+        const z = zGrid[idx];
+
+        // Derivadas finitas para la normal 3D suave
+        const zL = i > 0 && insideGrid[idx - 1] ? zGrid[idx - 1] : 0;
+        const zR = i < NX - 1 && insideGrid[idx + 1] ? zGrid[idx + 1] : 0;
+        const zD = j > 0 && insideGrid[idx - NX] ? zGrid[idx - NX] : 0;
+        const zU = j < NY - 1 && insideGrid[idx + NX] ? zGrid[idx + NX] : 0;
+
+        const dzdx = (zR - zL) / (2 * dxStep);
+        const dzdy = (zU - zD) / (2 * dyStep);
+
+        let nx = -dzdx;
+        let ny = -dzdy;
+        let nz = 1.0;
+        if (!isFront) {
+          nx = dzdx;
+          ny = dzdy;
+          nz = -1.0;
+        }
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+
+        const vIdx = positions.length / 3;
+        vertIndex[idx] = vIdx;
+        positions.push(x, y, z);
+        normals.push(nx, ny, nz);
+        // Guardamos en uv: (x normalizado de pecho, y normalizado de pecho), con signo en U para distinguir Frente vs Espalda
+        const chestU = (x + 0.45) / 0.9; // 0..1 en el ancho del torso
+        const chestV = 1 - (y + 0.88) / 1.66; // 0 arriba .. 1 abajo
+        uvs.push(isFront ? chestU : chestU + 10.0, chestV + (collarGrid[idx] > 0.2 ? 10.0 : 0.0));
+      }
+    }
+
+    for (let j = 0; j < NY - 1; j++) {
+      for (let i = 0; i < NX - 1; i++) {
+        const a = vertIndex[j * NX + i];
+        const b = vertIndex[j * NX + i + 1];
+        const c = vertIndex[(j + 1) * NX + i];
+        const d = vertIndex[(j + 1) * NX + i + 1];
+        if (a >= 0 && b >= 0 && c >= 0 && d >= 0) {
+          if (isFront) {
+            indices.push(a, b, c, b, d, c);
+          } else {
+            indices.push(a, c, b, b, c, d);
+          }
+        }
+      }
+    }
   };
 
-  drawCrease(122, 174, 158, 198, 195, 228, isDark ? 0.34 : 0.16);
-  drawCrease(122, 162, 150, 172, 178, 188, isDark ? 0.25 : 0.12);
-  drawCrease(390, 174, 354, 198, 317, 228, isDark ? 0.34 : 0.16);
-  drawCrease(390, 162, 362, 172, 334, 188, isDark ? 0.25 : 0.12);
-  ctx.restore();
+  buildShell(true);
+  buildShell(false);
 
-  // 7. Costuras de mangas (sisas) y doble costura en puños y dobladillo
-  ctx.save();
-  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.13)' : 'rgba(15,23,42,0.16)';
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo(175, 66);
-  ctx.quadraticCurveTo(138, 122, 122, 174);
-  ctx.moveTo(337, 66);
-  ctx.quadraticCurveTo(374, 122, 390, 174);
-  ctx.stroke();
+  cachedMesh = {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    uvs: new Float32Array(uvs),
+    indices: new Uint16Array(indices)
+  };
+  return cachedMesh;
+}
 
-  // Costura de dobladillo inferior y puños
-  ctx.setLineDash([4, 3]);
-  ctx.beginPath();
-  ctx.moveTo(114, 444);
-  ctx.bezierCurveTo(185, 462, 327, 462, 398, 444);
-  ctx.moveTo(30, 192);
-  ctx.quadraticCurveTo(64, 212, 102, 221);
-  ctx.moveTo(482, 192);
-  ctx.quadraticCurveTo(448, 212, 410, 221);
-  ctx.stroke();
-  ctx.restore();
+/* ============================================================================
+ * SHADERS WEBGL 3D (ILUMINACIÓN PBR DE ALGODÓN + PLIEGUES VIVOS + ESTAMPADO UV)
+ * ========================================================================== */
 
-  // 8. Cavidad 3D del Cuello (Ghost Mannequin / Personaje Invisible)
-  if (opts.side === 'front') {
-    // Interior trasero del cuello visible a través de la abertura (con parallax 3D real)
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(190, 62);
-    ctx.bezierCurveTo(224, 52, 288, 52, 322, 62);
-    ctx.bezierCurveTo(310, 98, 286, 114, 256, 114);
-    ctx.bezierCurveTo(226, 114, 202, 98, 190, 62);
-    ctx.closePath();
-    ctx.clip();
+const VERT_SRC = `
+attribute vec3 a_pos;
+attribute vec3 a_norm;
+attribute vec2 a_uv;
 
-    // Tela interna de la espalda oscurecida por sombra profunda de cavidad
-    const neckDepthGrad = ctx.createLinearGradient(256, 52, 256, 116);
-    neckDepthGrad.addColorStop(
-      0,
-      `rgb(${Math.round(r * 0.52)}, ${Math.round(g * 0.52)}, ${Math.round(b * 0.52)})`
-    );
-    neckDepthGrad.addColorStop(
-      1,
-      `rgb(${Math.round(r * 0.22)}, ${Math.round(g * 0.22)}, ${Math.round(b * 0.22)})`
-    );
-    ctx.fillStyle = neckDepthGrad;
-    ctx.fillRect(180, 48, 152, 74);
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform float u_time;
+uniform float u_mode;
 
-    // Cinta de refuerzo interna del cuello trasero (neck tape)
-    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.18)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(192, 67 - parallaxY * 0.3);
-    ctx.quadraticCurveTo(256 - parallaxX * 0.5, 59 - parallaxY * 0.3, 320, 67 - parallaxY * 0.3);
-    ctx.stroke();
+varying vec3 v_pos;
+varying vec3 v_norm;
+varying vec2 v_uv;
+varying float v_wave;
 
-    // Etiqueta tejida interna ("CREATIVOS") que se desplaza con parallax 3D dentro del cuello
-    const tagX = 236 - parallaxX * 0.55;
-    const tagY = 66 - parallaxY * 0.35;
-    ctx.fillStyle = '#f8fafc';
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 4;
-    ctx.shadowOffsetY = 2;
-    ctx.fillRect(tagX, tagY, 40, 22);
-    ctx.shadowColor = 'transparent';
-    ctx.fillStyle = '#0f172a';
-    ctx.font = 'bold 7px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('CREATIVOS', tagX + 20, tagY + 10);
-    ctx.font = '6px system-ui, sans-serif';
-    ctx.fillStyle = '#475569';
-    ctx.fillText('GIFT SHOP', tagX + 20, tagY + 18);
-    ctx.restore();
+void main() {
+  vec3 p = a_pos;
+  vec3 n = a_norm;
 
-    // Ribete acanalado frontal del cuello redondo (con grosor 3D y sombra proyectada)
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.28)';
-    ctx.shadowBlur = 6;
-    ctx.shadowOffsetY = 3;
-    ctx.strokeStyle = `rgb(${Math.min(255, Math.round(r * 0.92 + 12))}, ${Math.min(
-      255,
-      Math.round(g * 0.92 + 12)
-    )}, ${Math.min(255, Math.round(b * 0.92 + 12))})`;
-    ctx.lineWidth = 11;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(189, 63);
-    ctx.bezierCurveTo(202, 102, 226, 118, 256, 118);
-    ctx.bezierCurveTo(286, 118, 310, 102, 323, 63);
-    ctx.stroke();
+  // Ondas reales 3D en los vértices de la tela (viento / caminata)
+  float lowerWeight = clamp((0.55 - p.y) / 1.4, 0.0, 1.0);
+  float windWave = sin(u_time * 2.6 + p.x * 7.5 + p.y * 4.0) * 0.016 * lowerWeight
+                 + cos(u_time * 1.9 - p.x * 12.0 + p.y * 6.0) * 0.009 * lowerWeight;
 
-    // Luz superior en el borde del cuello acanalado
-    ctx.shadowColor = 'transparent';
-    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.45)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(192, 63);
-    ctx.bezierCurveTo(205, 98, 227, 113, 256, 113);
-    ctx.bezierCurveTo(285, 113, 307, 98, 320, 63);
-    ctx.stroke();
-    ctx.restore();
-  } else {
-    // Vista Espalda: cuello alto acanalado con pequeña abertura de maniquí invisible
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(192, 62);
-    ctx.quadraticCurveTo(256, 53, 320, 62);
-    ctx.quadraticCurveTo(256, 74, 192, 62);
-    ctx.closePath();
-    ctx.fillStyle = `rgb(${Math.round(r * 0.28)}, ${Math.round(g * 0.28)}, ${Math.round(b * 0.28)})`;
-    ctx.fill();
-
-    ctx.strokeStyle = `rgb(${Math.min(255, Math.round(r * 0.94 + 10))}, ${Math.min(
-      255,
-      Math.round(g * 0.94 + 10)
-    )}, ${Math.min(255, Math.round(b * 0.94 + 10))})`;
-    ctx.lineWidth = 10;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(190, 63);
-    ctx.quadraticCurveTo(256, 76, 322, 63);
-    ctx.stroke();
-    ctx.restore();
+  if (u_mode > 0.5 && u_mode < 1.5) {
+    // Modo Caminata de Personaje Invisible: torsión opuesta entre hombros y cadera
+    float twist = sin(u_time * 3.2) * 0.16 * p.y;
+    float c = cos(twist);
+    float s = sin(twist);
+    p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
+    n = vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
+    windWave += sin(u_time * 6.4 + p.x * 9.0) * 0.012 * lowerWeight;
   }
 
-  ctx.restore(); // Fin de recorte de silueta
+  p.z += (n.z >= 0.0 ? 1.0 : -1.0) * windWave;
 
-  // 9. Contorno Fresnel sutil para definir la prenda sobre fondos claros u oscuros
-  ctx.save();
-  traceGarmentSilhouette(ctx);
-  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.18)';
-  ctx.lineWidth = 1.8;
-  ctx.stroke();
-  ctx.restore();
+  vec4 viewPos = u_view * vec4(p, 1.0);
+  v_pos = viewPos.xyz;
+  v_norm = mat3(u_view) * n;
+  v_uv = a_uv;
+  v_wave = windWave;
 
-  ctx.restore();
+  gl_Position = u_proj * viewPos;
+}
+`;
+
+const FRAG_SRC = `
+precision highp float;
+
+varying vec3 v_pos;
+varying vec3 v_norm;
+varying vec2 v_uv;
+varying float v_wave;
+
+uniform vec3 u_baseColor;
+uniform sampler2D u_decalTex;
+uniform int u_hasDecal;
+uniform int u_decalOnBack;
+uniform vec4 u_decalRect; // (centerU, centerV, widthU, heightV)
+
+void main() {
+  bool isBackShell = v_uv.x > 5.0;
+  float rawU = isBackShell ? (v_uv.x - 10.0) : v_uv.x;
+  bool isCollar = v_uv.y > 5.0;
+  float rawV = isCollar ? (v_uv.y - 10.0) : v_uv.y;
+
+  vec3 N = normalize(v_norm);
+  bool interior = !gl_FrontFacing;
+  if (interior) {
+    N = -N;
+  }
+
+  // Micro-textura de tejido de algodón peinado + acanalado en el cuello
+  float weave = sin(rawU * 260.0) * sin(rawV * 260.0) * 0.018;
+  if (isCollar) {
+    weave += sin(rawU * 140.0) * 0.04;
+  }
+
+  vec3 base = u_baseColor + vec3(weave);
+
+  // Aplicación del diseño / logo 3D sobre la superficie curva del pecho o espalda
+  if (u_hasDecal == 1 && !interior) {
+    bool targetSide = (u_decalOnBack == 1) ? isBackShell : (!isBackShell);
+    if (targetSide) {
+      //En la espalda invertimos X para que el diseño no salga espejado al girar 180 grados
+      float sideU = isBackShell ? (1.0 - rawU) : rawU;
+      float du = (sideU - u_decalRect.x) / u_decalRect.z + 0.5;
+      float dv = (rawV - u_decalRect.y) / u_decalRect.w + 0.5;
+      if (du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0) {
+        vec4 tex = texture2D(u_decalTex, vec2(du, dv));
+        // Donde el fondo fue eliminado (tex.a == 0), queda exactamente el color de la camisa
+        base = mix(base, tex.rgb, tex.a);
+      }
+    }
+  }
+
+  // Etiqueta tejida interna ("CREATIVOS") en el interior del cuello trasero
+  if (interior && isBackShell && rawU > 0.42 && rawU < 0.58 && rawV > 0.07 && rawV < 0.145) {
+    base = vec3(0.95, 0.96, 0.98);
+    if (rawV > 0.095 && rawV < 0.115 && rawU > 0.44 && rawU < 0.56) {
+      base = vec3(0.12, 0.16, 0.24);
+    }
+  }
+
+  // Iluminación tridimensional de estudio (3 puntos: Key Light, Fill Light, Rim Fresnel)
+  vec3 V = normalize(-v_pos);
+  vec3 L1 = normalize(vec3(0.45, 0.65, 0.85));
+  vec3 L2 = normalize(vec3(-0.65, 0.25, 0.55));
+  vec3 L3 = normalize(vec3(0.0, 0.85, -0.75));
+
+  float diff1 = max(dot(N, L1), 0.0);
+  float diff2 = max(dot(N, L2), 0.0) * 0.38;
+  float rim = pow(1.0 - max(dot(N, V), 0.0), 2.6) * 0.28;
+  float backRim = max(dot(N, L3), 0.0) * 0.18;
+
+  // Sombra de pliegues dinámicos 3D
+  float foldShade = 1.0 + v_wave * 4.2;
+
+  float lighting = (0.44 + 0.54 * diff1 + diff2) * foldShade;
+
+  // Si estamos viendo el INTERIOR hueco de la prenda (cuello, mangas o ruedo), oscurecemos por oclusión ambiental
+  if (interior) {
+    lighting *= 0.42;
+    rim *= 0.15;
+  }
+
+  vec3 finalColor = base * lighting + vec3(rim + backRim) * (0.35 + 0.65 * base);
+  gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
+}
+`;
+
+function createMat4Perspective(fovRad: number, aspect: number, near: number, far: number): Float32Array {
+  const f = 1.0 / Math.tan(fovRad / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0
+  ]);
+}
+
+function createMat4ModelView(rxDeg: number, ryDeg: number, tz: number, ty: number): Float32Array {
+  const rx = (rxDeg * Math.PI) / 180;
+  const ry = (ryDeg * Math.PI) / 180;
+  const cx = Math.cos(rx), sx = Math.sin(rx);
+  const cy = Math.cos(ry), sy = Math.sin(ry);
+
+  // R = Rx * Ry
+  return new Float32Array([
+    cy, sx * sy, -cx * sy, 0,
+    0, cx, sx, 0,
+    sy, -sx * cy, cx * cy, 0,
+    0, ty, tz, 1
+  ]);
+}
+
+function compileProgram(gl: WebGLRenderingContext): WebGLProgram | null {
+  const compile = (type: number, src: string) => {
+    const s = gl.createShader(type);
+    if (!s) return null;
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.warn(gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  };
+  const vs = compile(gl.VERTEX_SHADER, VERT_SRC);
+  const fs = compile(gl.FRAGMENT_SHADER, FRAG_SRC);
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  if (!prog) return null;
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+  return prog;
+}
+
+function computeDecalRect(
+  placement: DecalPlacement,
+  scale: number,
+  offsetX: number,
+  offsetY: number,
+  aspect: number
+): [number, number, number, number] {
+  const s = clamp(scale, 0.35, 1.85);
+  let baseU = 0.5;
+  let baseV = 0.39;
+  let wU = 0.34 * s;
+
+  if (placement === 'pocket') {
+    baseU = 0.64;
+    baseV = 0.31;
+    wU = 0.16 * s;
+  } else if (placement === 'full') {
+    baseU = 0.5;
+    baseV = 0.43;
+    wU = 0.48 * s;
+  }
+
+  const hV = (wU / Math.max(0.25, aspect)) * 0.85;
+  const centerU = clamp(baseU + offsetX * 0.01, 0.22, 0.78);
+  const centerV = clamp(baseV + offsetY * 0.01, 0.22, 0.74);
+  return [centerU, centerV, wU, hV];
 }
 
 export function ShirtPreview({
   hex,
   label,
   size = 150,
-  designUrl
+  designUrl,
+  designScale = 1,
+  designOffsetX = 0,
+  designOffsetY = 0,
+  placement = 'center'
 }: {
   hex: string;
   label?: string;
   size?: number;
   designUrl?: string | null;
+  designScale?: number;
+  designOffsetX?: number;
+  designOffsetY?: number;
+  placement?: DecalPlacement;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const [imgTick, setImgTick] = useState(0);
-
-  useEffect(() => {
-    if (!designUrl) {
-      imgRef.current = null;
-      setImgTick((t) => t + 1);
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      imgRef.current = img;
-      setImgTick((t) => t + 1);
-    };
-    img.src = designUrl;
-  }, [designUrl]);
-
-  useEffect(() => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const ctx = c.getContext('2d');
-    if (!ctx) return;
-    renderGhostMannequinFrame(ctx, {
-      hex,
-      side: 'front',
-      ry: -6,
-      rx: 3,
-      phase: 0.6,
-      mode: 'wind',
-      designImg: imgRef.current,
-      placement: 'center',
-      designScale: 1,
-      designOffsetY: 0
-    });
-  }, [hex, imgTick]);
-
   return (
     <div className="flex flex-col items-center select-none">
-      <canvas
-        ref={canvasRef}
-        width={512}
-        height={520}
-        style={{ width: size, height: size }}
-        className="drop-shadow-md"
-        aria-label={label || 'Vista previa'}
-      />
+      <div style={{ width: size, height: size }}>
+        <WebGLShirtCanvas
+          hex={hex}
+          designUrl={designUrl || null}
+          placement={placement}
+          designScale={designScale}
+          designOffsetX={designOffsetX}
+          designOffsetY={designOffsetY}
+          autoMotion
+          compact
+        />
+      </div>
       {label && <span className="mt-1 text-sm font-semibold text-slate-700">{label}</span>}
     </div>
   );
 }
 
 /**
- * Estudio 3D estilo VirtualThreads.io / Ghost Mannequin (Personaje Invisible):
- * Renderiza la prenda volumétrica real con cuello hueco 3D, pliegues vivos en movimiento
- * (Brisa, Caminata Invisible o Giro 3D) y estampado curvado sobre la tela.
+ * Visor WebGL 3D Real (360° completos + Arrastre de Diseño sobre la prenda + Zoom + Controles de tamaño).
  */
 export function InteractiveShirt3D({
   hex,
@@ -468,7 +574,9 @@ export function InteractiveShirt3D({
   designUrl,
   placement = 'center',
   designScale = 1,
+  designOffsetX = 0,
   designOffsetY = 0,
+  onDesignChange,
   autoMotion = true,
   stockBadge
 }: {
@@ -478,173 +586,59 @@ export function InteractiveShirt3D({
   designUrl?: string | null;
   placement?: DecalPlacement;
   designScale?: number;
+  designOffsetX?: number;
   designOffsetY?: number;
+  onDesignChange?: (patch: { scale?: number; offsetX?: number; offsetY?: number; placement?: DecalPlacement }) => void;
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
 }) {
-  const [side, setSide] = useState<'front' | 'back'>('front');
   const [mode, setMode] = useState<MotionMode>('wind');
-
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const shadowRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-
-  const propsRef = useRef({
-    hex,
-    side,
-    mode,
-    placement,
-    designScale,
-    designOffsetY,
-    autoMotion
-  });
-  propsRef.current = { hex, side, mode, placement, designScale, designOffsetY, autoMotion };
-
-  const physRef = useRef({
-    rx: 4,
-    ry: -10,
-    vx: 0,
-    vy: 0,
-    targetRx: 4,
-    targetRy: -10,
-    dragging: false,
-    lastX: 0,
-    lastY: 0
-  });
+  const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
+  const [targetAngleY, setTargetAngleY] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!designUrl) {
-      imgRef.current = null;
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      imgRef.current = img;
-    };
-    img.src = designUrl;
-  }, [designUrl]);
-
-  useEffect(() => {
-    if (placement === 'back') setSide('back');
-    else setSide('front');
+    if (placement === 'back') setTargetAngleY(180);
+    else setTargetAngleY(0);
   }, [placement]);
 
-  const switchSide = (next: 'front' | 'back') => {
-    if (next !== side) {
-      physRef.current.vy += next === 'back' ? 16 : -16;
-      setSide(next);
-    }
+  const adjustScale = (delta: number) => {
+    const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.35, 1.85);
+    onDesignChange?.({ scale: next });
   };
-
-  useEffect(() => {
-    let raf = 0;
-    const t0 = performance.now();
-
-    const animate = (now: number) => {
-      const elapsed = (now - t0) / 1000;
-      const p = physRef.current;
-      const cur = propsRef.current;
-
-      if (!p.dragging && cur.autoMotion) {
-        if (cur.mode === 'wind') {
-          p.targetRy = Math.sin(elapsed * 1.1) * 16;
-          p.targetRx = Math.cos(elapsed * 0.85) * 4.5 + 3;
-        } else if (cur.mode === 'walk') {
-          // Movimiento de caminata de personaje invisible (balanceo de hombros y torso)
-          p.targetRy = Math.sin(elapsed * 2.8) * 14;
-          p.targetRx = Math.abs(Math.cos(elapsed * 2.8)) * 6;
-        } else {
-          // Giro amplio de estudio
-          p.targetRy = Math.sin(elapsed * 0.9) * 28;
-          p.targetRx = Math.cos(elapsed * 0.7) * 5 + 3;
-        }
-      }
-
-      const ax = (p.targetRx - p.rx) * 0.09;
-      const ay = (p.targetRy - p.ry) * 0.09;
-      p.vx = (p.vx + ax) * 0.82;
-      p.vy = (p.vy + ay) * 0.82;
-      p.rx += p.vx;
-      p.ry += p.vy;
-
-      const walkBounce =
-        cur.autoMotion && cur.mode === 'walk' ? Math.abs(Math.sin(elapsed * 2.8)) * -9 : Math.sin(elapsed * 1.9) * 5;
-      const walkRoll = cur.autoMotion && cur.mode === 'walk' ? Math.cos(elapsed * 2.8) * 2.2 : 0;
-
-      if (bodyRef.current) {
-        bodyRef.current.style.transform = `translate3d(0, ${walkBounce.toFixed(
-          2
-        )}px, 0) rotateX(${p.rx.toFixed(2)}deg) rotateY(${p.ry.toFixed(2)}deg) rotateZ(${walkRoll.toFixed(
-          2
-        )}deg)`;
-      }
-      if (shadowRef.current) {
-        const sScale = (1 - Math.abs(walkBounce) * 0.014).toFixed(3);
-        shadowRef.current.style.transform = `translate3d(${(-p.ry * 0.8).toFixed(
-          1
-        )}px, 0, 0) scale(${sScale})`;
-      }
-
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          renderGhostMannequinFrame(ctx, {
-            hex: cur.hex,
-            side: cur.side,
-            ry: p.ry,
-            rx: p.rx,
-            phase: cur.autoMotion ? elapsed : 0.5,
-            mode: cur.mode,
-            designImg: imgRef.current,
-            placement: cur.placement,
-            designScale: cur.designScale,
-            designOffsetY: cur.designOffsetY
-          });
-        }
-      }
-
-      raf = requestAnimationFrame(animate);
-    };
-
-    raf = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(raf);
-  }, []);
 
   return (
     <div className="relative flex flex-col items-center select-none">
-      {/* Controles superiores: Frente / Espalda + Modo de animación tipo VirtualThreads + Stock en vivo */}
-      <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-2">
-        <div className="inline-flex rounded-full bg-slate-200/80 p-1">
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1 text-xs font-bold transition ${
-              side === 'front' ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
-            }`}
-            onClick={() => switchSide('front')}
-          >
-            Frente
-          </button>
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1 text-xs font-bold transition ${
-              side === 'back' ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
-            }`}
-            onClick={() => switchSide('back')}
-          >
-            Espalda
-          </button>
-        </div>
-
-        <div className="inline-flex rounded-full bg-slate-200/80 p-1">
+      {/* Barra superior: Ángulos 3D (Frente / Perfil / Espalda) + Animación + Stock en vivo */}
+      <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-1.5">
+        <div className="inline-flex rounded-full bg-slate-200/90 p-1">
           {(
             [
-              ['wind', '🌬️ Tela Viva'],
-              ['walk', '🚶 Caminata'],
-              ['orbit', '🔄 Giro 3D']
+              [0, 'Frente'],
+              [42, 'Perfil 3D'],
+              [180, 'Espalda']
             ] as const
-          ).map(([id, label]) => (
+          ).map(([angle, lbl]) => (
+            <button
+              key={lbl}
+              type="button"
+              className={`rounded-full px-3 py-1 text-xs font-bold transition ${
+                targetAngleY === angle ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
+              }`}
+              onClick={() => setTargetAngleY(angle)}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+
+        <div className="inline-flex rounded-full bg-slate-200/90 p-1">
+          {(
+            [
+              ['wind', '🌬️ Tela 3D'],
+              ['walk', '🚶 Caminata'],
+              ['orbit', '🔄 Giro 360°']
+            ] as const
+          ).map(([id, lbl]) => (
             <button
               key={id}
               type="button"
@@ -653,7 +647,7 @@ export function InteractiveShirt3D({
               }`}
               onClick={() => setMode(id)}
             >
-              {label}
+              {lbl}
             </button>
           ))}
         </div>
@@ -676,67 +670,398 @@ export function InteractiveShirt3D({
         )}
       </div>
 
-      {/* Escenario 3D Ghost Mannequin */}
-      <div
-        className="relative flex h-[330px] w-full max-w-[360px] cursor-grab items-center justify-center touch-none active:cursor-grabbing sm:h-[370px]"
-        style={{ perspective: '1000px' }}
-        onPointerDown={(e: any) => {
-          const p = physRef.current;
-          p.dragging = true;
-          p.lastX = e.clientX;
-          p.lastY = e.clientY;
-          p.targetRx = p.rx;
-          p.targetRy = p.ry;
-          if (e.currentTarget?.setPointerCapture) {
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }
-        }}
-        onPointerMove={(e: any) => {
-          const p = physRef.current;
-          if (!p.dragging) return;
-          const dx = e.clientX - p.lastX;
-          const dy = e.clientY - p.lastY;
-          p.lastX = e.clientX;
-          p.lastY = e.clientY;
-          p.targetRy = Math.max(-42, Math.min(42, p.targetRy + dx * 0.42));
-          p.targetRx = Math.max(-20, Math.min(22, p.targetRx - dy * 0.28));
-        }}
-        onPointerUp={() => {
-          physRef.current.dragging = false;
-        }}
-        onPointerCancel={() => {
-          physRef.current.dragging = false;
-        }}
-      >
-        {/* Sombra proyectada en el piso */}
-        <div
-          ref={shadowRef}
-          className="pointer-events-none absolute bottom-2 h-7 w-52 rounded-full bg-slate-900/25 blur-md will-change-transform"
-        />
-
-        {/* Prenda 3D sobre maniquí invisible */}
-        <div
-          ref={bodyRef}
-          className="relative h-[305px] w-[305px] will-change-transform sm:h-[340px] sm:w-[340px]"
-          style={{ transformStyle: 'preserve-3d' }}
-        >
-          <canvas
-            ref={canvasRef}
-            width={512}
-            height={520}
-            className="h-full w-full drop-shadow-2xl"
-          />
+      {/* Controles directos sobre el visor cuando hay un diseño cargado */}
+      {designUrl && onDesignChange && (
+        <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-white/95 px-2.5 py-1.5 shadow-sm">
+          <button
+            type="button"
+            className={`rounded-xl px-2.5 py-1.5 text-xs font-bold transition ${
+              touchAction === 'rotate'
+                ? 'bg-slate-900 text-white'
+                : 'bg-slate-100 text-slate-700'
+            }`}
+            onClick={() => setTouchAction('rotate')}
+          >
+            🖐 Girar 3D
+          </button>
+          <button
+            type="button"
+            className={`rounded-xl px-2.5 py-1.5 text-xs font-bold transition ${
+              touchAction === 'moveDesign'
+                ? 'bg-sky-600 text-white'
+                : 'bg-slate-100 text-slate-700'
+            }`}
+            onClick={() => setTouchAction('moveDesign')}
+          >
+            ✥ Mover Diseño
+          </button>
+          <span className="mx-0.5 text-slate-300">|</span>
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-base font-extrabold text-slate-800 active:scale-95"
+            onClick={() => adjustScale(-0.12)}
+            title="Hacer diseño más pequeño"
+          >
+            −
+          </button>
+          <span className="min-w-[44px] text-center text-xs font-extrabold text-slate-700">
+            {Math.round(designScale * 100)}%
+          </span>
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-base font-extrabold text-slate-800 active:scale-95"
+            onClick={() => adjustScale(0.12)}
+            title="Hacer diseño más grande"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600"
+            onClick={() => onDesignChange({ scale: 1, offsetX: 0, offsetY: 0 })}
+            title="Centrar diseño"
+          >
+            ↺ Centrar
+          </button>
         </div>
+      )}
+
+      {/* Lienzo WebGL 3D Real */}
+      <div className="relative h-[340px] w-full max-w-[380px] sm:h-[380px]">
+        <WebGLShirtCanvas
+          hex={hex}
+          designUrl={designUrl || null}
+          placement={placement}
+          designScale={designScale}
+          designOffsetX={designOffsetX}
+          designOffsetY={designOffsetY}
+          autoMotion={autoMotion && touchAction !== 'moveDesign'}
+          mode={mode}
+          targetAngleY={targetAngleY}
+          touchAction={touchAction}
+          onMoveDesign={(dx, dy) => {
+            onDesignChange?.({
+              offsetX: clamp(designOffsetX + dx, -22, 22),
+              offsetY: clamp(designOffsetY + dy, -22, 24)
+            });
+          }}
+        />
       </div>
 
       <div className="mt-1 flex items-center gap-2 text-xs font-semibold text-slate-500">
-        <span>🖐 Arrastra para rotar la prenda</span>
+        <span>
+          {touchAction === 'moveDesign'
+            ? '✥ Arrastra sobre la camisa para colocar el diseño'
+            : '🖐 Arrastra 360° para girar la prenda en 3D real'}
+        </span>
         <span>·</span>
         <span className="font-bold text-slate-800">
           {brandName} · {colorName}
         </span>
       </div>
     </div>
+  );
+}
+
+function WebGLShirtCanvas({
+  hex,
+  designUrl,
+  placement = 'center',
+  designScale = 1,
+  designOffsetX = 0,
+  designOffsetY = 0,
+  autoMotion = true,
+  mode = 'wind',
+  targetAngleY = null,
+  touchAction = 'rotate',
+  compact = false,
+  onMoveDesign
+}: {
+  hex: string;
+  designUrl: string | null;
+  placement?: DecalPlacement;
+  designScale?: number;
+  designOffsetX?: number;
+  designOffsetY?: number;
+  autoMotion?: boolean;
+  mode?: MotionMode;
+  targetAngleY?: number | null;
+  touchAction?: 'rotate' | 'moveDesign';
+  compact?: boolean;
+  onMoveDesign?: (dx: number, dy: number) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const stateRef = useRef({
+    hex,
+    placement,
+    designScale,
+    designOffsetX,
+    designOffsetY,
+    autoMotion,
+    mode,
+    touchAction,
+    onMoveDesign,
+    hasDecal: false,
+    decalAspect: 1
+  });
+  stateRef.current = {
+    hex,
+    placement,
+    designScale,
+    designOffsetX,
+    designOffsetY,
+    autoMotion,
+    mode,
+    touchAction,
+    onMoveDesign,
+    hasDecal: stateRef.current.hasDecal,
+    decalAspect: stateRef.current.decalAspect
+  };
+
+  const rotRef = useRef({
+    rx: 8,
+    ry: -18,
+    vx: 0,
+    vy: 0,
+    baseRy: 0,
+    dragging: false,
+    lastX: 0,
+    lastY: 0
+  });
+
+  useEffect(() => {
+    if (targetAngleY !== null && targetAngleY !== undefined) {
+      rotRef.current.baseRy = targetAngleY;
+      rotRef.current.ry = targetAngleY;
+    }
+  }, [targetAngleY]);
+
+  const glRef = useRef<{
+    gl: WebGLRenderingContext;
+    tex: WebGLTexture | null;
+  } | null>(null);
+
+  // Actualizar textura WebGL cuando cambia el diseño
+  useEffect(() => {
+    const ctx = glRef.current;
+    if (!ctx) return;
+    const { gl, tex } = ctx;
+    if (!designUrl || !tex) {
+      stateRef.current.hasDecal = false;
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      stateRef.current.decalAspect = img.naturalWidth / Math.max(1, img.naturalHeight);
+      stateRef.current.hasDecal = true;
+    };
+    img.src = designUrl;
+  }, [designUrl]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const gl = (canvas.getContext('webgl', { antialias: true, alpha: true }) ||
+      canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null;
+    if (!gl) return;
+
+    const prog = compileProgram(gl);
+    if (!prog) return;
+    gl.useProgram(prog);
+
+    const mesh = buildGarmentMesh();
+
+    const makeBuf = (target: number, data: ArrayBufferView) => {
+      const b = gl.createBuffer();
+      gl.bindBuffer(target, b);
+      gl.bufferData(target, data, gl.STATIC_DRAW);
+      return b;
+    };
+
+    const posBuf = makeBuf(gl.ARRAY_BUFFER, mesh.positions);
+    const normBuf = makeBuf(gl.ARRAY_BUFFER, mesh.normals);
+    const uvBuf = makeBuf(gl.ARRAY_BUFFER, mesh.uvs);
+    const idxBuf = makeBuf(gl.ELEMENT_ARRAY_BUFFER, mesh.indices);
+
+    const bindAttr = (buf: WebGLBuffer | null, name: string, size: number) => {
+      const loc = gl.getAttribLocation(prog, name);
+      if (loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+
+    bindAttr(posBuf, 'a_pos', 3);
+    bindAttr(normBuf, 'a_norm', 3);
+    bindAttr(uvBuf, 'a_uv', 2);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 0])
+    );
+
+    glRef.current = { gl, tex };
+
+    // Si ya había un designUrl al montar, cargarlo
+    if (designUrl && tex) {
+      const img = new Image();
+      img.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        stateRef.current.decalAspect = img.naturalWidth / Math.max(1, img.naturalHeight);
+        stateRef.current.hasDecal = true;
+      };
+      img.src = designUrl;
+    }
+
+    const uProj = gl.getUniformLocation(prog, 'u_proj');
+    const uView = gl.getUniformLocation(prog, 'u_view');
+    const uTime = gl.getUniformLocation(prog, 'u_time');
+    const uMode = gl.getUniformLocation(prog, 'u_mode');
+    const uBaseColor = gl.getUniformLocation(prog, 'u_baseColor');
+    const uHasDecal = gl.getUniformLocation(prog, 'u_hasDecal');
+    const uDecalOnBack = gl.getUniformLocation(prog, 'u_decalOnBack');
+    const uDecalRect = gl.getUniformLocation(prog, 'u_decalRect');
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+
+    let raf = 0;
+    const t0 = performance.now();
+
+    const render = (now: number) => {
+      const elapsed = (now - t0) / 1000;
+      const st = stateRef.current;
+      const r = rotRef.current;
+
+      if (!r.dragging) {
+        if (st.autoMotion) {
+          if (st.mode === 'orbit') {
+            r.ry = (r.ry + 0.55) % 360;
+          } else if (st.mode === 'walk') {
+            const target = r.baseRy + Math.sin(elapsed * 3.2) * 18;
+            r.ry += (target - r.ry) * 0.1;
+            r.rx += (6 + Math.abs(Math.cos(elapsed * 3.2)) * 5 - r.rx) * 0.1;
+          } else {
+            const target = r.baseRy + Math.sin(elapsed * 1.15) * 24;
+            r.ry += (target - r.ry) * 0.08;
+            r.rx += (7 + Math.cos(elapsed * 0.85) * 4 - r.rx) * 0.08;
+          }
+        } else {
+          r.ry += r.vy;
+          r.rx = clamp(r.rx + r.vx, -32, 38);
+          r.vx *= 0.90;
+          r.vy *= 0.90;
+        }
+      }
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      const proj = createMat4Perspective((34 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 20.0);
+      const bounceY =
+        st.autoMotion && st.mode === 'walk'
+          ? Math.abs(Math.sin(elapsed * 3.2)) * 0.045 - 0.02
+          : Math.sin(elapsed * 1.8) * 0.025;
+      const view = createMat4ModelView(r.rx, r.ry, -3.15, bounceY);
+
+      gl.uniformMatrix4fv(uProj, false, proj);
+      gl.uniformMatrix4fv(uView, false, view);
+      gl.uniform1f(uTime, elapsed);
+      gl.uniform1f(uMode, st.mode === 'walk' ? 1.0 : st.mode === 'orbit' ? 2.0 : 0.0);
+
+      const [cr, cg, cb] = hexToRgbNorm(st.hex);
+      gl.uniform3f(uBaseColor, cr, cg, cb);
+
+      gl.uniform1i(uHasDecal, st.hasDecal ? 1 : 0);
+      gl.uniform1i(uDecalOnBack, st.placement === 'back' ? 1 : 0);
+      const rect = computeDecalRect(
+        st.placement,
+        st.designScale,
+        st.designOffsetX,
+        st.designOffsetY,
+        st.decalAspect
+      );
+      gl.uniform4f(uDecalRect, rect[0], rect[1], rect[2], rect[3]);
+
+      gl.drawElements(gl.TRIANGLES, mesh.indices.length, gl.UNSIGNED_SHORT, 0);
+
+      raf = requestAnimationFrame(render);
+    };
+
+    raf = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const res = compact ? 320 : 640;
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={res}
+      height={res}
+      className="h-full w-full cursor-grab touch-none drop-shadow-xl active:cursor-grabbing"
+      onPointerDown={(e: any) => {
+        const r = rotRef.current;
+        r.dragging = true;
+        r.lastX = e.clientX;
+        r.lastY = e.clientY;
+        r.vx = 0;
+        r.vy = 0;
+        if (e.currentTarget?.setPointerCapture) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+      }}
+      onPointerMove={(e: any) => {
+        const r = rotRef.current;
+        if (!r.dragging) return;
+        const dx = e.clientX - r.lastX;
+        const dy = e.clientY - r.lastY;
+        r.lastX = e.clientX;
+        r.lastY = e.clientY;
+
+        if (stateRef.current.touchAction === 'moveDesign' && stateRef.current.onMoveDesign) {
+          stateRef.current.onMoveDesign(dx * 0.14, dy * 0.14);
+        } else {
+          r.ry += dx * 0.55;
+          r.baseRy = r.ry;
+          r.rx = clamp(r.rx + dy * 0.35, -32, 38);
+          r.vy = dx * 0.18;
+          r.vx = dy * 0.12;
+        }
+      }}
+      onPointerUp={() => {
+        rotRef.current.dragging = false;
+      }}
+      onPointerCancel={() => {
+        rotRef.current.dragging = false;
+      }}
+    />
   );
 }
 

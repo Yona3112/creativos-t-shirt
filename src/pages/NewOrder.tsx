@@ -4,19 +4,32 @@ import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, isWholesale, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
-import { compressImage } from '../lib/image';
+import { compressImage, applyBackgroundRemoval } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { addressOneLine, createOrder, quickCustomer, updateBrand, updateSettings } from '../lib/actions';
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
-import { ShirtPreview } from '../components/Shirt';
+import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
 
 const LS_CART = 'cgs_cart_v1';
 
+const PLACEMENTS: { id: DecalPlacement; label: string }[] = [
+  { id: 'center', label: 'Pecho Centro' },
+  { id: 'pocket', label: 'Logo Izq.' },
+  { id: 'full', label: 'Frente Grande' },
+  { id: 'back', label: 'Espalda' }
+];
+
 interface Draft {
   lines: CartLine[];
   photo: string | null;
+  rawPhoto?: string | null;
+  removeBg?: boolean;
+  placement?: DecalPlacement;
+  designScale?: number;
+  designOffsetX?: number;
+  designOffsetY?: number;
   customerId: string | null;
   addressId: string | null;
   withShipping: boolean;
@@ -32,6 +45,12 @@ function emptyDraft(): Draft {
   return {
     lines: [],
     photo: null,
+    rawPhoto: null,
+    removeBg: true,
+    placement: 'center',
+    designScale: 1,
+    designOffsetX: 0,
+    designOffsetY: 0,
     customerId: null,
     addressId: null,
     withShipping: true,
@@ -145,12 +164,37 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
     try {
-      const data = await compressImage(f);
-      set({ photo: data });
+      const shouldRemoveBg = draft.removeBg ?? true;
+      const raw = await compressImage(f, 560, 0.82, false);
+      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 42) : raw;
+      set({
+        rawPhoto: raw,
+        photo: processed,
+        removeBg: shouldRemoveBg
+      });
+      toast(
+        shouldRemoveBg
+          ? 'Diseño agregado sin fondo · Arrastra o usa +/− para ajustarlo en 3D'
+          : 'Diseño agregado a la camisa 3D'
+      );
     } catch (e) {
       toast((e as Error).message, 'error');
     }
     if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const toggleRemoveBg = async (nextRemove: boolean) => {
+    const base = draft.rawPhoto || draft.photo;
+    if (!base) {
+      set({ removeBg: nextRemove });
+      return;
+    }
+    try {
+      const updated = nextRemove ? await applyBackgroundRemoval(base, true, 42) : base;
+      set({ removeBg: nextRemove, photo: updated });
+    } catch {
+      set({ removeBg: nextRemove });
+    }
   };
 
   // Cliente rápido
@@ -216,83 +260,197 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </div>
       </section>
 
-      {/* 2. Color */}
-      <section className="card">
-        <h2 className="section-title">2 · Color</h2>
-        <div className="flex flex-col items-center gap-3 sm:flex-row">
-          <ShirtPreview hex={color?.hex || '#e5e7eb'} size={135} label={color ? `${color.name}` : ''} designUrl={draft.photo} />
-          <div className="flex flex-1 flex-wrap gap-2">
-            {colors.map((c) => {
-              const totalC = brand
-                ? settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
-                : 0;
-              const active = c.id === color?.id;
-              return (
-                <button
-                  key={c.id}
-                  className={`flex min-h-[48px] items-center gap-2 rounded-2xl border-2 px-3 py-1.5 text-left transition ${
-                    active ? 'border-brand-700 bg-brand-700 text-white shadow' : 'border-slate-200 bg-white text-slate-800'
-                  }`}
-                  onClick={() => setColorId(c.id)}
-                  aria-label={c.name}
-                  title={c.name}
-                >
-                  <span className="h-6 w-6 shrink-0 rounded-full border border-black/15" style={{ background: c.hex }} />
-                  <div>
-                    <div className="text-xs font-bold leading-tight">{c.name}</div>
-                    <div
-                      className={`text-[11px] font-semibold ${
-                        active
-                          ? totalC > 0
-                            ? 'text-emerald-300'
-                            : 'text-amber-300'
-                          : totalC > 0
-                          ? 'text-emerald-600'
-                          : 'text-amber-600'
-                      }`}
-                    >
-                      {totalC > 0 ? `${totalC} en stock` : 'Disponible pronto'}
-                    </div>
+      {/* 2. Color + Visor 3D Real */}
+      <section className="card space-y-3">
+        <h2 className="section-title mb-0">2 · Color y Vista 3D Real</h2>
+        <div className="rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-100 via-white to-slate-100 p-3">
+          <InteractiveShirt3D
+            hex={color?.hex || '#e5e7eb'}
+            colorName={color?.name || ''}
+            brandName={brand?.name || ''}
+            designUrl={draft.photo}
+            placement={draft.placement || 'center'}
+            designScale={draft.designScale ?? 1}
+            designOffsetX={draft.designOffsetX ?? 0}
+            designOffsetY={draft.designOffsetY ?? 0}
+            onDesignChange={(patch) => {
+              const next: Partial<Draft> = {};
+              if (patch.scale !== undefined) next.designScale = patch.scale;
+              if (patch.offsetX !== undefined) next.designOffsetX = patch.offsetX;
+              if (patch.offsetY !== undefined) next.designOffsetY = patch.offsetY;
+              if (patch.placement !== undefined) next.placement = patch.placement;
+              set(next);
+            }}
+            stockBadge={
+              brand && color
+                ? {
+                    available: (stock.get(vkey(brand.id, color.id, size)) || 0) > 0,
+                    text:
+                      (stock.get(vkey(brand.id, color.id, size)) || 0) > 0
+                        ? `Talla ${size}: ${stock.get(vkey(brand.id, color.id, size)) || 0} disp.`
+                        : `Talla ${size}: Disponible pronto`
+                  }
+                : null
+            }
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {colors.map((c) => {
+            const totalC = brand
+              ? settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
+              : 0;
+            const active = c.id === color?.id;
+            return (
+              <button
+                key={c.id}
+                className={`flex min-h-[48px] items-center gap-2 rounded-2xl border-2 px-3 py-1.5 text-left transition ${
+                  active ? 'border-brand-700 bg-brand-700 text-white shadow' : 'border-slate-200 bg-white text-slate-800'
+                }`}
+                onClick={() => setColorId(c.id)}
+                aria-label={c.name}
+                title={c.name}
+              >
+                <span className="h-6 w-6 shrink-0 rounded-full border border-black/15" style={{ background: c.hex }} />
+                <div>
+                  <div className="text-xs font-bold leading-tight">{c.name}</div>
+                  <div
+                    className={`text-[11px] font-semibold ${
+                      active
+                        ? totalC > 0
+                          ? 'text-emerald-300'
+                          : 'text-amber-300'
+                        : totalC > 0
+                        ? 'text-emerald-600'
+                        : 'text-amber-600'
+                    }`}
+                  >
+                    {totalC > 0 ? `${totalC} en stock` : 'Disponible pronto'}
                   </div>
-                </button>
-              );
-            })}
-            <button className="flex min-h-[48px] items-center rounded-2xl border-2 border-dashed border-brand-300 px-3 text-sm font-bold text-brand-700" onClick={() => setColorModal(true)}>
-              + Nuevo color
-            </button>
-          </div>
+                </div>
+              </button>
+            );
+          })}
+          <button className="flex min-h-[48px] items-center rounded-2xl border-2 border-dashed border-brand-300 px-3 text-sm font-bold text-brand-700" onClick={() => setColorModal(true)}>
+            + Nuevo color
+          </button>
         </div>
       </section>
 
-      {/* 3. Foto del diseño */}
-      <section className="card">
-        <h2 className="section-title">3 · Diseño</h2>
+      {/* 3. Foto del diseño + Quitar fondo JPG + Colocar y Escalar */}
+      <section className="card space-y-3">
+        <h2 className="section-title mb-0">3 · Diseño (Subir, Quitar Fondo y Colocar en 3D)</h2>
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
         <div className="flex items-center gap-3">
           {draft.photo ? (
-            <button className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200" onClick={() => setViewer(draft.photo)}>
-              <img src={draft.photo} alt="Diseño" className="h-full w-full object-cover" />
+            <button
+              className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200 p-1 shadow-inner"
+              style={{ backgroundColor: color?.hex || '#f1f5f9' }}
+              onClick={() => setViewer(draft.photo)}
+              title="Ver diseño sobre el color de la camisa"
+            >
+              <img src={draft.photo} alt="Diseño" className="h-full w-full object-contain" />
             </button>
           ) : null}
           <div className="flex flex-1 flex-col gap-2">
             <button className="btn-soft w-full" onClick={() => fileRef.current?.click()}>
-              📸 {draft.photo ? 'Cambiar Foto del Diseño' : 'Subir Foto del Diseño'}
+              📸 {draft.photo ? 'Cambiar Foto del Diseño (JPG / PNG)' : 'Subir Foto del Diseño (JPG / PNG)'}
             </button>
             {draft.photo && (
-              <button className="btn-ghost w-full text-red-600" onClick={() => set({ photo: null })}>
+              <button
+                className="btn-ghost w-full text-red-600"
+                onClick={() => set({ photo: null, rawPhoto: null })}
+              >
                 Quitar foto
               </button>
             )}
           </div>
         </div>
-        <label className="label mt-3" htmlFor="wt">
-          Tipo de trabajo
+
+        {/* Opción para quitar el fondo si es JPG y dejarlo igual al color de la camisa */}
+        <label className="flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-slate-900"
+            checked={draft.removeBg ?? true}
+            onChange={(e) => void toggleRemoveBg(e.target.checked)}
+          />
+          <span>🪄 Quitar fondo (JPG/PNG) y dejarlo igual al color de la camisa</span>
         </label>
-        <select id="wt" className="input" value={draft.workType} onChange={(e) => set({ workType: e.target.value })}>
-          {settings.workTypes.map((w) => (
-            <option key={w}>{w}</option>
-          ))}
-        </select>
+
+        {draft.photo && (
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            <div>
+              <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
+                Ubicación en la camisa 3D
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {PLACEMENTS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`chip text-xs ${(draft.placement || 'center') === p.id ? 'chip-on' : 'chip-off'}`}
+                    onClick={() => set({ placement: p.id, designOffsetX: 0, designOffsetY: 0 })}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">
+                  Tamaño ({Math.round((draft.designScale ?? 1) * 100)}%)
+                </label>
+                <input
+                  type="range"
+                  min="0.35"
+                  max="1.85"
+                  step="0.05"
+                  className="w-full accent-slate-900"
+                  value={draft.designScale ?? 1}
+                  onChange={(e) => set({ designScale: parseFloat(e.target.value) })}
+                />
+              </div>
+              <div>
+                <label className="label">Mover Izq. / Der.</label>
+                <input
+                  type="range"
+                  min="-22"
+                  max="22"
+                  step="1"
+                  className="w-full accent-slate-900"
+                  value={draft.designOffsetX ?? 0}
+                  onChange={(e) => set({ designOffsetX: parseFloat(e.target.value) })}
+                />
+              </div>
+              <div>
+                <label className="label">Mover Arriba / Abajo</label>
+                <input
+                  type="range"
+                  min="-22"
+                  max="24"
+                  step="1"
+                  className="w-full accent-slate-900"
+                  value={draft.designOffsetY ?? 0}
+                  onChange={(e) => set({ designOffsetY: parseFloat(e.target.value) })}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="label" htmlFor="wt">
+            Tipo de trabajo
+          </label>
+          <select id="wt" className="input" value={draft.workType} onChange={(e) => set({ workType: e.target.value })}>
+            {settings.workTypes.map((w) => (
+              <option key={w}>{w}</option>
+            ))}
+          </select>
+        </div>
       </section>
 
       {/* 4. Talla */}

@@ -3,7 +3,7 @@ import { useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
-import { compressImage } from '../lib/image';
+import { compressImage, applyBackgroundRemoval } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
 import { copyText } from '../lib/csv';
@@ -31,6 +31,7 @@ export interface SharedCatalogPayload {
   photoId: string | null;
   placement: DecalPlacement;
   scale: number;
+  offsetX?: number;
   offsetY: number;
 }
 
@@ -82,10 +83,13 @@ export default function Catalog3D() {
     settings.sizes.includes('M') ? 'M' : settings.sizes[0] || 'M'
   );
   const [enabledColorIds, setEnabledColorIds] = useState<string[]>(() => colors.map((c) => c.id));
+  const [rawDesignUrl, setRawDesignUrl] = useState<string | null>(null);
   const [designUrl, setDesignUrl] = useState<string | null>(null);
+  const [removeBg, setRemoveBg] = useState(true);
   const [photoId, setPhotoId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<DecalPlacement>('center');
   const [scale, setScale] = useState(1);
+  const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
   const [autoMotion, setAutoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
@@ -138,17 +142,39 @@ export default function Catalog3D() {
   const onUploadDesign = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const compressed = await compressImage(file, 560, 0.8);
+      const raw = await compressImage(file, 560, 0.82, false);
+      const processed = removeBg ? await applyBackgroundRemoval(raw, true, 42) : raw;
       const id = uid();
-      await savePhoto(id, compressed, 0);
-      void uploadPhotoNow(id, compressed);
+      await savePhoto(id, processed, 0);
+      void uploadPhotoNow(id, processed);
       setPhotoId(id);
-      setDesignUrl(compressed);
-      toast('Diseño aplicado a la camisa 3D');
+      setRawDesignUrl(raw);
+      setDesignUrl(processed);
+      toast(
+        removeBg
+          ? 'Diseño sin fondo aplicado a la camisa 3D · Arrastra o usa +/− para ajustarlo'
+          : 'Diseño aplicado a la camisa 3D'
+      );
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally {
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const handleToggleRemoveBg = async (next: boolean) => {
+    setRemoveBg(next);
+    const base = rawDesignUrl || designUrl;
+    if (!base) return;
+    try {
+      const updated = next ? await applyBackgroundRemoval(base, true, 42) : base;
+      setDesignUrl(updated);
+      if (photoId) {
+        await savePhoto(photoId, updated, 0);
+        void uploadPhotoNow(photoId, updated);
+      }
+    } catch {
+      /* mantener actual */
     }
   };
 
@@ -172,6 +198,7 @@ export default function Catalog3D() {
       photoId,
       placement,
       scale,
+      offsetX,
       offsetY
     };
   };
@@ -229,7 +256,7 @@ export default function Catalog3D() {
           <div>
             <h2 className="text-base font-extrabold text-slate-900">✨ Estudio y Catálogo 3D en Vivo</h2>
             <p className="text-xs font-medium text-slate-500">
-              Stock en tiempo real por color y talla · Física 3D suave a 60 FPS
+              Prenda 3D Real (WebGL 360°) · Stock en tiempo real por color y talla
             </p>
           </div>
           <button
@@ -250,7 +277,14 @@ export default function Catalog3D() {
           designUrl={designUrl}
           placement={placement}
           designScale={scale}
+          designOffsetX={offsetX}
           designOffsetY={offsetY}
+          onDesignChange={(patch) => {
+            if (patch.scale !== undefined) setScale(patch.scale);
+            if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
+            if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
+            if (patch.placement !== undefined) setPlacement(patch.placement);
+          }}
           autoMotion={autoMotion}
           stockBadge={{
             available: currentVariantStock > 0,
@@ -345,7 +379,7 @@ export default function Catalog3D() {
 
       {/* Probar diseño sobre la camisa 3D */}
       <section className="card space-y-3">
-        <h2 className="section-title mb-0">1 · Diseño sobre la Camisa 3D</h2>
+        <h2 className="section-title mb-0">1 · Diseño sobre la Camisa 3D (Quitar Fondo, Colocar y Escalar)</h2>
         <input
           ref={fileRef}
           type="file"
@@ -355,13 +389,14 @@ export default function Catalog3D() {
         />
         <div className="flex flex-wrap gap-2">
           <button className="btn-primary flex-1" onClick={() => fileRef.current?.click()}>
-            📸 {designUrl ? 'Cambiar Diseño / Logo' : 'Subir Diseño / Logo'}
+            📸 {designUrl ? 'Cambiar Diseño / Logo (JPG / PNG)' : 'Subir Diseño / Logo (JPG / PNG)'}
           </button>
           {designUrl && (
             <button
               className="btn-ghost text-red-600"
               onClick={() => {
                 setDesignUrl(null);
+                setRawDesignUrl(null);
                 setPhotoId(null);
               }}
             >
@@ -370,13 +405,27 @@ export default function Catalog3D() {
           )}
         </div>
 
+        <label className="flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-slate-900"
+            checked={removeBg}
+            onChange={(e) => void handleToggleRemoveBg(e.target.checked)}
+          />
+          <span>🪄 Quitar fondo (JPG/PNG) y dejarlo igual al color de la camisa</span>
+        </label>
+
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {PLACEMENTS.map((p) => (
             <button
               key={p.id}
               type="button"
               className={`chip text-sm ${placement === p.id ? 'chip-on' : 'chip-off'}`}
-              onClick={() => setPlacement(p.id)}
+              onClick={() => {
+                setPlacement(p.id);
+                setOffsetX(0);
+                setOffsetY(0);
+              }}
             >
               {p.label}
             </button>
@@ -384,13 +433,13 @@ export default function Catalog3D() {
         </div>
 
         {designUrl && (
-          <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-3">
             <div>
-              <label className="label">Tamaño del diseño ({Math.round(scale * 100)}%)</label>
+              <label className="label">Tamaño ({Math.round(scale * 100)}%)</label>
               <input
                 type="range"
-                min="0.5"
-                max="1.5"
+                min="0.35"
+                max="1.85"
                 step="0.05"
                 className="w-full accent-slate-900"
                 value={scale}
@@ -398,11 +447,23 @@ export default function Catalog3D() {
               />
             </div>
             <div>
-              <label className="label">Altura en la camisa</label>
+              <label className="label">Mover Izq. / Der.</label>
               <input
                 type="range"
-                min="-10"
-                max="14"
+                min="-22"
+                max="22"
+                step="1"
+                className="w-full accent-slate-900"
+                value={offsetX}
+                onChange={(e) => setOffsetX(parseFloat(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="label">Mover Arriba / Abajo</label>
+              <input
+                type="range"
+                min="-22"
+                max="24"
                 step="1"
                 className="w-full accent-slate-900"
                 value={offsetY}
@@ -552,9 +613,13 @@ export function CustomerCatalogView({
   const { status } = useSyncStatus();
 
   const [selectedColor, setSelectedColor] = useState<SharedCatalogColor>(payload.colors[0]);
+  const [rawDesignUrl, setRawDesignUrl] = useState<string | null>(initialDesignUrl);
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
+  const [removeBg, setRemoveBg] = useState(true);
   const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'center');
   const [scale, setScale] = useState(payload.scale || 1);
+  const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
+  const [offsetY, setOffsetY] = useState(payload.offsetY || 0);
   const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
   const [qty, setQty] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -562,7 +627,10 @@ export function CustomerCatalogView({
   useEffect(() => {
     if (!designUrl && payload.photoId) {
       void fetchSharedPhoto(payload.photoId).then((d) => {
-        if (d) setDesignUrl(d);
+        if (d) {
+          setRawDesignUrl(d);
+          setDesignUrl(d);
+        }
       });
     }
   }, [payload.photoId, designUrl]);
@@ -616,8 +684,22 @@ export function CustomerCatalogView({
   const onClientUpload = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const compressed = await compressImage(file, 560, 0.8);
-      setDesignUrl(compressed);
+      const raw = await compressImage(file, 560, 0.82, false);
+      const processed = removeBg ? await applyBackgroundRemoval(raw, true, 42) : raw;
+      setRawDesignUrl(raw);
+      setDesignUrl(processed);
+    } catch {
+      /* ignorar */
+    }
+  };
+
+  const handleClientToggleRemoveBg = async (next: boolean) => {
+    setRemoveBg(next);
+    const base = rawDesignUrl || designUrl;
+    if (!base) return;
+    try {
+      const updated = next ? await applyBackgroundRemoval(base, true, 42) : base;
+      setDesignUrl(updated);
     } catch {
       /* ignorar */
     }
@@ -671,7 +753,14 @@ export function CustomerCatalogView({
             designUrl={designUrl}
             placement={placement}
             designScale={scale}
-            designOffsetY={payload.offsetY || 0}
+            designOffsetX={offsetX}
+            designOffsetY={offsetY}
+            onDesignChange={(patch) => {
+              if (patch.scale !== undefined) setScale(patch.scale);
+              if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
+              if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
+              if (patch.placement !== undefined) setPlacement(patch.placement);
+            }}
             autoMotion
             stockBadge={{
               available: selectedSizeStock > 0,
@@ -784,33 +873,72 @@ export function CustomerCatalogView({
           />
           <div className="flex flex-wrap gap-2">
             <button className="btn-soft flex-1" onClick={() => fileRef.current?.click()}>
-              📸 {designUrl ? 'Probar con otra imagen / logo' : 'Subir mi logo / diseño a la camisa'}
+              📸 {designUrl ? 'Probar con otra imagen / logo (JPG / PNG)' : 'Subir mi logo / diseño a la camisa'}
             </button>
           </div>
+          <label className="flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-slate-900"
+              checked={removeBg}
+              onChange={(e) => void handleClientToggleRemoveBg(e.target.checked)}
+            />
+            <span>🪄 Quitar fondo (JPG/PNG) e igualar al color de la camisa</span>
+          </label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {PLACEMENTS.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 className={`chip text-sm ${placement === p.id ? 'chip-on' : 'chip-off'}`}
-                onClick={() => setPlacement(p.id)}
+                onClick={() => {
+                  setPlacement(p.id);
+                  setOffsetX(0);
+                  setOffsetY(0);
+                }}
               >
                 {p.label}
               </button>
             ))}
           </div>
           {designUrl && (
-            <div>
-              <label className="label">Tamaño del diseño</label>
-              <input
-                type="range"
-                min="0.5"
-                max="1.5"
-                step="0.05"
-                className="w-full accent-slate-900"
-                value={scale}
-                onChange={(e) => setScale(parseFloat(e.target.value))}
-              />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">Tamaño ({Math.round(scale * 100)}%)</label>
+                <input
+                  type="range"
+                  min="0.35"
+                  max="1.85"
+                  step="0.05"
+                  className="w-full accent-slate-900"
+                  value={scale}
+                  onChange={(e) => setScale(parseFloat(e.target.value))}
+                />
+              </div>
+              <div>
+                <label className="label">Mover Izq. / Der.</label>
+                <input
+                  type="range"
+                  min="-22"
+                  max="22"
+                  step="1"
+                  className="w-full accent-slate-900"
+                  value={offsetX}
+                  onChange={(e) => setOffsetX(parseFloat(e.target.value))}
+                />
+              </div>
+              <div>
+                <label className="label">Mover Arriba / Abajo</label>
+                <input
+                  type="range"
+                  min="-22"
+                  max="24"
+                  step="1"
+                  className="w-full accent-slate-900"
+                  value={offsetY}
+                  onChange={(e) => setOffsetY(parseFloat(e.target.value))}
+                />
+              </div>
             </div>
           )}
         </section>
