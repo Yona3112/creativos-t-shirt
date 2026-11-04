@@ -2,6 +2,396 @@ import { useEffect, useRef, useState } from 'react';
 import { contrastText } from '../lib/inventory';
 
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
+export type MotionMode = 'wind' | 'walk' | 'orbit';
+
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = (hex || '#111827').replace('#', '');
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean.padEnd(6, '0');
+  const num = parseInt(full.slice(0, 6), 16) || 0;
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+/** Trazo anatómico realista de camiseta en maniquí invisible (Ghost Mannequin). */
+function traceGarmentSilhouette(ctx: CanvasRenderingContext2D) {
+  ctx.beginPath();
+  // Hombro izquierdo externo desde el cuello
+  ctx.moveTo(192, 62);
+  ctx.bezierCurveTo(156, 68, 118, 80, 92, 96);
+  // Manga izquierda exterior (caída anatómica natural)
+  ctx.bezierCurveTo(68, 112, 42, 156, 26, 202);
+  // Abertura de puño izquierdo con curva de volumen
+  ctx.bezierCurveTo(46, 216, 74, 226, 98, 232);
+  // Interior de manga izquierda hacia la sisa (axila)
+  ctx.bezierCurveTo(108, 206, 116, 184, 122, 174);
+  // Costado izquierdo del torso (caída natural con ligero entalle)
+  ctx.bezierCurveTo(118, 248, 116, 350, 112, 456);
+  // Dobladillo inferior curvo 3D
+  ctx.bezierCurveTo(185, 474, 327, 474, 400, 456);
+  // Costado derecho del torso hacia la sisa derecha
+  ctx.bezierCurveTo(396, 350, 394, 248, 390, 174);
+  // Interior de manga derecha
+  ctx.bezierCurveTo(396, 184, 404, 206, 414, 232);
+  // Abertura de puño derecho
+  ctx.bezierCurveTo(438, 226, 466, 216, 486, 202);
+  // Manga derecha exterior hacia hombro derecho
+  ctx.bezierCurveTo(470, 156, 444, 112, 420, 96);
+  // Hombro derecho hacia el cuello
+  ctx.bezierCurveTo(394, 80, 356, 68, 320, 62);
+  // Borde superior del cuello trasero (maniquí invisible)
+  ctx.bezierCurveTo(286, 52, 226, 52, 192, 62);
+  ctx.closePath();
+}
+
+/**
+ * Dibuja una prenda realista estilo Ghost Mannequin (Personaje Invisible) en un contexto 512x520,
+ * con cavidad 3D en cuello/puños/dobladillo, volumen anatómico de pecho/hombros, pliegues reales de tela
+ * y estampado integrado en los pliegues.
+ */
+function renderGhostMannequinFrame(
+  ctx: CanvasRenderingContext2D,
+  opts: {
+    hex: string;
+    side: 'front' | 'back';
+    ry: number;
+    rx: number;
+    phase: number;
+    mode: MotionMode;
+    designImg: HTMLImageElement | null;
+    placement: DecalPlacement;
+    designScale: number;
+    designOffsetY: number;
+  }
+) {
+  const W = 512;
+  const H = 520;
+  ctx.clearRect(0, 0, W, H);
+
+  const [r, g, b] = hexToRgb(opts.hex);
+  const lum = (r * 299 + g * 587 + b * 114) / 1000;
+  const isDark = lum < 90;
+
+  // Parallax 3D entre el frente y el interior hueco del cuello/ruedos
+  const parallaxX = opts.ry * 0.42;
+  const parallaxY = opts.rx * 0.28;
+  const wave = Math.sin(opts.phase * 2.2);
+  const walkSwing = opts.mode === 'walk' ? Math.sin(opts.phase * 3.2) : 0;
+
+  ctx.save();
+
+  // 1. Hueco inferior (interior trasero del dobladillo que da efecto de "personaje invisible")
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(256 - parallaxX * 0.4, 456 - parallaxY * 0.3, 142, 16, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${Math.max(0, Math.round(r * 0.38))}, ${Math.max(
+    0,
+    Math.round(g * 0.38)
+  )}, ${Math.max(0, Math.round(b * 0.38))})`;
+  ctx.fill();
+  ctx.restore();
+
+  // 2. Huecos de los puños (efecto manga hueca 3D)
+  ctx.save();
+  ctx.fillStyle = `rgb(${Math.max(0, Math.round(r * 0.32))}, ${Math.max(
+    0,
+    Math.round(g * 0.32)
+  )}, ${Math.max(0, Math.round(b * 0.32))})`;
+  ctx.beginPath();
+  ctx.ellipse(62, 217, 36, 9, 0.38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(450, 217, 36, 9, -0.38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 3. Recorte de la silueta anatómica principal
+  traceGarmentSilhouette(ctx);
+  ctx.save();
+  ctx.clip();
+
+  // Color base de la tela
+  ctx.fillStyle = opts.hex;
+  ctx.fillRect(0, 0, W, H);
+
+  // 4. Iluminación volumétrica 3D de estudio (pecho cilíndrico + hombros + caída)
+  const lightCenterX = 256 - opts.ry * 3.2;
+  const lightCenterY = 195 - opts.rx * 2.2;
+  const chestGlow = ctx.createRadialGradient(lightCenterX, lightCenterY, 18, 256, 260, 275);
+  if (isDark) {
+    // En telas oscuras (Negro, Azul Marino, Vino) resaltamos el brillo de algodón de estudio
+    chestGlow.addColorStop(0, 'rgba(255,255,255,0.22)');
+    chestGlow.addColorStop(0.45, 'rgba(255,255,255,0.06)');
+    chestGlow.addColorStop(0.78, 'rgba(0,0,0,0.18)');
+    chestGlow.addColorStop(1, 'rgba(0,0,0,0.48)');
+  } else {
+    chestGlow.addColorStop(0, 'rgba(255,255,255,0.34)');
+    chestGlow.addColorStop(0.45, 'rgba(255,255,255,0.05)');
+    chestGlow.addColorStop(0.8, 'rgba(15,23,42,0.12)');
+    chestGlow.addColorStop(1, 'rgba(15,23,42,0.32)');
+  }
+  ctx.fillStyle = chestGlow;
+  ctx.fillRect(0, 0, W, H);
+
+  // Sombreado cilíndrico lateral del torso (volumen de maniquí invisible)
+  const torsoCyl = ctx.createLinearGradient(110, 0, 402, 0);
+  torsoCyl.addColorStop(0, 'rgba(0,0,0,0.32)');
+  torsoCyl.addColorStop(0.14, 'rgba(255,255,255,0.08)');
+  torsoCyl.addColorStop(0.32, 'rgba(0,0,0,0.02)');
+  torsoCyl.addColorStop(0.5, 'rgba(255,255,255,0.10)');
+  torsoCyl.addColorStop(0.68, 'rgba(0,0,0,0.02)');
+  torsoCyl.addColorStop(0.86, 'rgba(255,255,255,0.07)');
+  torsoCyl.addColorStop(1, 'rgba(0,0,0,0.34)');
+  ctx.fillStyle = torsoCyl;
+  ctx.fillRect(105, 60, 302, 420);
+
+  // 5. Estampado / Diseño aplicado sobre el pecho o espalda (ANTES de las sombras de pliegues para realismo total)
+  const showDecal =
+    !!opts.designImg &&
+    ((opts.side === 'front' && opts.placement !== 'back') ||
+      (opts.side === 'back' && opts.placement === 'back'));
+
+  if (showDecal && opts.designImg) {
+    const img = opts.designImg;
+    const aspect = img.naturalWidth / Math.max(1, img.naturalHeight);
+    const s = Math.max(0.5, Math.min(1.5, opts.designScale));
+    let targetW = 152 * s;
+    let centerX = 256 + parallaxX * 0.25;
+    let centerY = 225 + opts.designOffsetY * 3.2;
+
+    if (opts.placement === 'pocket') {
+      targetW = 72 * s;
+      centerX = 312 + parallaxX * 0.2;
+      centerY = 182 + opts.designOffsetY * 2.5;
+    } else if (opts.placement === 'full') {
+      targetW = 205 * s;
+      centerY = 248 + opts.designOffsetY * 3.2;
+    }
+
+    const targetH = targetW / aspect;
+
+    // Deformación sutil por tiras verticales para seguir la curvatura 3D del pecho y la onda de la tela
+    const slices = 18;
+    const sliceW = targetW / slices;
+    const srcSliceW = img.naturalWidth / slices;
+
+    ctx.save();
+    for (let i = 0; i < slices; i++) {
+      const u = (i + 0.5) / slices - 0.5; // -0.5 a +0.5
+      // Curvatura de cilindro de pecho + onda de viento en vivo
+      const archY = Math.cos(u * Math.PI) * 5 - 3;
+      const rippleY = Math.sin(opts.phase * 2.6 + u * 5.2) * 2.2;
+      const dx = centerX - targetW / 2 + i * sliceW;
+      const dy = centerY - targetH / 2 + archY + rippleY;
+
+      ctx.drawImage(
+        img,
+        i * srcSliceW,
+        0,
+        srcSliceW,
+        img.naturalHeight,
+        dx,
+        dy,
+        sliceW + 0.6,
+        targetH
+      );
+    }
+    ctx.restore();
+  }
+
+  // 6. Pliegues dinámicos de tela (ondas suaves de viento y tensión en pecho/axilas/cintura)
+  ctx.save();
+  const foldCount = 7;
+  for (let i = 0; i < foldCount; i++) {
+    const t = i / (foldCount - 1);
+    const baseX = 142 + t * 228;
+    const sway = Math.sin(opts.phase * 2.2 + i * 1.15) * (5 + t * 3) + walkSwing * 4;
+    const fx = baseX + sway;
+
+    const foldGrad = ctx.createLinearGradient(fx - 18, 120, fx + 18, 450);
+    foldGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    foldGrad.addColorStop(0.35, isDark ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.12)');
+    foldGrad.addColorStop(0.55, isDark ? 'rgba(0,0,0,0.20)' : 'rgba(15,23,42,0.09)');
+    foldGrad.addColorStop(1, 'rgba(0,0,0,0)');
+
+    ctx.fillStyle = foldGrad;
+    ctx.beginPath();
+    ctx.moveTo(baseX - 16, 110);
+    ctx.quadraticCurveTo(fx, 285, baseX + sway * 1.3 - 12, 465);
+    ctx.lineTo(baseX + sway * 1.3 + 16, 465);
+    ctx.quadraticCurveTo(fx + 14, 285, baseX + 16, 110);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Pliegues anatómicos de tensión desde las sisas (axilas) hacia el pecho
+  const drawCrease = (x1: number, y1: number, cx: number, cy: number, x2: number, y2: number, alpha: number) => {
+    ctx.save();
+    ctx.strokeStyle = `rgba(0,0,0,${alpha})`;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.filter = 'blur(3px)';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(cx, cy + wave * 2, x2, y2);
+    ctx.stroke();
+
+    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1 - 3);
+    ctx.quadraticCurveTo(cx, cy - 3 + wave * 2, x2, y2 - 3);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  drawCrease(122, 174, 158, 198, 195, 228, isDark ? 0.34 : 0.16);
+  drawCrease(122, 162, 150, 172, 178, 188, isDark ? 0.25 : 0.12);
+  drawCrease(390, 174, 354, 198, 317, 228, isDark ? 0.34 : 0.16);
+  drawCrease(390, 162, 362, 172, 334, 188, isDark ? 0.25 : 0.12);
+  ctx.restore();
+
+  // 7. Costuras de mangas (sisas) y doble costura en puños y dobladillo
+  ctx.save();
+  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.13)' : 'rgba(15,23,42,0.16)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(175, 66);
+  ctx.quadraticCurveTo(138, 122, 122, 174);
+  ctx.moveTo(337, 66);
+  ctx.quadraticCurveTo(374, 122, 390, 174);
+  ctx.stroke();
+
+  // Costura de dobladillo inferior y puños
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(114, 444);
+  ctx.bezierCurveTo(185, 462, 327, 462, 398, 444);
+  ctx.moveTo(30, 192);
+  ctx.quadraticCurveTo(64, 212, 102, 221);
+  ctx.moveTo(482, 192);
+  ctx.quadraticCurveTo(448, 212, 410, 221);
+  ctx.stroke();
+  ctx.restore();
+
+  // 8. Cavidad 3D del Cuello (Ghost Mannequin / Personaje Invisible)
+  if (opts.side === 'front') {
+    // Interior trasero del cuello visible a través de la abertura (con parallax 3D real)
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(190, 62);
+    ctx.bezierCurveTo(224, 52, 288, 52, 322, 62);
+    ctx.bezierCurveTo(310, 98, 286, 114, 256, 114);
+    ctx.bezierCurveTo(226, 114, 202, 98, 190, 62);
+    ctx.closePath();
+    ctx.clip();
+
+    // Tela interna de la espalda oscurecida por sombra profunda de cavidad
+    const neckDepthGrad = ctx.createLinearGradient(256, 52, 256, 116);
+    neckDepthGrad.addColorStop(
+      0,
+      `rgb(${Math.round(r * 0.52)}, ${Math.round(g * 0.52)}, ${Math.round(b * 0.52)})`
+    );
+    neckDepthGrad.addColorStop(
+      1,
+      `rgb(${Math.round(r * 0.22)}, ${Math.round(g * 0.22)}, ${Math.round(b * 0.22)})`
+    );
+    ctx.fillStyle = neckDepthGrad;
+    ctx.fillRect(180, 48, 152, 74);
+
+    // Cinta de refuerzo interna del cuello trasero (neck tape)
+    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(192, 67 - parallaxY * 0.3);
+    ctx.quadraticCurveTo(256 - parallaxX * 0.5, 59 - parallaxY * 0.3, 320, 67 - parallaxY * 0.3);
+    ctx.stroke();
+
+    // Etiqueta tejida interna ("CREATIVOS") que se desplaza con parallax 3D dentro del cuello
+    const tagX = 236 - parallaxX * 0.55;
+    const tagY = 66 - parallaxY * 0.35;
+    ctx.fillStyle = '#f8fafc';
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 2;
+    ctx.fillRect(tagX, tagY, 40, 22);
+    ctx.shadowColor = 'transparent';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 7px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('CREATIVOS', tagX + 20, tagY + 10);
+    ctx.font = '6px system-ui, sans-serif';
+    ctx.fillStyle = '#475569';
+    ctx.fillText('GIFT SHOP', tagX + 20, tagY + 18);
+    ctx.restore();
+
+    // Ribete acanalado frontal del cuello redondo (con grosor 3D y sombra proyectada)
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 3;
+    ctx.strokeStyle = `rgb(${Math.min(255, Math.round(r * 0.92 + 12))}, ${Math.min(
+      255,
+      Math.round(g * 0.92 + 12)
+    )}, ${Math.min(255, Math.round(b * 0.92 + 12))})`;
+    ctx.lineWidth = 11;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(189, 63);
+    ctx.bezierCurveTo(202, 102, 226, 118, 256, 118);
+    ctx.bezierCurveTo(286, 118, 310, 102, 323, 63);
+    ctx.stroke();
+
+    // Luz superior en el borde del cuello acanalado
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.45)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(192, 63);
+    ctx.bezierCurveTo(205, 98, 227, 113, 256, 113);
+    ctx.bezierCurveTo(285, 113, 307, 98, 320, 63);
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    // Vista Espalda: cuello alto acanalado con pequeña abertura de maniquí invisible
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(192, 62);
+    ctx.quadraticCurveTo(256, 53, 320, 62);
+    ctx.quadraticCurveTo(256, 74, 192, 62);
+    ctx.closePath();
+    ctx.fillStyle = `rgb(${Math.round(r * 0.28)}, ${Math.round(g * 0.28)}, ${Math.round(b * 0.28)})`;
+    ctx.fill();
+
+    ctx.strokeStyle = `rgb(${Math.min(255, Math.round(r * 0.94 + 10))}, ${Math.min(
+      255,
+      Math.round(g * 0.94 + 10)
+    )}, ${Math.min(255, Math.round(b * 0.94 + 10))})`;
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(190, 63);
+    ctx.quadraticCurveTo(256, 76, 322, 63);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.restore(); // Fin de recorte de silueta
+
+  // 9. Contorno Fresnel sutil para definir la prenda sobre fondos claros u oscuros
+  ctx.save();
+  traceGarmentSilhouette(ctx);
+  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.18)';
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
 
 export function ShirtPreview({
   hex,
@@ -14,78 +404,62 @@ export function ShirtPreview({
   size?: number;
   designUrl?: string | null;
 }) {
-  const isLight = contrastText(hex) === '#111827';
-  const stroke = isLight ? 'rgba(15,23,42,0.22)' : 'rgba(255,255,255,0.22)';
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [imgTick, setImgTick] = useState(0);
+
+  useEffect(() => {
+    if (!designUrl) {
+      imgRef.current = null;
+      setImgTick((t) => t + 1);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      imgRef.current = img;
+      setImgTick((t) => t + 1);
+    };
+    img.src = designUrl;
+  }, [designUrl]);
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    renderGhostMannequinFrame(ctx, {
+      hex,
+      side: 'front',
+      ry: -6,
+      rx: 3,
+      phase: 0.6,
+      mode: 'wind',
+      designImg: imgRef.current,
+      placement: 'center',
+      designScale: 1,
+      designOffsetY: 0
+    });
+  }, [hex, imgTick]);
+
   return (
     <div className="flex flex-col items-center select-none">
-      <div className="relative" style={{ width: size, height: size }}>
-        <svg viewBox="0 0 220 220" width={size} height={size} aria-label={label || 'Vista previa'}>
-          <defs>
-            <linearGradient id="shirt3d-body" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#ffffff" stopOpacity={isLight ? '0.18' : '0.12'} />
-              <stop offset="45%" stopColor="#000000" stopOpacity="0" />
-              <stop offset="100%" stopColor="#000000" stopOpacity="0.22" />
-            </linearGradient>
-            <linearGradient id="shirt3d-folds" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#000" stopOpacity="0.16" />
-              <stop offset="18%" stopColor="#fff" stopOpacity="0.06" />
-              <stop offset="50%" stopColor="#000" stopOpacity="0" />
-              <stop offset="82%" stopColor="#fff" stopOpacity="0.05" />
-              <stop offset="100%" stopColor="#000" stopOpacity="0.18" />
-            </linearGradient>
-            <filter id="shirt3d-shadow" x="-15%" y="-10%" width="130%" height="130%">
-              <feDropShadow dx="0" dy="8" stdDeviation="6" floodColor="#0f172a" floodOpacity="0.22" />
-            </filter>
-          </defs>
-          <ellipse cx="110" cy="204" rx="54" ry="6" fill="rgba(15,23,42,0.14)" />
-          <g filter="url(#shirt3d-shadow)">
-            <path
-              d="M78 22 L54 29 L14 54 L32 95 L56 84 L56 194 Q110 200 164 194 L164 84 L188 95 L206 54 L166 29 L142 22 C135 38 123 45 110 45 C97 45 85 38 78 22 Z"
-              fill={hex}
-              stroke="#0f172a"
-              strokeOpacity="0.28"
-              strokeWidth="2"
-              strokeLinejoin="round"
-              style={{ transition: 'fill 260ms cubic-bezier(0.22, 1, 0.36, 1)' }}
-            />
-            <path
-              d="M78 22 L54 29 L14 54 L32 95 L56 84 L56 194 Q110 200 164 194 L164 84 L188 95 L206 54 L166 29 L142 22 C135 38 123 45 110 45 C97 45 85 38 78 22 Z"
-              fill="url(#shirt3d-body)"
-            />
-            <path
-              d="M78 22 L54 29 L14 54 L32 95 L56 84 L56 194 Q110 200 164 194 L164 84 L188 95 L206 54 L166 29 L142 22 C135 38 123 45 110 45 C97 45 85 38 78 22 Z"
-              fill="url(#shirt3d-folds)"
-            />
-            <path
-              d="M78 22 Q110 32 142 22 C135 38 123 45 110 45 C97 45 85 38 78 22 Z"
-              fill="rgba(0,0,0,0.22)"
-            />
-            <path
-              d="M78 22 C85 38 97 45 110 45 C123 45 135 38 142 22"
-              fill="none"
-              stroke={stroke}
-              strokeWidth="4.5"
-            />
-            <path d="M56 84 L56 62 M164 84 L164 62" stroke={stroke} strokeWidth="2" />
-          </g>
-        </svg>
-        {designUrl && (
-          <img
-            src={designUrl}
-            alt="Diseño"
-            className="pointer-events-none absolute left-1/2 top-[43%] w-[34%] -translate-x-1/2 -translate-y-1/2 object-contain drop-shadow-sm"
-          />
-        )}
-      </div>
+      <canvas
+        ref={canvasRef}
+        width={512}
+        height={520}
+        style={{ width: size, height: size }}
+        className="drop-shadow-md"
+        aria-label={label || 'Vista previa'}
+      />
       {label && <span className="mt-1 text-sm font-semibold text-slate-700">{label}</span>}
     </div>
   );
 }
 
 /**
- * Estudio 3D interactivo de 60/120 FPS reales:
- * Actualiza las matrices CSS 3D y la iluminación SVG directamente en el DOM (sin re-renderizar React en cada frame),
- * con física de resorte amortiguado e inercia táctil suave.
+ * Estudio 3D estilo VirtualThreads.io / Ghost Mannequin (Personaje Invisible):
+ * Renderiza la prenda volumétrica real con cuello hueco 3D, pliegues vivos en movimiento
+ * (Brisa, Caminata Invisible o Giro 3D) y estampado curvado sobre la tela.
  */
 export function InteractiveShirt3D({
   hex,
@@ -109,24 +483,47 @@ export function InteractiveShirt3D({
   stockBadge?: { available: boolean; text: string } | null;
 }) {
   const [side, setSide] = useState<'front' | 'back'>('front');
+  const [mode, setMode] = useState<MotionMode>('wind');
 
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const shadowRef = useRef<HTMLDivElement>(null);
-  const specGradRef = useRef<SVGRadialGradientElement>(null);
-  const depthLayerRef = useRef<SVGPathElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  const propsRef = useRef({
+    hex,
+    side,
+    mode,
+    placement,
+    designScale,
+    designOffsetY,
+    autoMotion
+  });
+  propsRef.current = { hex, side, mode, placement, designScale, designOffsetY, autoMotion };
 
   const physRef = useRef({
     rx: 4,
-    ry: -12,
+    ry: -10,
     vx: 0,
     vy: 0,
     targetRx: 4,
-    targetRy: -12,
-    flipOffset: 0,
+    targetRy: -10,
     dragging: false,
     lastX: 0,
     lastY: 0
   });
+
+  useEffect(() => {
+    if (!designUrl) {
+      imgRef.current = null;
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      imgRef.current = img;
+    };
+    img.src = designUrl;
+  }, [designUrl]);
 
   useEffect(() => {
     if (placement === 'back') setSide('back');
@@ -135,8 +532,7 @@ export function InteractiveShirt3D({
 
   const switchSide = (next: 'front' | 'back') => {
     if (next !== side) {
-      // Impulso suave de giro al voltear la prenda
-      physRef.current.vy += next === 'back' ? 14 : -14;
+      physRef.current.vy += next === 'back' ? 16 : -16;
       setSide(next);
     }
   };
@@ -148,37 +544,65 @@ export function InteractiveShirt3D({
     const animate = (now: number) => {
       const elapsed = (now - t0) / 1000;
       const p = physRef.current;
+      const cur = propsRef.current;
 
-      if (!p.dragging && autoMotion) {
-        p.targetRy = Math.sin(elapsed * 1.1) * 19;
-        p.targetRx = Math.cos(elapsed * 0.85) * 5.5 + 3;
+      if (!p.dragging && cur.autoMotion) {
+        if (cur.mode === 'wind') {
+          p.targetRy = Math.sin(elapsed * 1.1) * 16;
+          p.targetRx = Math.cos(elapsed * 0.85) * 4.5 + 3;
+        } else if (cur.mode === 'walk') {
+          // Movimiento de caminata de personaje invisible (balanceo de hombros y torso)
+          p.targetRy = Math.sin(elapsed * 2.8) * 14;
+          p.targetRx = Math.abs(Math.cos(elapsed * 2.8)) * 6;
+        } else {
+          // Giro amplio de estudio
+          p.targetRy = Math.sin(elapsed * 0.9) * 28;
+          p.targetRx = Math.cos(elapsed * 0.7) * 5 + 3;
+        }
       }
 
-      // Física de resorte amortiguado (stiffness + damping)
-      const ax = (p.targetRx - p.rx) * 0.085;
-      const ay = (p.targetRy - p.ry) * 0.085;
+      const ax = (p.targetRx - p.rx) * 0.09;
+      const ay = (p.targetRy - p.ry) * 0.09;
       p.vx = (p.vx + ax) * 0.82;
       p.vy = (p.vy + ay) * 0.82;
       p.rx += p.vx;
       p.ry += p.vy;
 
-      const floatY = Math.sin(elapsed * 1.9) * 5.5;
-      const lightX = Math.max(12, Math.min(88, 50 - p.ry * 1.35));
+      const walkBounce =
+        cur.autoMotion && cur.mode === 'walk' ? Math.abs(Math.sin(elapsed * 2.8)) * -9 : Math.sin(elapsed * 1.9) * 5;
+      const walkRoll = cur.autoMotion && cur.mode === 'walk' ? Math.cos(elapsed * 2.8) * 2.2 : 0;
 
       if (bodyRef.current) {
-        bodyRef.current.style.transform = `translate3d(0, ${floatY.toFixed(2)}px, 0) rotateX(${p.rx.toFixed(
+        bodyRef.current.style.transform = `translate3d(0, ${walkBounce.toFixed(
           2
-        )}deg) rotateY(${p.ry.toFixed(2)}deg)`;
+        )}px, 0) rotateX(${p.rx.toFixed(2)}deg) rotateY(${p.ry.toFixed(2)}deg) rotateZ(${walkRoll.toFixed(
+          2
+        )}deg)`;
       }
       if (shadowRef.current) {
-        const sScale = (1 - floatY * 0.012).toFixed(3);
-        shadowRef.current.style.transform = `translate3d(${(-p.ry * 0.75).toFixed(1)}px, 0, 0) scale(${sScale})`;
+        const sScale = (1 - Math.abs(walkBounce) * 0.014).toFixed(3);
+        shadowRef.current.style.transform = `translate3d(${(-p.ry * 0.8).toFixed(
+          1
+        )}px, 0, 0) scale(${sScale})`;
       }
-      if (specGradRef.current) {
-        specGradRef.current.setAttribute('cx', `${lightX.toFixed(1)}%`);
-      }
-      if (depthLayerRef.current) {
-        depthLayerRef.current.setAttribute('transform', `translate(${(p.ry * 0.13).toFixed(2)}, 2.5)`);
+
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          renderGhostMannequinFrame(ctx, {
+            hex: cur.hex,
+            side: cur.side,
+            ry: p.ry,
+            rx: p.rx,
+            phase: cur.autoMotion ? elapsed : 0.5,
+            mode: cur.mode,
+            designImg: imgRef.current,
+            placement: cur.placement,
+            designScale: cur.designScale,
+            designOffsetY: cur.designOffsetY
+          });
+        }
       }
 
       raf = requestAnimationFrame(animate);
@@ -186,51 +610,52 @@ export function InteractiveShirt3D({
 
     raf = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf);
-  }, [autoMotion]);
-
-  const isLight = contrastText(hex) === '#111827';
-  const stroke = isLight ? 'rgba(15,23,42,0.24)' : 'rgba(255,255,255,0.24)';
-
-  const decalPositionStyle = (): { left: string; top: string; width: string } => {
-    const baseScale = Math.max(0.5, Math.min(1.6, designScale));
-    const yShift = designOffsetY;
-    if (placement === 'pocket') {
-      return { left: '61%', top: `${36 + yShift}%`, width: `${15 * baseScale}%` };
-    }
-    if (placement === 'full') {
-      return { left: '50%', top: `${48 + yShift}%`, width: `${42 * baseScale}%` };
-    }
-    return { left: '50%', top: `${44 + yShift}%`, width: `${31 * baseScale}%` };
-  };
-
-  const showDecalOnCurrentSide =
-    !!designUrl && ((side === 'front' && placement !== 'back') || (side === 'back' && placement === 'back'));
-
-  const decalStyle = decalPositionStyle();
+  }, []);
 
   return (
     <div className="relative flex flex-col items-center select-none">
-      {/* Barra superior del visor: Frente / Espalda + Estado de stock en vivo */}
+      {/* Controles superiores: Frente / Espalda + Modo de animación tipo VirtualThreads + Stock en vivo */}
       <div className="z-10 mb-2 flex flex-wrap items-center justify-center gap-2">
         <div className="inline-flex rounded-full bg-slate-200/80 p-1">
           <button
             type="button"
-            className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
+            className={`rounded-full px-3 py-1 text-xs font-bold transition ${
               side === 'front' ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
             }`}
             onClick={() => switchSide('front')}
           >
-            Vista Frente
+            Frente
           </button>
           <button
             type="button"
-            className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
+            className={`rounded-full px-3 py-1 text-xs font-bold transition ${
               side === 'back' ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
             }`}
             onClick={() => switchSide('back')}
           >
-            Vista Espalda
+            Espalda
           </button>
+        </div>
+
+        <div className="inline-flex rounded-full bg-slate-200/80 p-1">
+          {(
+            [
+              ['wind', '🌬️ Tela Viva'],
+              ['walk', '🚶 Caminata'],
+              ['orbit', '🔄 Giro 3D']
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${
+                mode === id ? 'bg-slate-900 text-white shadow' : 'text-slate-700'
+              }`}
+              onClick={() => setMode(id)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {stockBadge && (
@@ -251,10 +676,10 @@ export function InteractiveShirt3D({
         )}
       </div>
 
-      {/* Escenario 3D interactivo acelerado por GPU */}
+      {/* Escenario 3D Ghost Mannequin */}
       <div
-        className="relative flex h-[310px] w-full max-w-[340px] cursor-grab items-center justify-center touch-none active:cursor-grabbing sm:h-[350px]"
-        style={{ perspective: '950px' }}
+        className="relative flex h-[330px] w-full max-w-[360px] cursor-grab items-center justify-center touch-none active:cursor-grabbing sm:h-[370px]"
+        style={{ perspective: '1000px' }}
         onPointerDown={(e: any) => {
           const p = physRef.current;
           p.dragging = true;
@@ -283,127 +708,29 @@ export function InteractiveShirt3D({
           physRef.current.dragging = false;
         }}
       >
-        {/* Sombra dinámica en el piso */}
+        {/* Sombra proyectada en el piso */}
         <div
           ref={shadowRef}
-          className="pointer-events-none absolute bottom-3 h-6 w-48 rounded-full bg-slate-900/20 blur-md will-change-transform"
+          className="pointer-events-none absolute bottom-2 h-7 w-52 rounded-full bg-slate-900/25 blur-md will-change-transform"
         />
 
-        {/* Cuerpo 3D */}
+        {/* Prenda 3D sobre maniquí invisible */}
         <div
           ref={bodyRef}
-          className="relative h-[285px] w-[285px] will-change-transform sm:h-[320px] sm:w-[320px]"
+          className="relative h-[305px] w-[305px] will-change-transform sm:h-[340px] sm:w-[340px]"
           style={{ transformStyle: 'preserve-3d' }}
         >
-          <svg viewBox="0 0 240 240" className="h-full w-full overflow-visible">
-            <defs>
-              <radialGradient ref={specGradRef} id="spec3d" cx="35%" cy="28%" r="65%">
-                <stop offset="0%" stopColor="#ffffff" stopOpacity={isLight ? '0.28' : '0.18'} />
-                <stop offset="55%" stopColor="#000000" stopOpacity="0" />
-                <stop offset="100%" stopColor="#000000" stopOpacity="0.28" />
-              </radialGradient>
-              <linearGradient id="drape3d" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#000000" stopOpacity="0.22" />
-                <stop offset="15%" stopColor="#ffffff" stopOpacity="0.07" />
-                <stop offset="32%" stopColor="#000000" stopOpacity="0.04" />
-                <stop offset="50%" stopColor="#ffffff" stopOpacity="0.06" />
-                <stop offset="68%" stopColor="#000000" stopOpacity="0.04" />
-                <stop offset="85%" stopColor="#ffffff" stopOpacity="0.07" />
-                <stop offset="100%" stopColor="#000000" stopOpacity="0.24" />
-              </linearGradient>
-              <filter id="drop3d" x="-20%" y="-15%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#0f172a" floodOpacity="0.26" />
-              </filter>
-            </defs>
-
-            <g filter="url(#drop3d)">
-              <path
-                ref={depthLayerRef}
-                d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
-                fill="#0f172a"
-                fillOpacity="0.25"
-              />
-
-              <path
-                d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
-                fill={hex}
-                stroke="#0f172a"
-                strokeOpacity="0.3"
-                strokeWidth="2"
-                strokeLinejoin="round"
-                style={{ transition: 'fill 280ms cubic-bezier(0.22, 1, 0.36, 1)' }}
-              />
-
-              <path
-                d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
-                fill="url(#spec3d)"
-              />
-
-              <path
-                d="M84 24 L58 32 L14 60 L34 106 L60 93 L60 212 Q120 219 180 212 L180 93 L206 106 L226 60 L182 32 L156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
-                fill="url(#drape3d)"
-              />
-
-              {side === 'front' ? (
-                <>
-                  <path
-                    d="M84 24 Q120 35 156 24 C148 42 135 50 120 50 C105 50 92 42 84 24 Z"
-                    fill="rgba(0,0,0,0.26)"
-                  />
-                  <rect x="111" y="29" width="18" height="9" rx="1.5" fill="#f8fafc" opacity="0.85" />
-                  <path
-                    d="M84 24 C92 42 105 50 120 50 C135 50 148 42 156 24"
-                    fill="none"
-                    stroke={stroke}
-                    strokeWidth="5"
-                  />
-                </>
-              ) : (
-                <>
-                  <path
-                    d="M84 24 Q120 31 156 24"
-                    fill="none"
-                    stroke={stroke}
-                    strokeWidth="6"
-                    strokeLinecap="round"
-                  />
-                  <path d="M88 30 Q120 37 152 30" fill="none" stroke={stroke} strokeWidth="1.5" />
-                </>
-              )}
-
-              <path d="M60 93 L58 32 M180 93 L182 32" stroke={stroke} strokeWidth="1.6" />
-              <path
-                d="M62 206 Q120 213 178 206"
-                fill="none"
-                stroke={stroke}
-                strokeWidth="1.4"
-                strokeDasharray="3 2"
-              />
-            </g>
-          </svg>
-
-          {showDecalOnCurrentSide && (
-            <div
-              className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-150"
-              style={{
-                left: decalStyle.left,
-                top: decalStyle.top,
-                width: decalStyle.width,
-                transform: 'translate(-50%, -50%) translateZ(8px)'
-              }}
-            >
-              <img
-                src={designUrl!}
-                alt="Diseño en camisa"
-                className="h-auto w-full object-contain drop-shadow-sm"
-              />
-            </div>
-          )}
+          <canvas
+            ref={canvasRef}
+            width={512}
+            height={520}
+            className="h-full w-full drop-shadow-2xl"
+          />
         </div>
       </div>
 
       <div className="mt-1 flex items-center gap-2 text-xs font-semibold text-slate-500">
-        <span>🖐 Arrastra para girar en 3D</span>
+        <span>🖐 Arrastra para rotar la prenda</span>
         <span>·</span>
         <span className="font-bold text-slate-800">
           {brandName} · {colorName}
