@@ -262,12 +262,28 @@ export class FirebaseSyncEngine {
     const pending = await db.photos.where('synced').equals(0).toArray();
     for (const p of pending) {
       try {
-        const photoDoc = doc(this.fs, 'cgs_photos', p.id);
-        await setDoc(photoDoc, { data: p.data });
-        await db.photos.update(p.id, { synced: 1 });
+        await uploadPhotoNowFirebase(p.id, p.data);
       } catch (err) {
-        console.warn('[firebase-sync] foto upload', err);
-        break;
+        console.warn('[firebase-sync] foto upload', p.id, err);
+        continue;
+      }
+    }
+    // Asegurar que todas las fotos de diseños del catálogo queden respaldadas en la nube
+    await this.syncAllCatalogPhotos();
+  }
+
+  async syncAllCatalogPhotos() {
+    if (!this.fs || !navigator.onLine) return;
+    const state = this.opts.getState();
+    const catalogDesigns = (state.catalogDesigns || []).filter((d) => !d.deleted && d.photoId);
+    for (const d of catalogDesigns) {
+      try {
+        const local = await db.photos.get(d.photoId);
+        if (local?.data) {
+          await uploadPhotoNowFirebase(d.photoId, local.data);
+        }
+      } catch (err) {
+        console.warn('[firebase-sync] syncAllCatalogPhotos', d.name, err);
       }
     }
   }
@@ -319,16 +335,29 @@ export class FirebaseSyncEngine {
   }
 }
 
+const CHUNK_SIZE = 650000;
+
 export async function uploadPhotoNowFirebase(id: string, data: string): Promise<void> {
   const cfg = getFirebaseConfig();
   if (!cfg || !navigator.onLine) return;
   try {
     const { fs } = getOrInitFirebase(cfg);
-    const photoDoc = doc(fs, 'cgs_photos', id);
-    await setDoc(photoDoc, { data });
+    if (data.length <= CHUNK_SIZE) {
+      const photoDoc = doc(fs, 'cgs_photos', id);
+      await setDoc(photoDoc, { data, chunks: 1, updatedAt: Date.now() });
+    } else {
+      const totalChunks = Math.ceil(data.length / CHUNK_SIZE);
+      const mainDoc = doc(fs, 'cgs_photos', id);
+      await setDoc(mainDoc, { chunks: totalChunks, updatedAt: Date.now() });
+      for (let i = 0; i < totalChunks; i++) {
+        const slice = data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        const chunkDoc = doc(fs, 'cgs_photos', `${id}__c${i}`);
+        await setDoc(chunkDoc, { data: slice });
+      }
+    }
     await db.photos.update(id, { synced: 1 });
-  } catch {
-    /* ignorar */
+  } catch (err) {
+    console.warn('[firebase-sync] Error subiendo foto:', id, err);
   }
 }
 
@@ -341,13 +370,31 @@ export async function fetchSharedPhotoFirebase(id: string): Promise<string | nul
     const { fs } = getOrInitFirebase(cfg);
     const photoDoc = doc(fs, 'cgs_photos', id);
     const snap = await getDoc(photoDoc);
-    if (snap.exists()) {
-      const dataStr = snap.data().data as string;
+    if (!snap.exists()) return null;
+    const snapData = snap.data();
+    if (snapData.chunks && snapData.chunks > 1) {
+      const total = snapData.chunks as number;
+      const promises: Promise<string>[] = [];
+      for (let i = 0; i < total; i++) {
+        promises.push(
+          getDoc(doc(fs, 'cgs_photos', `${id}__c${i}`)).then((s) =>
+            s.exists() ? (s.data().data as string) : ''
+          )
+        );
+      }
+      const parts = await Promise.all(promises);
+      const fullData = parts.join('');
+      if (fullData) {
+        await db.photos.put({ id, data: fullData, synced: 1, createdAt: Date.now() });
+        return fullData;
+      }
+    } else if (snapData.data) {
+      const dataStr = snapData.data as string;
       await db.photos.put({ id, data: dataStr, synced: 1, createdAt: Date.now() });
       return dataStr;
     }
-  } catch {
-    /* ignorar */
+  } catch (err) {
+    console.warn('[firebase-sync] fetchSharedPhotoFirebase error:', id, err);
   }
   return null;
 }

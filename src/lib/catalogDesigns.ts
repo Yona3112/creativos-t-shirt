@@ -10,10 +10,19 @@ import type { SharedCatalogDesignRef } from './publicCatalog';
 
 export type { SharedCatalogDesignRef };
 
+// Caché en memoria para evitar llamadas redundantes y permitir render instantáneo en 0ms
+const MEM_PHOTO_CACHE = new Map<string, string>();
+
 export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
   const state = useAppState();
   const photoVer = usePhotoVersion();
-  const [urlMap, setUrlMap] = useState<Record<string, string>>({});
+  const [urlMap, setUrlMap] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const [k, v] of MEM_PHOTO_CACHE.entries()) {
+      init[k] = v;
+    }
+    return init;
+  });
 
   const rawList = useMemo(() => {
     const fromState = (state.catalogDesigns || [])
@@ -29,7 +38,9 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       if (!map.has(ref.id)) {
         // Si el estado en vivo ya tiene ese diseño marcado como deleted o clientVisible=false, respetarlo
         const deletedOrHidden = (state.catalogDesigns || []).find((x) => x.id === ref.id);
-        if (deletedOrHidden) continue;
+        if (deletedOrHidden && (deletedOrHidden.deleted || deletedOrHidden.clientVisible === false)) {
+          continue;
+        }
         map.set(ref.id, {
           id: ref.id,
           name: ref.name,
@@ -45,26 +56,59 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     return Array.from(map.values());
   }, [state.catalogDesigns, fallbackRefs]);
 
+  const rawListKey = useMemo(
+    () => rawList.map((d) => `${d.id}:${d.photoId}`).join('|'),
+    [rawList]
+  );
+
   useEffect(() => {
     let cancelled = false;
+
     const loadAll = async () => {
-      const next: Record<string, string> = {};
+      // 1. Cargar inmediatamente de memoria si ya las tenemos
+      const immediate: Record<string, string> = {};
+      const missing: typeof rawList = [];
+
       for (const item of rawList) {
         if (!item.photoId) continue;
-        const data = await fetchSharedPhoto(item.photoId);
-        if (data) {
-          next[item.photoId] = data;
+        const cached = MEM_PHOTO_CACHE.get(item.photoId);
+        if (cached) {
+          immediate[item.photoId] = cached;
+        } else {
+          missing.push(item);
         }
       }
-      if (!cancelled) {
-        setUrlMap((prev) => ({ ...prev, ...next }));
+
+      if (Object.keys(immediate).length > 0 && !cancelled) {
+        setUrlMap((prev) => ({ ...immediate, ...prev }));
       }
+
+      if (missing.length === 0) return;
+
+      // 2. Descargar las que falten en paralelo y actualizar la UI progresivamente según lleguen
+      await Promise.all(
+        missing.map(async (item) => {
+          if (!item.photoId) return;
+          try {
+            const data = await fetchSharedPhoto(item.photoId);
+            if (data) {
+              MEM_PHOTO_CACHE.set(item.photoId, data);
+              if (!cancelled) {
+                setUrlMap((prev) => ({ ...prev, [item.photoId]: data }));
+              }
+            }
+          } catch (err) {
+            console.warn('[catalogDesigns] error cargando diseño:', item.name, err);
+          }
+        })
+      );
     };
+
     void loadAll();
     return () => {
       cancelled = true;
     };
-  }, [rawList, photoVer]);
+  }, [rawListKey, photoVer]);
 
   const allDesigns: CatalogQuickDesign[] = useMemo(
     () =>
@@ -73,15 +117,15 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         name: d.name,
         code: d.code,
         photoId: d.photoId,
-        imageUrl: urlMap[d.photoId] || null,
+        imageUrl: urlMap[d.photoId] || MEM_PHOTO_CACHE.get(d.photoId) || null,
         placement: d.placement || 'back',
-        clientVisible: d.clientVisible
+        clientVisible: d.clientVisible !== false
       })),
     [rawList, urlMap]
   );
 
   const clientDesigns: CatalogQuickDesign[] = useMemo(
-    () => allDesigns.filter((d) => d.clientVisible),
+    () => allDesigns.filter((d) => d.clientVisible !== false),
     [allDesigns]
   );
 
@@ -93,6 +137,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     existingPhotoId?: string | null;
   }) => {
     const pId = opts.existingPhotoId || uid();
+    MEM_PHOTO_CACHE.set(pId, opts.dataUrl);
     await savePhoto(pId, opts.dataUrl, 0);
     void uploadPhotoNow(pId, opts.dataUrl);
     notifyPhotos();
@@ -127,6 +172,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       const raw = await compressImage(file, 1400, 0.92, false);
       const processed = shouldRemove ? await applyBackgroundRemoval(raw, true, tol) : raw;
       const pId = uid();
+      MEM_PHOTO_CACHE.set(pId, processed);
       await savePhoto(pId, processed, 0);
       void uploadPhotoNow(pId, processed);
       setUrlMap((prev) => ({ ...prev, [pId]: processed }));

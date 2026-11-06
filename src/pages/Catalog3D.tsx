@@ -277,6 +277,12 @@ export default function Catalog3D() {
     if (photoId && designUrl) {
       await uploadPhotoNow(photoId, designUrl);
     }
+    // Asegurar que TODAS las imágenes de los diseños visibles del catálogo queden en la nube
+    for (const d of allDesigns) {
+      if (d.photoId && d.imageUrl) {
+        void uploadPhotoNow(d.photoId, d.imageUrl);
+      }
+    }
   };
 
   const handleShareLink = async () => {
