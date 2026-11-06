@@ -5,8 +5,9 @@ import { updateSettings } from '../lib/actions';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
-import { savePhoto } from '../lib/db';
+import { db, savePhoto } from '../lib/db';
 import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
+import { subscribeLiveCatalogFirebase } from '../lib/firebaseSync';
 import { copyText } from '../lib/csv';
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
@@ -245,8 +246,9 @@ export default function Catalog3D() {
       colors: finalColors,
       sizes: settings.sizes,
       priceNormal: normalPrice(settings, brand),
-      priceWholesale: settings.priceWholesale,
-      wholesaleMin: settings.wholesaleMin,
+      priceCustom: settings.priceCustom || 35000,
+      priceWholesale: normalPrice(settings, brand),
+      wholesaleMin: 999999,
       photoId,
       placement,
       scale,
@@ -274,15 +276,25 @@ export default function Catalog3D() {
     const rawJson = JSON.stringify(payload);
     await savePhoto(LIVE_CATALOG_KEY, rawJson, 0);
     await uploadPhotoNow(LIVE_CATALOG_KEY, rawJson);
+    const uploads: Promise<void>[] = [];
     if (photoId && designUrl) {
-      await uploadPhotoNow(photoId, designUrl);
+      uploads.push(uploadPhotoNow(photoId, designUrl));
     }
-    // Asegurar que TODAS las imágenes de los diseños visibles del catálogo queden en la nube
+    // Asegurar que TODAS las imágenes de los diseños visibles del catálogo queden en la nube (Firestore)
     for (const d of allDesigns) {
-      if (d.photoId && d.imageUrl) {
-        void uploadPhotoNow(d.photoId, d.imageUrl);
+      if (!d.photoId) continue;
+      let imgData = d.imageUrl;
+      if (!imgData) {
+        try {
+          const row = await db.photos.get(d.photoId);
+          imgData = row?.data || null;
+        } catch {}
+      }
+      if (imgData) {
+        uploads.push(uploadPhotoNow(d.photoId, imgData));
       }
     }
+    await Promise.all(uploads);
   };
 
   const handleShareLink = async () => {
@@ -523,15 +535,15 @@ export default function Catalog3D() {
             {buildShareUrl()}
           </code>
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
           <button className="btn-primary" onClick={handleShareLink}>
-            🔗 Copiar Enlace Corto (#tienda)
+            🔗 Copiar Enlace (#tienda)
           </button>
           <button
             className="btn bg-[#25D366] text-white hover:bg-[#1ebe5b]"
             onClick={handleShareWhatsApp}
           >
-            💬 Enviar Link Corto por WhatsApp
+            💬 Enviar por WhatsApp
           </button>
           <button
             className="btn-soft"
@@ -541,6 +553,16 @@ export default function Catalog3D() {
             }}
           >
             🛍️ Ver Tienda del Cliente
+          </button>
+          <button
+            className="btn bg-indigo-600 text-white hover:bg-indigo-700"
+            onClick={async () => {
+              toast('Sincronizando catálogo e imágenes con Firebase...');
+              await syncLiveCatalogSnapshot();
+              toast('¡Catálogo e imágenes sincronizados y respaldados en la nube!', 'ok');
+            }}
+          >
+            ☁️ Subir / Respaldar Fotos
           </button>
         </div>
       </section>
@@ -590,6 +612,12 @@ export function CustomerCatalogView({
         /* usar estado en vivo */
       }
     });
+
+    // Suscripción reactiva en tiempo real a Firebase para reflejar cambios y nuevos diseños al instante
+    const unsub = subscribeLiveCatalogFirebase((latest) => {
+      setCloudPayload(latest);
+    });
+    return () => unsub();
   }, [onExitPreview]);
 
   // Combinar datos en vivo de Supabase con la configuración compartida
@@ -727,15 +755,16 @@ export function CustomerCatalogView({
   };
 
   const selectedSizeStock = getSizeStock(selectedColor, size);
-  const unitPrice = qty >= payload.wholesaleMin ? payload.priceWholesale : payload.priceNormal;
+  const hasDesign = !!designUrl;
+  const unitPrice = hasDesign ? (payload.priceCustom || 35000) : (payload.priceNormal || 30000);
   const total = qty * unitPrice;
 
   const isBackSide = placement === 'back';
   const sideLabelExplicit = !designUrl
-    ? 'SIN ESTAMPADO (Camisa Lisa)'
+    ? 'SIN ESTAMPADO (Camisa Lisa - L 300)'
     : isBackSide
-    ? 'ESPALDA (Parte de Atrás de la Camisa)'
-    : 'FRENTE (Pecho Delantero de la Camisa)';
+    ? 'ESPALDA (Estampado A3 - L 350)'
+    : 'FRENTE (Estampado A3 - L 350)';
 
   const stockNote =
     selectedSizeStock >= qty
@@ -787,10 +816,10 @@ export function CustomerCatalogView({
 
     const codePrefix = selectedDesignCode ? `[${selectedDesignCode}] ` : '';
     const designBlock = designUrl
-      ? `\n• Diseño elegido: *${codePrefix}${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
-      : `\n• Estilo: *Camisa Lisa (Sin estampado)*`;
+      ? `\n• Estilo: *Personalizada con Diseño (L 350)*\n• Diseño elegido: *${codePrefix}${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
+      : `\n• Estilo: *Camisa Lisa sin estampado (L 300)*`;
 
-    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds${designBlock}\n• Total estimado: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
+    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds (${money(unitPrice)} c/u)${designBlock}\n• Total: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
 
     const targetHref = payload.storePhone
       ? whatsappUrl(payload.storePhone, orderText)
@@ -800,13 +829,13 @@ export function CustomerCatalogView({
   };
 
   return (
-    <div className="min-h-screen bg-[#140a04] pb-28 text-amber-50">
+    <div className="min-h-screen bg-[#0E0F12] pb-28 text-[#F7F6F2]">
       {/* AVISO CLARO CUANDO EL ADMINISTRADOR ESTÁ PREVISUALIZANDO LA TIENDA DEL CLIENTE */}
       {onExitPreview && (
-        <div className="sticky top-0 z-50 bg-amber-400 px-3 py-2 text-slate-950 shadow-md">
+        <div className="sticky top-0 z-50 bg-[#C8A876] px-3 py-2 text-[#0E0F12] shadow-md">
           <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-extrabold">
-              <span className="rounded-md bg-slate-950 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
+            <div className="flex items-center gap-2 text-xs font-black">
+              <span className="rounded-md bg-[#0E0F12] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#E8D5B5]">
                 Modo Prueba
               </span>
               <span>Así ven tus clientes la Tienda (#tienda)</span>
@@ -814,7 +843,7 @@ export function CustomerCatalogView({
             <button
               type="button"
               onClick={onExitPreview}
-              className="rounded-xl bg-slate-950 px-3 py-1.5 text-xs font-extrabold text-white shadow hover:bg-slate-800"
+              className="rounded-xl bg-[#0E0F12] px-3 py-1.5 text-xs font-extrabold text-white shadow hover:bg-slate-800"
             >
               ← Volver al Panel Admin
             </button>
@@ -823,14 +852,14 @@ export function CustomerCatalogView({
       )}
 
       {/* CABECERA EXCLUSIVA DE LA TIENDA DEL CLIENTE */}
-      <header className="border-b border-amber-500/30 bg-gradient-to-r from-[#2b1407] via-[#3e1d0a] to-[#1f0e05] px-4 py-4 shadow-lg">
+      <header className="border-b border-white/[0.08] bg-[#121316]/95 px-4 py-4 shadow-xl backdrop-blur-md">
         <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-amber-300 ring-1 ring-amber-400/40">
+              <span className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-[#E8D5B5]">
                 👕 Catálogo Oficial 3D
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300 ring-1 ring-emerald-400/30">
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300">
                 <span
                   className={`h-2 w-2 rounded-full ${
                     status === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-sky-400'
@@ -839,28 +868,28 @@ export function CustomerCatalogView({
                 Existencias en Vivo
               </span>
             </div>
-            <h1 className="mt-1 text-xl font-extrabold tracking-tight text-white">
+            <h1 className="mt-1 text-xl font-black tracking-tight text-white">
               {payload.storeName}
             </h1>
-            <p className="text-xs font-medium text-amber-200/85">
+            <p className="text-xs font-medium text-white/60">
               Personalizador Interactivo · Camisas {payload.brandName}
             </p>
           </div>
 
-          <div className="flex items-center gap-2 rounded-2xl border border-amber-400/25 bg-black/30 px-3 py-2 text-right backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-right backdrop-blur-md">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-200/70">
-                Unidad
+              <div className="text-[10px] font-bold uppercase tracking-wider text-white/50">
+                Camisa Lisa
               </div>
-              <div className="text-sm font-extrabold text-white">{money(payload.priceNormal)}</div>
+              <div className="text-sm font-extrabold text-white">{money(payload.priceNormal || 30000)}</div>
             </div>
-            <div className="h-7 w-px bg-amber-400/20" />
+            <div className="h-7 w-px bg-white/10" />
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
-                Mayorista ({payload.wholesaleMin}+)
+              <div className="text-[10px] font-bold uppercase tracking-wider text-[#C8A876]">
+                Personalizada A3
               </div>
-              <div className="text-sm font-extrabold text-amber-300">
-                {money(payload.priceWholesale)}
+              <div className="text-sm font-extrabold text-[#E8D5B5]">
+                {money(payload.priceCustom || 35000)}
               </div>
             </div>
           </div>
@@ -869,7 +898,7 @@ export function CustomerCatalogView({
 
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
         {/* ESCAPARATE 3D INTERACTIVO DEL CLIENTE */}
-        <section className="rounded-3xl border border-amber-500/25 bg-[#211006]/90 p-3 shadow-xl">
+        <section className="rounded-3xl border border-white/[0.08] bg-[#15161A]/95 p-3 shadow-2xl backdrop-blur-md">
           <InteractiveShirt3D
             hex={selectedColor?.hex || '#111827'}
             colorName={selectedColor?.name || ''}
@@ -935,10 +964,10 @@ export function CustomerCatalogView({
         </section>
 
         {/* PASO 3: SELECCIÓN DE TALLA ESTILO TIENDA ONLINE */}
-        <section className="rounded-3xl border border-amber-500/25 bg-[#211006]/90 p-4 shadow-xl">
+        <section className="rounded-3xl border border-white/[0.08] bg-[#15161A]/95 p-4 shadow-2xl backdrop-blur-md">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
+              <span className="rounded-full bg-[#C8A876] px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wide text-[#0E0F12]">
                 📏 Paso 3
               </span>
               <h2 className="text-sm font-extrabold text-white">
@@ -956,19 +985,19 @@ export function CustomerCatalogView({
                   key={sz}
                   type="button"
                   onClick={() => setSize(sz)}
-                  className={`flex min-h-[62px] flex-col items-center justify-center rounded-2xl border-2 px-2 py-2 transition ${
+                  className={`flex min-h-[62px] flex-col items-center justify-center rounded-2xl border transition ${
                     isSel
-                      ? 'scale-[1.03] border-amber-400 bg-amber-400 text-slate-950 shadow-lg'
+                      ? 'scale-[1.03] border-[#C8A876] bg-[#C8A876] text-[#0E0F12] shadow-lg ring-2 ring-[#C8A876]/40'
                       : st > 0
-                      ? 'border-white/15 bg-black/40 text-white hover:border-amber-300/60'
-                      : 'border-white/5 bg-black/20 text-slate-400'
+                      ? 'border-white/10 bg-white/[0.04] text-white hover:border-[#C8A876]/40 hover:bg-white/[0.08]'
+                      : 'border-white/5 bg-white/[0.02] text-white/40'
                   }`}
                 >
                   <span className="text-base font-extrabold">{sz}</span>
                   {st > 0 ? (
                     <span
                       className={`text-[10px] font-extrabold ${
-                        isSel ? 'text-slate-900' : st <= 5 ? 'text-amber-300' : 'text-emerald-300'
+                        isSel ? 'text-[#0E0F12]' : st <= 5 ? 'text-[#E8D5B5]' : 'text-emerald-400'
                       }`}
                     >
                       {st <= 5 ? `¡Últimas ${st}!` : `Disponible`}
@@ -976,7 +1005,7 @@ export function CustomerCatalogView({
                   ) : (
                     <span
                       className={`text-[10px] font-bold ${
-                        isSel ? 'text-slate-800' : 'text-amber-400/90'
+                        isSel ? 'text-black/70' : 'text-[#C8A876]/80'
                       }`}
                     >
                       Pronto
@@ -988,25 +1017,25 @@ export function CustomerCatalogView({
           </div>
         </section>
 
-        {/* PASO 4: DATOS DEL CLIENTE, CANTIDAD Y CONFIRMACIÓN DE LADO (ESPALDA / FRENTE) */}
-        <section className="space-y-3 rounded-3xl border border-amber-500/25 bg-[#211006]/90 p-4 shadow-xl">
+        {/* PASO 4: DATOS DEL CLIENTE, CANTIDAD Y CONFIRMACIÓN */}
+        <section className="space-y-3 rounded-3xl border border-white/[0.08] bg-[#15161A]/95 p-4 shadow-2xl backdrop-blur-md">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-950">
+              <span className="rounded-full bg-[#C8A876] px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wide text-[#0E0F12]">
                 👤 Paso 4
               </span>
               <h2 className="text-sm font-extrabold text-white">
-                Tus Datos y Resumen de Estampado
+                Tus Datos y Resumen de Pedido
               </h2>
             </div>
-            <span className="rounded-lg bg-amber-400/20 px-2.5 py-1 text-xs font-extrabold text-amber-300">
+            <span className="rounded-lg border border-[#C8A876]/30 bg-[#C8A876]/15 px-2.5 py-1 text-xs font-extrabold text-[#E8D5B5]">
               📍 {sideLabelExplicit}
             </span>
           </div>
 
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
             <div>
-              <label className="mb-1 block text-xs font-bold text-amber-200">
+              <label className="mb-1 block text-xs font-bold text-white/80">
                 Tu Nombre Completo *
               </label>
               <input
@@ -1015,11 +1044,11 @@ export function CustomerCatalogView({
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
                 placeholder="Ej. Juan Pérez"
-                className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-3 py-2.5 text-sm font-bold text-white placeholder-amber-200/40 focus:border-amber-400 focus:outline-none"
+                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm font-bold text-white placeholder-white/30 focus:border-[#C8A876] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-bold text-amber-200">
+              <label className="mb-1 block text-xs font-bold text-white/80">
                 Tu Teléfono / WhatsApp
               </label>
               <input
@@ -1028,11 +1057,11 @@ export function CustomerCatalogView({
                 value={customerPhone}
                 onChange={(e) => setCustomerPhone(e.target.value)}
                 placeholder="Ej. 9999-8888"
-                className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-3 py-2.5 text-sm font-bold text-white placeholder-amber-200/40 focus:border-amber-400 focus:outline-none"
+                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm font-bold text-white placeholder-white/30 focus:border-[#C8A876] focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-bold text-amber-200">
+              <label className="mb-1 block text-xs font-bold text-white/80">
                 Dirección o Nota de Entrega
               </label>
               <input
@@ -1041,14 +1070,14 @@ export function CustomerCatalogView({
                 value={customerAddress}
                 onChange={(e) => setCustomerAddress(e.target.value)}
                 placeholder="Barrio / Colonia / Ciudad"
-                className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-3 py-2.5 text-sm font-bold text-white placeholder-amber-200/40 focus:border-amber-400 focus:outline-none"
+                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm font-bold text-white placeholder-white/30 focus:border-[#C8A876] focus:outline-none"
               />
             </div>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
             <div>
-              <div className="mb-1 text-xs font-extrabold uppercase tracking-wider text-amber-300">
+              <div className="mb-1 text-xs font-extrabold uppercase tracking-wider text-[#C8A876]">
                 Cantidad de Camisas
               </div>
               <div className="rounded-2xl bg-white p-1 text-slate-900">
@@ -1056,16 +1085,16 @@ export function CustomerCatalogView({
               </div>
             </div>
             <div className="text-right">
-              <div className="text-xs font-bold text-amber-100/80">
-                {qty >= payload.wholesaleMin ? '✨ Precio Mayorista Aplicado' : 'Precio Unitario'}:{' '}
+              <div className="text-xs font-medium text-white/60">
+                {hasDesign ? 'Personalizada A3' : 'Camisa Lisa'}:{' '}
                 <strong className="text-white">{money(unitPrice)} c/u</strong>
               </div>
-              <div className="text-2xl font-extrabold text-amber-300">{money(total)}</div>
+              <div className="text-2xl font-black text-[#F7F6F2]">{money(total)}</div>
             </div>
           </div>
 
           {selectedSizeStock === 0 && (
-            <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
+            <div className="rounded-2xl border border-[#C8A876]/30 bg-[#C8A876]/10 px-3 py-2 text-xs font-semibold text-[#E8D5B5]">
               ⏳ La talla <strong>{size}</strong> en color <strong>{selectedColor?.name}</strong> está como{' '}
               <strong>Disponible pronto</strong>. Puedes apartarla o encargarla bajo pedido por WhatsApp.
             </div>
@@ -1074,18 +1103,18 @@ export function CustomerCatalogView({
       </div>
 
       {/* BARRA INFERIOR FIJA DE COMPRA (ESTILO TIENDA ONLINE) */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-amber-500/30 bg-[#1a0c04]/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.08] bg-[#121316]/95 px-4 py-3 shadow-2xl backdrop-blur-md">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-xs font-bold text-amber-100">
+            <div className="truncate text-xs font-medium text-white/70">
               {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'} ·{' '}
-              <span className="font-extrabold text-amber-300">
+              <span className="font-extrabold text-[#E8D5B5]">
                 {designUrl
                   ? `${selectedDesignName || 'Diseño'} (${isBackSide ? 'EN ESPALDA' : 'EN FRENTE'})`
                   : 'Camisa Lisa'}
               </span>
             </div>
-            <div className="text-lg font-extrabold text-amber-300">{money(total)}</div>
+            <div className="text-lg font-black text-[#F7F6F2]">{money(total)}</div>
           </div>
           <button
             type="button"

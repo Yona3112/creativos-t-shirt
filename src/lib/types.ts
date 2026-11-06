@@ -117,7 +117,10 @@ export interface Settings {
   storeAddress: string;
   storeCity: string;
   sizes: string[];
+  /** Precio camisa lisa / básica (L 300) */
   priceNormal: Cents;
+  /** Precio camisa personalizada con diseño estampado (L 350) */
+  priceCustom?: Cents;
   priceWholesale: Cents;
   wholesaleMin: number;
   shipping: Cents;

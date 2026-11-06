@@ -30,7 +30,10 @@ export interface SharedCatalogPayload {
   brandName: string;
   colors: SharedCatalogColor[];
   sizes: string[];
+  /** Precio camisa lisa (sin estampado) en centavos */
   priceNormal: number;
+  /** Precio camisa personalizada (con estampado A3) en centavos */
+  priceCustom?: number;
   priceWholesale: number;
   wholesaleMin: number;
   photoId: string | null;
@@ -111,8 +114,9 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
       : [{ name: 'Negro', hex: '#1A1A1C' }],
     sizes: st.sizes,
     priceNormal: normalPrice(st, brand),
-    priceWholesale: st.priceWholesale,
-    wholesaleMin: st.wholesaleMin,
+    priceCustom: st.priceCustom || 35000,
+    priceWholesale: normalPrice(st, brand),
+    wholesaleMin: 999999,
     photoId: null,
     placement: 'back',
     scale: 2.75,

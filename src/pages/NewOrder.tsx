@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CartLine, Customer, Order, Section } from '../lib/types';
 import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
-import { activeBrands, brandColors, isWholesale, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
+import { activeBrands, brandColors, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
@@ -121,9 +121,15 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const lines = useMemo(() => repriceCart(draft.lines, settings, state.brands), [draft.lines, settings, state.brands]);
   const cartQty = lines.reduce((s, l) => s + l.qty, 0);
   const projectedQty = cartQty + qty;
-  const autoPrice = tierPrice(settings, brand, projectedQty);
+  const isCustomWork = Boolean(
+    draft.photo ||
+    draft.designName ||
+    (draft.workType && !draft.workType.toLowerCase().includes('lisa'))
+  );
+  const autoPrice = isCustomWork
+    ? (settings.priceCustom || 35000)
+    : tierPrice(settings, brand, projectedQty);
   const unitPrice = manualPrice ?? autoPrice;
-  const wholesaleNow = isWholesale(settings, projectedQty);
 
   const subtotal = lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
   const shipping = draft.withShipping ? draft.shipping : 0;
@@ -706,10 +712,18 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       <section className="card space-y-3">
         <h2 className="section-title">5 · Precio</h2>
         <div className="grid grid-cols-2 gap-2">
-          <div className={`rounded-xl border-2 p-2 ${!wholesaleNow ? 'border-brand-600 bg-brand-50' : 'border-slate-200'}`}>
-            <div className="mb-1 text-xs font-bold text-slate-600">1–{settings.wholesaleMin - 1} uds</div>
+          <div
+            className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
+              !isCustomWork ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:border-slate-300'
+            }`}
+            onClick={() => {
+              setManualPrice(null);
+              set({ workType: 'Camisa Lisa' });
+            }}
+          >
+            <div className="mb-1 text-xs font-bold text-slate-600">👕 Camisa Lisa</div>
             <MoneyInput
-              ariaLabel="Precio normal"
+              ariaLabel="Precio camisa lisa"
               value={normalForBrand}
               onChange={(c) => {
                 if (c === null) return;
@@ -718,17 +732,31 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               }}
             />
           </div>
-          <div className={`rounded-xl border-2 p-2 ${wholesaleNow ? 'border-brand-600 bg-brand-50' : 'border-slate-200'}`}>
-            <div className="mb-1 text-xs font-bold text-slate-600">{settings.wholesaleMin}+ uds</div>
-            <MoneyInput ariaLabel="Precio mayorista" value={settings.priceWholesale} onChange={(c) => c !== null && updateSettings({ priceWholesale: c })} />
+          <div
+            className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
+              isCustomWork ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:border-slate-300'
+            }`}
+            onClick={() => {
+              setManualPrice(null);
+              if (draft.workType === 'Camisa Lisa') {
+                set({ workType: settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) || 'DTF Espalda' });
+              }
+            }}
+          >
+            <div className="mb-1 text-xs font-bold text-slate-600">✨ Personalizada A3</div>
+            <MoneyInput
+              ariaLabel="Precio personalizada"
+              value={settings.priceCustom || 35000}
+              onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
+            />
           </div>
         </div>
         <div>
-          <label className="label">Precio por camisa (L)</label>
+          <label className="label">Precio aplicado a esta prenda (L)</label>
           <div className="flex gap-2">
             <MoneyInput className="flex-1" ariaLabel="Precio por camisa" value={unitPrice} onChange={(c) => setManualPrice(c)} />
             {manualPrice !== null && (
-              <button className="btn-ghost" onClick={() => setManualPrice(null)} title="Precio automático">
+              <button className="btn-ghost" onClick={() => setManualPrice(null)} title="Restablecer precio sugerido">
                 ↺
               </button>
             )}
@@ -752,8 +780,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         <div className="flex items-center justify-between">
           <h2 className="section-title mb-0">Resumen del pedido</h2>
           {lines.length > 0 && (
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${isWholesale(settings, cartQty) ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-              {cartQty} uds{isWholesale(settings, cartQty) ? ' · Mayorista' : ''}
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+              {cartQty} {cartQty === 1 ? 'unidad' : 'unidades'}
             </span>
           )}
         </div>

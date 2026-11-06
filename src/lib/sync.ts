@@ -347,22 +347,36 @@ export async function uploadPhotoNow(id: string, data: string): Promise<void> {
 }
 
 export async function fetchSharedPhoto(id: string): Promise<string | null> {
-  const local = await db.photos.get(id);
-  if (local?.data) return local.data;
+  if (id !== LIVE_CATALOG_KEY) {
+    const local = await db.photos.get(id);
+    if (local?.data) return local.data;
+  }
   if (getFirebaseConfig()) {
     return fetchSharedPhotoFirebase(id);
   }
   const cfg = getConfig();
-  if (!cfg || !navigator.onLine) return null;
+  if (!cfg || !navigator.onLine) {
+    if (id === LIVE_CATALOG_KEY) {
+      const fallback = await db.photos.get(id);
+      return fallback?.data || null;
+    }
+    return null;
+  }
   try {
     const c = createClient(cfg.url, cfg.key, { auth: { persistSession: false } });
     const { data } = await c.from('design_photos').select('data').eq('id', id).maybeSingle();
     if (data?.data) {
-      await db.photos.put({ id, data: data.data as string, synced: 1, createdAt: Date.now() });
+      try {
+        await db.photos.put({ id, data: data.data as string, synced: 1, createdAt: Date.now() });
+      } catch {}
       return data.data as string;
     }
   } catch {
     /* ignorar */
+  }
+  if (id === LIVE_CATALOG_KEY) {
+    const fallback = await db.photos.get(id);
+    return fallback?.data || null;
   }
   return null;
 }

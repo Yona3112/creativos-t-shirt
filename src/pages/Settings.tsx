@@ -434,18 +434,20 @@ export default function SettingsPage() {
 
         <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-3">
           <div>
-            <label className="label">Precio Normal (L)</label>
+            <label className="label">Precio Camisa Lisa (L)</label>
             <MoneyInput
               value={settings.priceNormal}
               onChange={(c) => c !== null && updateSettings({ priceNormal: c })}
             />
+            <p className="mt-1 text-[11px] text-slate-500">Camisa sin estampado (ej. L 300)</p>
           </div>
           <div>
-            <label className="label">Precio Mayorista (L)</label>
+            <label className="label">Precio Personalizada A3 (L)</label>
             <MoneyInput
-              value={settings.priceWholesale}
-              onChange={(c) => c !== null && updateSettings({ priceWholesale: c })}
+              value={settings.priceCustom || 35000}
+              onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
             />
+            <p className="mt-1 text-[11px] text-slate-500">Con diseño en Pecho o Espalda (ej. L 350)</p>
           </div>
           <div>
             <label className="label">Envío (L)</label>
@@ -453,7 +455,11 @@ export default function SettingsPage() {
               value={settings.shipping}
               onChange={(c) => c !== null && updateSettings({ shipping: c })}
             />
+            <p className="mt-1 text-[11px] text-slate-500">Tarifa estándar de entrega</p>
           </div>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+          ℹ️ Precios unificados a nivel general: <strong>L 300 lisa</strong> y <strong>L 350 personalizada</strong>. El descuento automático por volumen (+12 uds) está desactivado.
         </div>
       </section>
 

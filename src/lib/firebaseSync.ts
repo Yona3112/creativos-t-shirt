@@ -349,28 +349,54 @@ export async function uploadPhotoNowFirebase(id: string, data: string): Promise<
       const totalChunks = Math.ceil(data.length / CHUNK_SIZE);
       const mainDoc = doc(fs, 'cgs_photos', id);
       await setDoc(mainDoc, { chunks: totalChunks, updatedAt: Date.now() });
+      const chunkPromises: Promise<unknown>[] = [];
       for (let i = 0; i < totalChunks; i++) {
         const slice = data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
         const chunkDoc = doc(fs, 'cgs_photos', `${id}__c${i}`);
-        await setDoc(chunkDoc, { data: slice });
+        chunkPromises.push(setDoc(chunkDoc, { data: slice }));
       }
+      await Promise.all(chunkPromises);
     }
-    await db.photos.update(id, { synced: 1 });
+    try {
+      const updated = await db.photos.update(id, { synced: 1 });
+      if (!updated) {
+        await db.photos.put({ id, data, synced: 1, createdAt: Date.now() });
+      }
+    } catch {
+      /* ignorar fallo menor en IndexedDB local */
+    }
   } catch (err) {
     console.warn('[firebase-sync] Error subiendo foto:', id, err);
   }
 }
 
 export async function fetchSharedPhotoFirebase(id: string): Promise<string | null> {
-  const local = await db.photos.get(id);
-  if (local?.data) return local.data;
+  // Para llaves mutables como LIVE_CATALOG_KEY, no leer caché viejo de Dexie si hay red
+  if (id !== LIVE_CATALOG_KEY) {
+    const local = await db.photos.get(id);
+    if (local?.data) return local.data;
+  }
   const cfg = getFirebaseConfig();
-  if (!cfg || !navigator.onLine) return null;
+  if (!cfg || !navigator.onLine) {
+    // Si estamos offline y es LIVE_CATALOG_KEY, usar fallback local
+    if (id === LIVE_CATALOG_KEY) {
+      const fallbackLocal = await db.photos.get(id);
+      return fallbackLocal?.data || null;
+    }
+    return null;
+  }
   try {
     const { fs } = getOrInitFirebase(cfg);
     const photoDoc = doc(fs, 'cgs_photos', id);
     const snap = await getDoc(photoDoc);
-    if (!snap.exists()) return null;
+    if (!snap.exists()) {
+      // Fallback a Dexie si no existe aún en Firestore
+      if (id === LIVE_CATALOG_KEY) {
+        const fallbackLocal = await db.photos.get(id);
+        return fallbackLocal?.data || null;
+      }
+      return null;
+    }
     const snapData = snap.data();
     if (snapData.chunks && snapData.chunks > 1) {
       const total = snapData.chunks as number;
@@ -385,16 +411,59 @@ export async function fetchSharedPhotoFirebase(id: string): Promise<string | nul
       const parts = await Promise.all(promises);
       const fullData = parts.join('');
       if (fullData) {
-        await db.photos.put({ id, data: fullData, synced: 1, createdAt: Date.now() });
+        try {
+          await db.photos.put({ id, data: fullData, synced: 1, createdAt: Date.now() });
+        } catch {}
         return fullData;
       }
     } else if (snapData.data) {
       const dataStr = snapData.data as string;
-      await db.photos.put({ id, data: dataStr, synced: 1, createdAt: Date.now() });
+      try {
+        await db.photos.put({ id, data: dataStr, synced: 1, createdAt: Date.now() });
+      } catch {}
       return dataStr;
     }
   } catch (err) {
     console.warn('[firebase-sync] fetchSharedPhotoFirebase error:', id, err);
+    if (id === LIVE_CATALOG_KEY) {
+      const fallbackLocal = await db.photos.get(id);
+      return fallbackLocal?.data || null;
+    }
   }
   return null;
+}
+
+/** Suscripción en tiempo real a la vitrina pública del catálogo oficial */
+export function subscribeLiveCatalogFirebase(
+  onCatalog: (cat: import('./publicCatalog').SharedCatalogPayload) => void
+): () => void {
+  const cfg = getFirebaseConfig();
+  if (!cfg) return () => {};
+  try {
+    const { fs } = getOrInitFirebase(cfg);
+    const pubDoc = doc(fs, 'cgs_photos', LIVE_CATALOG_KEY);
+    return onSnapshot(
+      pubDoc,
+      (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        const raw = d?.data as string | undefined;
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw) as import('./publicCatalog').SharedCatalogPayload;
+          if (parsed && Array.isArray(parsed.colors) && parsed.colors.length > 0) {
+            onCatalog(parsed);
+          }
+        } catch {
+          /* ignorar JSON inválido */
+        }
+      },
+      (err) => {
+        console.warn('[firebase live catalog subscription]', err);
+      }
+    );
+  } catch (err) {
+    console.warn('[subscribeLiveCatalogFirebase] error:', err);
+    return () => {};
+  }
 }

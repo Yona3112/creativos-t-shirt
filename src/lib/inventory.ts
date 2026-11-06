@@ -32,23 +32,29 @@ export function skuOf(brand: Brand | undefined, color: Color | undefined, size: 
 }
 
 export function normalPrice(settings: Settings, brand?: Brand): Cents {
-  return brand && brand.priceOverride !== null && brand.priceOverride !== undefined ? brand.priceOverride : settings.priceNormal;
+  return brand && brand.priceOverride !== null && brand.priceOverride !== undefined
+    ? brand.priceOverride
+    : (settings.priceNormal || 30000);
 }
 
-export function isWholesale(settings: Settings, totalQty: number): boolean {
-  return totalQty >= settings.wholesaleMin;
+export function customPrice(settings: Settings): Cents {
+  return settings.priceCustom || 35000;
 }
 
-export function tierPrice(settings: Settings, brand: Brand | undefined, totalQty: number): Cents {
-  return isWholesale(settings, totalQty) ? settings.priceWholesale : normalPrice(settings, brand);
+export function isWholesale(_settings: Settings, _totalQty: number): boolean {
+  // Desactivado descuento automático por volumen a petición del usuario
+  return false;
 }
 
-/** Recalcula los precios automáticos del carrito según la cantidad total. */
+export function tierPrice(settings: Settings, brand: Brand | undefined, _totalQty: number): Cents {
+  return normalPrice(settings, brand);
+}
+
+/** Precios del carrito respetan precio unitario unificado (sin descuento automático por volumen). */
 export function repriceCart(lines: CartLine[], settings: Settings, brands: Brand[]): CartLine[] {
-  const total = lines.reduce((s, l) => s + l.qty, 0);
   return lines.map((l) => {
     if (l.manualPrice) return l;
-    const p = tierPrice(settings, brands.find((b) => b.id === l.brandId), total);
+    const p = tierPrice(settings, brands.find((b) => b.id === l.brandId), l.qty);
     return p === l.unitPrice ? l : { ...l, unitPrice: p };
   });
 }
