@@ -15,36 +15,36 @@ const BOUTIQUE_THEMES: Record<
   }
 > = {
   ranchero: {
-    label: '🤠 Atelier Cuero',
+    label: '✨ Estudio Blanco',
     stageClass:
-      'border border-[#C8A876]/30 bg-gradient-to-b from-[#181614] via-[#201C18] to-[#12110F] text-[#F7F6F2] shadow-[0_20px_50px_rgba(0,0,0,0.6)]',
+      'border border-slate-200 bg-gradient-to-b from-slate-100 via-white to-slate-100 text-slate-800 shadow-sm',
     galleryClass:
-      'border border-[#C8A876]/20 bg-gradient-to-br from-[#181614] via-[#1C1915] to-[#11100E] text-[#F7F6F2]',
-    auraColor: '#C8A87635'
+      'border border-slate-200 bg-white text-slate-800 shadow-sm',
+    auraColor: '#2563EB20'
   },
   establo: {
-    label: '🪵 Noble Studio',
+    label: '🏢 Gris Ejecutivo',
     stageClass:
-      'border border-[#A88B68]/30 bg-gradient-to-b from-[#1A1816] via-[#221E19] to-[#12100E] text-[#F7F6F2]',
+      'border border-slate-200 bg-gradient-to-b from-slate-200/70 via-slate-50 to-slate-200/50 text-slate-800 shadow-sm',
     galleryClass:
-      'border border-[#A88B68]/20 bg-[#161412] text-[#F7F6F2]',
-    auraColor: '#A88B6830'
+      'border border-slate-200 bg-white text-slate-800 shadow-sm',
+    auraColor: '#4F46E520'
   },
   nocturno: {
-    label: '✨ Obsidian Minimal',
+    label: '🌙 Pizarra Suave',
     stageClass:
-      'border border-white/10 bg-gradient-to-b from-[#16171B] via-[#121316] to-[#0A0B0D] text-white shadow-[0_20px_50px_rgba(0,0,0,0.7)]',
+      'border border-slate-300 bg-gradient-to-b from-slate-100 via-slate-50 to-white text-slate-800 shadow-sm',
     galleryClass:
-      'border border-white/10 bg-[#141518] text-white',
-    auraColor: '#6366F125'
+      'border border-slate-200 bg-white text-slate-800 shadow-sm',
+    auraColor: '#0EA5E920'
   },
   arena: {
-    label: '🌾 Lino & Arena',
+    label: '🌾 Minimalista',
     stageClass:
-      'border border-[#D1BA8E]/30 bg-gradient-to-b from-[#1C1A17] via-[#24211C] to-[#131210] text-[#F7F6F2]',
+      'border border-slate-200 bg-white text-slate-800 shadow-sm',
     galleryClass:
-      'border border-[#D1BA8E]/20 bg-[#171512] text-[#F7F6F2]',
-    auraColor: '#D1BA8E30'
+      'border border-slate-200 bg-white text-slate-800 shadow-sm',
+    auraColor: '#3B82F620'
   }
 };
 
@@ -391,23 +391,24 @@ function computeDecalRect3D(
   offsetY: number,
   aspect: number
 ): [number, number, number, number] {
-  const s = clamp(scale, 0.30, 3.00);
+  const s = clamp(scale, 0.30, 4.00);
   let baseX = 0.0;
   let baseY = 0.12;
-  let widthX = 0.35 * s;
+  // Escala amplia para que luzca en auténtico TAMAÑO A3 grande sobre el torso y la espalda
+  let widthX = 0.48 * s;
 
   if (placement === 'pocket') {
     baseX = 0.165;
     baseY = 0.25;
-    widthX = 0.165 * s;
+    widthX = 0.20 * s;
   } else if (placement === 'full') {
     baseX = 0.0;
-    baseY = 0.05;
-    widthX = 0.44 * s;
+    baseY = 0.06;
+    widthX = 0.54 * s;
   } else if (placement === 'back') {
     baseX = 0.0;
-    baseY = 0.09;
-    widthX = 0.36 * s;
+    baseY = 0.08;
+    widthX = 0.50 * s;
   }
 
   const heightY = widthX / Math.max(0.25, aspect);
@@ -508,6 +509,7 @@ export function InteractiveShirt3D({
   onSelectColor,
   onToggleColorIncluded,
   onAddNewColor,
+  onDeleteColor,
   catalogDesigns,
   activeCatalogDesignId,
   onSelectCatalogDesign,
@@ -550,6 +552,7 @@ export function InteractiveShirt3D({
   onSelectColor?: (colorId: string) => void;
   onToggleColorIncluded?: (colorId: string) => void;
   onAddNewColor?: () => void;
+  onDeleteColor?: (colorId: string) => void;
   catalogDesigns?: CatalogQuickDesign[];
   activeCatalogDesignId?: string | null;
   onSelectCatalogDesign?: (design: CatalogQuickDesign) => void;
@@ -798,19 +801,19 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* SLIDE DE COLORES ESTILO BOUTIQUE DENTRO DEL ESCAPARATE */}
+          {/* SLIDE DE COLORES DENTRO DEL ESCAPARATE */}
           {colorOptions && colorOptions.length > 0 && onSelectColor && (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-2.5 backdrop-blur-md">
-              <div className="mb-1.5 flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-[#C8A876]">
+            <div className="mt-3 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm backdrop-blur-md">
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-700">
                 <span>🎨 1. Elige el Color de tu Camisa</span>
-                <span className="text-[#F7F6F2]">{colorName}</span>
+                <span className="font-black text-slate-900">{colorName}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 {colorOptions.length > 3 && (
                   <button
                     type="button"
                     onClick={() => slideColors(-1)}
-                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-lg bg-white/10 text-sm font-extrabold text-white hover:bg-white/20"
+                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-extrabold text-slate-700 hover:bg-slate-200"
                     aria-label="Anterior color"
                   >
                     ‹
@@ -829,8 +832,8 @@ export function InteractiveShirt3D({
                         onClick={() => onSelectColor(c.id)}
                         className={`flex shrink-0 snap-start items-center gap-2 rounded-full border px-3 py-1.5 text-left text-xs font-extrabold transition ${
                           active
-                            ? 'scale-105 border-[#C8A876] bg-white text-slate-950 shadow-lg ring-2 ring-[#C8A876]/60'
-                            : 'border-white/15 bg-black/50 text-white hover:bg-black/80'
+                            ? 'scale-105 border-slate-900 bg-slate-900 text-white shadow-md ring-2 ring-slate-900/30'
+                            : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
                         }`}
                       >
                         <span
@@ -844,11 +847,11 @@ export function InteractiveShirt3D({
                               className={`mt-0.5 text-[10px] font-bold ${
                                 active
                                   ? c.available
-                                    ? 'text-emerald-700'
-                                    : 'text-amber-800'
+                                    ? 'text-emerald-300'
+                                    : 'text-amber-300'
                                   : c.available
-                                  ? 'text-emerald-400'
-                                  : 'text-[#C8A876]'
+                                  ? 'text-emerald-600'
+                                  : 'text-amber-600'
                               }`}
                             >
                               {c.stockText}
@@ -863,7 +866,7 @@ export function InteractiveShirt3D({
                   <button
                     type="button"
                     onClick={() => slideColors(1)}
-                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-lg bg-white/10 text-sm font-extrabold text-white hover:bg-white/20"
+                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-extrabold text-slate-700 hover:bg-slate-200"
                     aria-label="Siguiente color"
                   >
                     ›
@@ -876,18 +879,18 @@ export function InteractiveShirt3D({
 
         {/* GALERÍA DE DISEÑOS DISPONIBLES PARA EL CLIENTE */}
         {catalogDesigns && catalogDesigns.length > 0 && (
-          <div className={`rounded-3xl p-3.5 shadow-2xl transition-colors duration-500 ${themeStyle.galleryClass}`}>
+          <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-sm">
             <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-[#C8A876] px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wide text-[#0E0F12]">
+                <span className="rounded-full bg-brand-50 border border-brand-200 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wide text-brand-700">
                   ✨ Paso 2
                 </span>
                 <div>
-                  <span className="text-sm font-extrabold text-[#F7F6F2]">
-                    Elige tu Diseño (Se coloca en la Espalda en Tamaño A3)
+                  <span className="text-sm font-extrabold text-slate-900">
+                    Elige tu Diseño (Se coloca en Tamaño A3)
                   </span>
-                  <span className="block text-[11px] font-medium text-white/60">
-                    Después de elegirlo puedes pasarlo al Frente o quitarlo con un clic
+                  <span className="block text-[11px] font-medium text-slate-500">
+                    Toca un diseño para probarlo en la camisa o quítalo para camisa lisa
                   </span>
                 </div>
               </div>
@@ -896,9 +899,9 @@ export function InteractiveShirt3D({
                   <button
                     type="button"
                     onClick={onClearDesign}
-                    className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/15 px-3 py-1 text-xs font-extrabold text-rose-200 transition hover:bg-rose-500 hover:text-white"
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-extrabold text-slate-700 transition hover:bg-slate-100"
                   >
-                    🚫 Quitar Diseño
+                    👕 Camisa Lisa (L 300)
                   </button>
                 )}
                 {catalogDesigns.length >= 2 && (
@@ -907,8 +910,8 @@ export function InteractiveShirt3D({
                     onClick={() => setShowcaseActive((v) => !v)}
                     className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-extrabold transition active:scale-95 ${
                       showcaseActive
-                        ? 'bg-[#C8A876] text-[#0E0F12] shadow ring-2 ring-[#C8A876]/50'
-                        : 'bg-white/10 text-white hover:bg-white/20'
+                        ? 'bg-brand-600 text-white shadow ring-2 ring-brand-500/50'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                     }`}
                   >
                     <span>{showcaseActive ? '⏸ Pausar Desfile' : '🎬 Desfile Automático'}</span>
@@ -938,12 +941,12 @@ export function InteractiveShirt3D({
                     disabled={!d.imageUrl}
                     className={`catalog-card-motion group relative flex w-[124px] shrink-0 snap-start flex-col rounded-2xl border p-2 text-left transition ${
                       isSelected
-                        ? 'border-[#C8A876] bg-white/[0.12] shadow-lg ring-2 ring-[#C8A876]/60'
-                        : 'border-white/10 bg-black/40 hover:border-[#C8A876]/50 hover:bg-white/[0.06]'
+                        ? 'border-brand-600 bg-brand-50/70 shadow-md ring-2 ring-brand-500'
+                        : 'border-slate-200 bg-slate-50 hover:border-slate-400 hover:bg-slate-100'
                     }`}
                   >
                     <div
-                      className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-white/10 p-1.5 shadow-inner transition duration-300 group-hover:scale-[1.03]"
+                      className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-inner transition duration-300 group-hover:scale-[1.03]"
                       style={{ backgroundColor: hex }}
                     >
                       {d.imageUrl ? (
@@ -954,12 +957,14 @@ export function InteractiveShirt3D({
                           loading="lazy"
                         />
                       ) : (
-                        <div className="flex flex-col items-center justify-center gap-1.5 p-2 text-center">
-                          <span className="h-5 w-5 animate-spin rounded-full border-2 border-[#C8A876] border-t-transparent" />
-                          <span className="text-[9px] font-bold tracking-wider text-[#E8D5B5]/70">CARGANDO</span>
+                        <div className="flex flex-col items-center justify-center gap-1 p-2 text-center">
+                          <svg className="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          <span className="text-[9px] font-bold text-slate-400">Sin foto</span>
                         </div>
                       )}
-                      <span className="absolute bottom-1 left-1 rounded-md bg-black/85 px-1.5 py-0.5 text-[9px] font-extrabold text-[#E8D5B5] border border-white/10">
+                      <span className="absolute bottom-1 left-1 rounded-md bg-slate-900/80 px-1.5 py-0.5 text-[9px] font-extrabold text-white">
                         {isSelected
                           ? isBackSide
                             ? 'En Espalda'
@@ -967,15 +972,15 @@ export function InteractiveShirt3D({
                           : 'Espalda A3'}
                       </span>
                       {isSelected && (
-                        <span className="absolute left-1 top-1 rounded-md bg-[#C8A876] px-1.5 py-0.5 text-[9px] font-black text-[#0E0F12] shadow">
+                        <span className="absolute left-1 top-1 rounded-md bg-brand-600 px-1.5 py-0.5 text-[9px] font-black text-white shadow">
                           ✓ Puesto
                         </span>
                       )}
                     </div>
-                    <div className="mt-1.5 w-full truncate text-center text-xs font-extrabold text-white">
+                    <div className="mt-1.5 w-full truncate text-center text-xs font-extrabold text-slate-900">
                       {d.name}
                     </div>
-                    <div className="mt-0.5 w-full text-center text-[10px] font-bold text-[#E8D5B5]/90">
+                    <div className="mt-0.5 w-full text-center text-[10px] font-bold text-slate-500">
                       {isSelected ? 'Toca para quitar' : 'Probar en Espalda'}
                     </div>
                   </button>
@@ -1140,6 +1145,21 @@ export function InteractiveShirt3D({
                             }
                           >
                             {included ? '✓' : '×'}
+                          </button>
+                        )}
+                        {isStoreOwner && onDeleteColor && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm(`¿Eliminar color "${c.name}" de la tienda?`)) {
+                                onDeleteColor(c.id);
+                              }
+                            }}
+                            className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-[11px] font-black text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                            title={`Eliminar color "${c.name}"`}
+                          >
+                            −
                           </button>
                         )}
                       </div>

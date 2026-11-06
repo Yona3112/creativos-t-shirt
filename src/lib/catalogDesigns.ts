@@ -86,7 +86,6 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       if (missing.length === 0) return;
 
       // 2. Descargar las que falten en paralelo y actualizar la UI progresivamente según lleguen
-      let failedAny = false;
       await Promise.all(
         missing.map(async (item) => {
           if (!item.photoId) return;
@@ -97,22 +96,12 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
               if (!cancelled) {
                 setUrlMap((prev) => ({ ...prev, [item.photoId]: data }));
               }
-            } else {
-              failedAny = true;
             }
           } catch (err) {
-            failedAny = true;
             console.warn('[catalogDesigns] error cargando diseño:', item.name, err);
           }
         })
       );
-
-      // Reintentar si alguna foto falló (útil mientras la nube termina de subir)
-      if (failedAny && !cancelled) {
-        setTimeout(() => {
-          if (!cancelled) void loadAll();
-        }, 2500);
-      }
     };
 
     void loadAll();

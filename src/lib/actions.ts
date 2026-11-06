@@ -99,6 +99,17 @@ export function updateColor(id: string, patch: Partial<Color>): void {
   update((s) => ({ ...s, colors: s.colors.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: now() } : c)) }));
 }
 
+export function deleteColor(id: string): void {
+  update((s) => ({
+    ...s,
+    colors: s.colors.map((c) => (c.id === id ? { ...c, deleted: true, updatedAt: now() } : c)),
+    settings: {
+      ...s.settings,
+      storeColorIds: s.settings.storeColorIds ? s.settings.storeColorIds.filter((cid) => cid !== id) : undefined
+    }
+  }));
+}
+
 /* ------------------------------ Clientes ----------------------------- */
 
 export function saveCustomer(c: Customer): void {

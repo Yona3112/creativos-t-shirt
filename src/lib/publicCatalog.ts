@@ -83,11 +83,15 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     ? allColors.filter((c) => st.storeColorIds!.includes(c.id))
     : allColors;
   const colors = chosen.length > 0 ? chosen : allColors;
+  const chosenSizes = st.storeSizes && st.storeSizes.length > 0
+    ? st.sizes.filter((sz) => st.storeSizes!.includes(sz))
+    : st.sizes;
+  const sizes = chosenSizes.length > 0 ? chosenSizes : st.sizes;
   const { stock } = computeStock(state);
   const stockMap: Record<string, number> = {};
   if (brand) {
     for (const c of colors) {
-      for (const sz of st.sizes) {
+      for (const sz of sizes) {
         const n = stock.get(vkey(brand.id, c.id, sz)) || 0;
         if (n > 0) stockMap[`${c.id}|${sz}`] = n;
       }
@@ -112,7 +116,7 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     colors: colors.length > 0
       ? colors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
       : [{ name: 'Negro', hex: '#1A1A1C' }],
-    sizes: st.sizes,
+    sizes,
     priceNormal: normalPrice(st, brand),
     priceCustom: st.priceCustom || 35000,
     priceWholesale: normalPrice(st, brand),

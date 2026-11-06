@@ -133,9 +133,10 @@ export interface Settings {
   waReady: string;
   /** Fondo de la Tienda 3D que ve el cliente (solo lo cambia el administrador) */
   storeTheme?: 'ranchero' | 'establo' | 'nocturno' | 'arena';
-  /** Marca y colores que se muestran en la Tienda 3D pública */
+  /** Marca, colores y tallas que se muestran en la Tienda 3D pública */
   storeBrandId?: string;
   storeColorIds?: string[];
+  storeSizes?: string[];
 }
 
 export interface CatalogDesign extends Entity {

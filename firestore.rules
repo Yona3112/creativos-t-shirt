@@ -1,18 +1,142 @@
 rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Application: Creativos Gift T-Shirt POS
+//
+// Collection: cgs_sync
+// Document ID: app_state
+// Description: Snapshot central del estado del negocio (inventario, órdenes, catálogo, clientes, configuración)
+// Fields:
+//   - payload: map (required)
+//       - version: int (required, == 1)
+//       - settings: map (required)
+//       - brands: list (required)
+//       - colors: list (required)
+//       - customers: list (required)
+//       - orders: list (required)
+//       - movements: list (required)
+//       - catalogDesigns: list (optional)
+//       - _by: string (optional, max 150 chars)
+//       - _at: int / float (optional)
+//   - updated_at: string (required, max 100 chars, ISO timestamp)
+//
+// Collection: cgs_sync
+// Document ID: ping
+// Description: Heartbeat y prueba de latencia / conectividad desde dispositivos POS
+// Fields:
+//   - ping: int / float (required, > 0)
+//
+// Collection: cgs_photos
+// Document ID: {photoId} (diseños, comprobantes, vitrina 'cat_live', pedidos web y chunks '_c*')
+// Description: Almacenamiento de imágenes de diseños (Base64) y payloads del catálogo público
+// Fields:
+//   - data: string (optional, 1..950000 chars) - Slice Base64 o JSON serializado
+//   - chunks: int (optional, 1..50) - Número de fragmentos en imágenes grandes
+//   - updatedAt: int / float (optional, > 0)
+//   * Invariante de seguridad: Debe contener obligatoriamente 'data' o 'chunks'
+//
+// Collection: cgs_catalog (Legacy / fallback)
+// Document ID: {document}
+// Description: Solo lectura pública para compatibilidad, escritura deshabilitada
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Sincronización del estado de la tienda (inventario, pedidos, catálogo)
-    match /cgs_sync/{document} {
-      allow read, write: if true;
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
     }
-    // Fotos de diseños y guías de envío
+
+    // ===============================================================
+    // Domain Validators (Validator Function Pattern)
+    // ===============================================================
+
+    // Validador de app_state para sincronización offline-first POS
+    function isValidAppState(data) {
+      return data.keys().hasAll(['payload', 'updated_at']) &&
+             data.keys().hasOnly(['payload', 'updated_at']) &&
+             data.updated_at is string &&
+             data.updated_at.size() >= 10 &&
+             data.updated_at.size() <= 100 &&
+             data.payload is map &&
+             data.payload.keys().hasAll(['version', 'settings', 'brands', 'colors', 'customers', 'orders', 'movements']) &&
+             data.payload.version is int &&
+             data.payload.version == 1 &&
+             data.payload.settings is map &&
+             data.payload.brands is list &&
+             data.payload.colors is list &&
+             data.payload.customers is list &&
+             data.payload.orders is list &&
+             data.payload.movements is list &&
+             (!('catalogDesigns' in data.payload) || data.payload.catalogDesigns is list) &&
+             (!('_by' in data.payload) || (data.payload._by is string && data.payload._by.size() <= 150)) &&
+             (!('_at' in data.payload) || (data.payload._at is int || data.payload._at is float));
+    }
+
+    // Validador de ping de conectividad
+    function isValidPing(data) {
+      return data.keys().hasOnly(['ping']) &&
+             'ping' in data &&
+             (data.ping is int || data.ping is float) &&
+             data.ping > 0;
+    }
+
+    // Validador de fotos, chunks y catálogo público
+    function isValidPhoto(data) {
+      return data.keys().hasOnly(['data', 'chunks', 'updatedAt']) &&
+             ('data' in data || 'chunks' in data) &&
+             (!('data' in data) || (data.data is string && data.data.size() > 0 && data.data.size() <= 950000)) &&
+             (!('chunks' in data) || (data.chunks is int && data.chunks >= 1 && data.chunks <= 50)) &&
+             (!('updatedAt' in data) || ((data.updatedAt is int || data.updatedAt is float) && data.updatedAt > 0));
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. Sincronización de estado POS (cgs_sync)
+    match /cgs_sync/app_state {
+      // Lectura permitida para sincronizar las terminales y clientes del POS
+      allow read: if true;
+      // Creación y actualización protegidas con esquema estricto (Anti-bypass)
+      allow create, update: if isValidAppState(request.resource.data);
+      // Prohibir borrado destructivo del estado
+      allow delete: if false;
+    }
+
+    match /cgs_sync/ping {
+      allow read: if true;
+      allow create, update: if isValidPing(request.resource.data);
+      allow delete: if false;
+    }
+
+    // 2. Fotos de estampados, comprobantes, vitrina pública y chunks
     match /cgs_photos/{photoId} {
-      allow read, write: if true;
+      // Clientes y terminales leen libremente las miniaturas y el catálogo público
+      allow read: if true;
+      // Escritura validada: límite estricto de tamaño contra ataques de denegación de servicio (DoS)
+      allow create, update: if photoId.size() >= 1 && photoId.size() <= 120 && isValidPhoto(request.resource.data);
+      // Prohibir borrado destructivo de diseños y fotos
+      allow delete: if false;
     }
-    // Catálogo público accesible para clientes
+
+    // 3. Catálogo legacy (si existiese)
     match /cgs_catalog/{document} {
       allow read: if true;
-      allow write: if true;
+      allow write: if false;
+    }
+
+    // 4. Default Deny: Bloquear cualquier otra colección no autorizada
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
