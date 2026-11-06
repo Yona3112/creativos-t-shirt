@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { contrastText } from '../lib/inventory';
+import { WesternDesignModal } from './WesternDesignModal';
 
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
 export type MotionMode = 'wind' | 'walk' | 'orbit';
@@ -394,21 +395,21 @@ function computeDecalRect3D(
   const s = clamp(scale, 0.30, 4.00);
   let baseX = 0.0;
   let baseY = 0.12;
-  // Escala amplia para que luzca en auténtico TAMAÑO A3 grande sobre el torso y la espalda
-  let widthX = 0.48 * s;
+  // Escala calibrada: A3 (~200% / 2.0) y A4 (~160% / 1.6) ajustados anatómicamente al torso
+  let widthX = 0.32 * s;
 
   if (placement === 'pocket') {
     baseX = 0.165;
     baseY = 0.25;
-    widthX = 0.20 * s;
+    widthX = 0.11 * s;
   } else if (placement === 'full') {
     baseX = 0.0;
-    baseY = 0.06;
-    widthX = 0.54 * s;
+    baseY = 0.11;
+    widthX = 0.33 * s;
   } else if (placement === 'back') {
     baseX = 0.0;
-    baseY = 0.08;
-    widthX = 0.50 * s;
+    baseY = 0.12;
+    widthX = 0.32 * s;
   }
 
   const heightY = widthX / Math.max(0.25, aspect);
@@ -491,7 +492,7 @@ export function InteractiveShirt3D({
   brandName,
   designUrl,
   placement = 'center',
-  designScale = 2.75,
+  designScale = 2.0,
   designOffsetX = 0,
   designOffsetY = 2,
   onDesignChange,
@@ -582,6 +583,19 @@ export function InteractiveShirt3D({
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
   const colorSlideRef = useRef<HTMLDivElement>(null);
+  const [isWesternModalOpen, setIsWesternModalOpen] = useState(false);
+
+  const handleApplyWesternDesign = (dataUrl: string, name: string, targetPlacement: 'back' | 'center') => {
+    onSelectCatalogDesign?.({
+      id: `custom_${Date.now()}`,
+      name,
+      placement: targetPlacement,
+      imageUrl: dataUrl,
+      photoId: `photo_${Date.now()}`,
+      clientVisible: true
+    });
+    onDesignChange?.({ placement: targetPlacement, scale: 2.0, offsetX: 0, offsetY: 0 });
+  };
 
   const slideColors = (dir: -1 | 1) => {
     const el = colorSlideRef.current;
@@ -887,21 +901,29 @@ export function InteractiveShirt3D({
                 </span>
                 <div>
                   <span className="text-sm font-extrabold text-slate-900">
-                    Elige tu Diseño (Se coloca en Tamaño A3)
+                    Elige tu Diseño (Tamaño A3 o A4)
                   </span>
                   <span className="block text-[11px] font-medium text-slate-500">
-                    Toca un diseño para probarlo en la camisa o quítalo para camisa lisa
+                    Toca un diseño del catálogo o escribe tu texto western (Personalizada · L 350.00)
                   </span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsWesternModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-black text-amber-900 shadow-sm transition hover:bg-amber-100 active:scale-95"
+                  title="Crear texto estilo Western (Ranchero) o Logo Oficial"
+                >
+                  <span>🤠 Texto Western / Logo</span>
+                </button>
                 {designUrl && onClearDesign && (
                   <button
                     type="button"
                     onClick={onClearDesign}
                     className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-extrabold text-slate-700 transition hover:bg-slate-100"
                   >
-                    👕 Camisa Lisa (L 300)
+                    👕 L 300.00
                   </button>
                 )}
                 {catalogDesigns.length >= 2 && (
@@ -989,6 +1011,13 @@ export function InteractiveShirt3D({
             </div>
           </div>
         )}
+
+        <WesternDesignModal
+          isOpen={isWesternModalOpen}
+          onClose={() => setIsWesternModalOpen(false)}
+          onApply={handleApplyWesternDesign}
+          initialPlacement={placement === 'back' ? 'back' : 'center'}
+        />
       </div>
     );
   }
@@ -1032,7 +1061,7 @@ export function InteractiveShirt3D({
       {/* Disposición de Estudio: Panel Izquierdo (Color + Cámara + Zoom + Movimiento) + Camisa 3D Central + Panel Derecho (Solo Admin) */}
       <div
         className={`grid grid-cols-1 items-center gap-3 ${
-          isStoreOwner ? 'md:grid-cols-[176px_1fr_184px]' : 'md:grid-cols-[176px_1fr]'
+          isStoreOwner ? 'md:grid-cols-[224px_1fr_210px]' : 'md:grid-cols-[224px_1fr]'
         }`}
       >
         {/* PANEL LATERAL IZQUIERDO: Color de Camisa (Slide Compacto), Ángulo 3D, Zoom y Movimiento */}
@@ -1040,7 +1069,7 @@ export function InteractiveShirt3D({
           {/* 1. COLOR DE CAMISA EN EL PANEL DE HERRAMIENTAS (Slide compacto + puntos rápidos) */}
           {colorOptions && colorOptions.length > 0 && onSelectColor && (
             <div className="w-full border-b border-slate-100 pb-2">
-              <div className="mb-1 flex items-center justify-between gap-1">
+              <div className="mb-1.5 flex items-center justify-between gap-1">
                 <span className="truncate text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
                   🎨 Color · <strong className="text-slate-800">{colorName}</strong>
                 </span>
@@ -1048,7 +1077,7 @@ export function InteractiveShirt3D({
                   <button
                     type="button"
                     onClick={onAddNewColor}
-                    className="shrink-0 rounded-lg bg-sky-600 px-1.5 py-0.5 text-[10px] font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
+                    className="shrink-0 rounded-lg bg-sky-600 px-2 py-0.5 text-[10px] font-extrabold text-white shadow-sm transition hover:bg-sky-700 active:scale-95"
                     title="Agregar nuevo color de camisa (Solo Admin)"
                   >
                     + Color
@@ -1056,128 +1085,124 @@ export function InteractiveShirt3D({
                 )}
               </div>
 
-              {/* Slide horizontal compacto con botones ‹ › para deslizar colores */}
-              <div className="flex items-center gap-1">
-                {colorOptions.length > 2 && (
-                  <button
-                    type="button"
-                    onClick={() => slideColors(-1)}
-                    className="flex h-7 w-5 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-extrabold text-slate-600 hover:bg-slate-200 active:scale-95"
-                    aria-label="Deslizar colores a la izquierda"
-                    title="Anterior color"
-                  >
-                    ‹
-                  </button>
-                )}
-                <div
-                  ref={colorSlideRef}
-                  className="flex flex-1 snap-x snap-mandatory items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                >
-                  {colorOptions.map((c) => {
-                    const active = activeColorId ? c.id === activeColorId : c.name === colorName;
-                    const included = c.included ?? true;
-                    return (
-                      <div
-                        key={c.id}
-                        className={`flex shrink-0 snap-start items-center gap-1 rounded-xl border px-2 py-1 transition ${
-                          active
-                            ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                            : included
-                            ? 'border-slate-200 bg-slate-50 text-slate-800 hover:border-slate-400'
-                            : 'border-dashed border-slate-200 bg-slate-50/50 text-slate-400 opacity-60'
-                        }`}
+              {/* Selector de Color Paso a Paso (‹ ›) + Tarjeta Destacada Sin Truncamientos */}
+              {(() => {
+                const activeIdx = colorOptions.findIndex((c) =>
+                  activeColorId ? c.id === activeColorId : c.name === colorName
+                );
+                const curColor =
+                  colorOptions[activeIdx >= 0 ? activeIdx : 0] || colorOptions[0];
+                const curIncluded = curColor.included ?? true;
+                const stepColor = (dir: -1 | 1) => {
+                  if (colorOptions.length === 0) return;
+                  const nextIdx =
+                    (activeIdx + dir + colorOptions.length) % colorOptions.length;
+                  onSelectColor(colorOptions[nextIdx].id);
+                };
+
+                return (
+                  <div className="flex items-center gap-1">
+                    {colorOptions.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => stepColor(-1)}
+                        className="flex h-9 w-6 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-slate-700 hover:bg-slate-200 active:scale-95 transition"
+                        aria-label="Color anterior"
+                        title="Color anterior"
                       >
-                        <button
-                          type="button"
-                          onClick={() => onSelectColor(c.id)}
-                          className="flex items-center gap-1.5 text-left"
-                          title={`${c.name}${c.stockText ? ` (${c.stockText})` : ''}`}
+                        ‹
+                      </button>
+                    )}
+
+                    {/* Tarjeta destacada del Color Actual - Espaciosa y 100% legible */}
+                    <div className="flex min-w-0 flex-1 items-center justify-between gap-1.5 rounded-xl border border-slate-900 bg-slate-900 px-2 py-1.5 text-white shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => onSelectColor(curColor.id)}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        title={`${curColor.name}${curColor.stockText ? ` (${curColor.stockText})` : ''}`}
+                      >
+                        <span
+                          className="relative h-5 w-5 shrink-0 rounded-full border border-white/40 shadow-inner"
+                          style={{ backgroundColor: curColor.hex }}
                         >
                           <span
-                            className="relative h-4 w-4 shrink-0 rounded-full border border-black/20 shadow-inner"
-                            style={{ backgroundColor: c.hex }}
-                          >
-                            <span
-                              className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white ${
-                                c.available ? 'bg-emerald-500' : 'bg-amber-400'
-                              }`}
-                            />
-                          </span>
-                          <div className="leading-none">
-                            <div className="max-w-[64px] truncate text-[11px] font-extrabold">
-                              {c.name}
-                            </div>
-                            {c.stockText && (
-                              <div
-                                className={`mt-0.5 text-[9px] font-bold ${
-                                  active
-                                    ? c.available
-                                      ? 'text-emerald-300'
-                                      : 'text-amber-300'
-                                    : c.available
-                                    ? 'text-emerald-600'
-                                    : 'text-amber-600'
-                                }`}
-                              >
-                                {c.stockText}
-                              </div>
-                            )}
-                          </div>
-                        </button>
-                        {isStoreOwner && onToggleColorIncluded && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onToggleColorIncluded(c.id);
-                            }}
-                            className={`ml-0.5 flex h-4 w-4 items-center justify-center rounded text-[9px] font-extrabold ${
-                              included
-                                ? active
-                                  ? 'bg-emerald-500 text-white'
-                                  : 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-200 text-slate-500'
+                            className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white ${
+                              curColor.available ? 'bg-emerald-500' : 'bg-amber-400'
                             }`}
-                            title={
-                              included
-                                ? 'Color visible para el cliente (clic para ocultar)'
-                                : 'Color oculto para el cliente (clic para mostrar)'
-                            }
+                          />
+                        </span>
+                        <div className="min-w-0 leading-tight">
+                          <div className="truncate text-xs font-black text-white" title={curColor.name}>
+                            {curColor.name}
+                          </div>
+                          <div
+                            className={`text-[10px] font-bold ${
+                              curColor.available ? 'text-emerald-300' : 'text-amber-300'
+                            }`}
                           >
-                            {included ? '✓' : '×'}
-                          </button>
-                        )}
-                        {isStoreOwner && onDeleteColor && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.confirm(`¿Eliminar color "${c.name}" de la tienda?`)) {
-                                onDeleteColor(c.id);
+                            {curColor.stockText || (curColor.available ? '● En Stock' : '⏳ Pronto')}
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Botones Admin para este Color */}
+                      {isStoreOwner && (
+                        <div className="flex shrink-0 items-center gap-1">
+                          {onToggleColorIncluded && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleColorIncluded(curColor.id);
+                              }}
+                              className={`flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-black transition ${
+                                curIncluded
+                                  ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                              }`}
+                              title={
+                                curIncluded
+                                  ? 'Visible en la tienda (clic para ocultar al cliente)'
+                                  : 'Oculto en la tienda (clic para mostrar al cliente)'
                               }
-                            }}
-                            className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-[11px] font-black text-rose-500 hover:bg-rose-100 hover:text-rose-700"
-                            title={`Eliminar color "${c.name}"`}
-                          >
-                            −
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-                {colorOptions.length > 2 && (
-                  <button
-                    type="button"
-                    onClick={() => slideColors(1)}
-                    className="flex h-7 w-5 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-extrabold text-slate-600 hover:bg-slate-200 active:scale-95"
-                    aria-label="Deslizar colores a la derecha"
-                    title="Siguiente color"
-                  >
-                    ›
-                  </button>
-                )}
-              </div>
+                            >
+                              {curIncluded ? '✓' : '×'}
+                            </button>
+                          )}
+                          {onDeleteColor && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.confirm(`¿Eliminar color "${curColor.name}" de la tienda?`)) {
+                                  onDeleteColor(curColor.id);
+                                }
+                              }}
+                              className="flex h-5 w-5 items-center justify-center rounded-md bg-rose-500/30 text-[11px] font-black text-rose-300 hover:bg-rose-500 hover:text-white transition"
+                              title={`Eliminar color "${curColor.name}"`}
+                            >
+                              −
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {colorOptions.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => stepColor(1)}
+                        className="flex h-9 w-6 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-slate-700 hover:bg-slate-200 active:scale-95 transition"
+                        aria-label="Color siguiente"
+                        title="Color siguiente"
+                      >
+                        ›
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Puntos rápidos de color en miniatura para cambio en 1 toque */}
               <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
@@ -1509,7 +1534,7 @@ export function InteractiveShirt3D({
               <div className="mb-1 flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
                 <span>Tamaño Diseño</span>
                 <span className="font-bold text-slate-700">
-                  {designScale >= 2.5 ? `A3 (${Math.round(designScale * 100)}%)` : `${Math.round(designScale * 100)}%`}
+                  {designScale >= 1.85 ? `A3 (${Math.round(designScale * 100)}%)` : designScale >= 1.45 ? `A4 (${Math.round(designScale * 100)}%)` : `${Math.round(designScale * 100)}%`}
                 </span>
               </div>
               <div className="flex items-center gap-1">
@@ -1533,35 +1558,45 @@ export function InteractiveShirt3D({
                 </button>
               </div>
 
-              {/* Botón directo a Tamaño A3 Completo de una sola vez */}
+              {/* Botones directos Tamaño A3 (~200%) y Tamaño A4 (~160%) */}
               <div className="mt-1.5 grid grid-cols-2 gap-1">
                 <button
                   type="button"
                   disabled={!designUrl || !onDesignChange}
                   className={`min-h-[34px] rounded-xl px-2 py-1 text-[11px] font-extrabold transition disabled:opacity-40 ${
-                    designScale >= 2.5
+                    designScale >= 1.85
                       ? 'bg-sky-600 text-white shadow-sm'
                       : 'bg-sky-50 text-sky-900 hover:bg-sky-100'
                   }`}
                   onClick={() =>
                     onDesignChange?.({
-                      scale: 2.75,
+                      scale: 2.0,
                       offsetX: 0,
-                      offsetY: 2
+                      offsetY: 0
                     })
                   }
-                  title="Establecer tamaño máximo de hoja A3 de una sola vez"
+                  title="Establecer tamaño A3 (200%) proporcional"
                 >
-                  📐 Tamaño A3
+                  ✨ A3 (200%)
                 </button>
                 <button
                   type="button"
                   disabled={!designUrl || !onDesignChange}
-                  className="min-h-[34px] rounded-xl bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
-                  onClick={() => onDesignChange?.({ scale: 1, offsetX: 0, offsetY: 0 })}
-                  title="Restablecer a tamaño estándar A4 centrado"
+                  className={`min-h-[34px] rounded-xl px-2 py-1 text-[11px] font-extrabold transition disabled:opacity-40 ${
+                    designScale < 1.85 && designScale >= 1.4
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  onClick={() =>
+                    onDesignChange?.({
+                      scale: 1.6,
+                      offsetX: 0,
+                      offsetY: 0
+                    })
+                  }
+                  title="Establecer tamaño A4 (160%) centrado"
                 >
-                  ↺ Estándar A4
+                  📄 A4 (160%)
                 </button>
               </div>
             </div>
@@ -1645,6 +1680,14 @@ export function InteractiveShirt3D({
 
             {isStoreOwner && (
               <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsWesternModalOpen(true)}
+                  className="rounded-xl border border-amber-400 bg-amber-500/20 px-2.5 py-1.5 text-xs font-black text-amber-900 shadow-sm transition hover:bg-amber-500/30 active:scale-95"
+                  title="Crear calcomanía de texto estilo Western (Ranchero) o Logo Oficial de Creativos Gift Shop"
+                >
+                  🤠 Texto Western / Logo
+                </button>
                 {designUrl && onSaveCurrentToCatalog && (
                   <button
                     type="button"
@@ -1738,9 +1781,9 @@ export function InteractiveShirt3D({
                             loading="lazy"
                           />
                         ) : (
-                          <div className="flex flex-col items-center justify-center gap-1 p-2 text-center">
-                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-                            <span className="text-[9px] font-bold text-slate-400">Cargando...</span>
+                          <div className="flex flex-col items-center justify-center gap-1 p-2 text-center text-slate-400">
+                            <span className="text-xl">🎨</span>
+                            <span className="text-[9px] font-bold">Sin foto</span>
                           </div>
                         )}
                         <span className="absolute bottom-1 left-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[9px] font-extrabold text-white backdrop-blur-sm">
@@ -1804,6 +1847,13 @@ export function InteractiveShirt3D({
           )}
         </div>
       )}
+
+      <WesternDesignModal
+        isOpen={isWesternModalOpen}
+        onClose={() => setIsWesternModalOpen(false)}
+        onApply={handleApplyWesternDesign}
+        initialPlacement={placement === 'back' ? 'back' : 'center'}
+      />
     </div>
   );
 }

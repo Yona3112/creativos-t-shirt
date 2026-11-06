@@ -91,7 +91,7 @@ export default function Catalog3D() {
   const [photoId, setPhotoId] = useState<string | null>(null);
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<DecalPlacement>('back');
-  const [scale, setScale] = useState(2.75);
+  const [scale, setScale] = useState(2.0);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(2);
   const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(settings.storeTheme || 'ranchero');
@@ -153,13 +153,13 @@ export default function Catalog3D() {
       setActiveCatalogDesignId(null);
       setRawDesignUrl(raw);
       setDesignUrl(processed);
-      setScale(2.75);
+      setScale(2.0);
       setOffsetX(0);
       setOffsetY(2);
       toast(
         removeBg
-          ? 'Diseño sin fondo aplicado en Tamaño A3'
-          : 'Diseño aplicado a la camisa 3D en Tamaño A3'
+          ? 'Diseño sin fondo aplicado en Tamaño A3 (200%)'
+          : 'Diseño aplicado a la camisa 3D en Tamaño A3 (200%)'
       );
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -439,10 +439,10 @@ export default function Catalog3D() {
             setPhotoId(d.photoId);
             setActiveCatalogDesignId(d.id);
             setPlacement('back');
-            setScale(2.75);
+            setScale(2.0);
             setOffsetX(0);
-            setOffsetY(2);
-            toast(`"${d.name}" aplicado en la Espalda (Tamaño A3)`);
+            setOffsetY(0);
+            toast(`"${d.name}" aplicado en la Espalda (Tamaño A3 - 200%)`);
           }}
           boutiqueTheme={boutiqueTheme}
           onChangeBoutiqueTheme={(t) => {
@@ -788,9 +788,9 @@ export function CustomerCatalogView({
     payload.photoId || null
   );
   const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'back');
-  const [scale, setScale] = useState(payload.scale || 2.75);
+  const [scale, setScale] = useState(payload.scale || 2.0);
   const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
-  const [offsetY, setOffsetY] = useState(payload.offsetY ?? 2);
+  const [offsetY, setOffsetY] = useState(payload.offsetY ?? 0);
   const boutiqueTheme: BoutiqueTheme = payload.boutiqueTheme || 'ranchero';
   const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
   const [qty, setQty] = useState(1);
@@ -885,10 +885,10 @@ export function CustomerCatalogView({
 
   const isBackSide = placement === 'back';
   const sideLabelExplicit = !designUrl
-    ? 'SIN ESTAMPADO (Camisa Lisa - L 300)'
+    ? 'SIN ESTAMPADO (L 300)'
     : isBackSide
-    ? 'ESPALDA (Estampado A3 - L 350)'
-    : 'FRENTE (Estampado A3 - L 350)';
+    ? 'ESPALDA (Personalizada - L 350)'
+    : 'FRENTE (Personalizada - L 350)';
 
   const stockNote =
     selectedSizeStock >= qty
@@ -940,8 +940,8 @@ export function CustomerCatalogView({
 
     const codePrefix = selectedDesignCode ? `[${selectedDesignCode}] ` : '';
     const designBlock = designUrl
-      ? `\n• Estilo: *Personalizada con Diseño (L 350)*\n• Diseño elegido: *${codePrefix}${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
-      : `\n• Estilo: *Camisa Lisa sin estampado (L 300)*`;
+      ? `\n• Estilo: *Personalizada (${money(unitPrice)})*\n• Diseño / Texto: *${codePrefix}${selectedDesignName || 'Diseño personalizado'}* (${scale >= 1.85 ? 'Tamaño A3' : 'Tamaño A4'})\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
+      : `\n• Estilo: *Normal (${money(unitPrice)})*`;
 
     const readyMadeNote = readyMadeMatch
       ? `\n⚡ *DISPONIBILIDAD:* ¡Prenda ya estampada lista para ENTREGA INMEDIATA!`
@@ -1004,7 +1004,7 @@ export function CustomerCatalogView({
             </p>
           </div>
 
-          {/* SELECTOR CLARO DE ESTILO: LISA (L 300) vs PERSONALIZADA (L 350) */}
+          {/* SELECTOR CLARO DE ESTILO: NORMAL (L 300) vs PERSONALIZADA (L 350) */}
           <div className="flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 p-1">
             <button
               type="button"
@@ -1021,7 +1021,7 @@ export function CustomerCatalogView({
                   : 'text-slate-600 hover:bg-white hover:text-slate-900'
               }`}
             >
-              👕 Lisa · {money(payload.priceNormal || 30000)}
+              👕 L 300.00
             </button>
             <button
               type="button"
@@ -1034,7 +1034,7 @@ export function CustomerCatalogView({
                   setSelectedDesignCode(first.code || null);
                   setSelectedDesignPhotoId(first.photoId);
                   setPlacement('back');
-                  setScale(2.75);
+                  setScale(2.0);
                 }
               }}
               className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
@@ -1043,7 +1043,7 @@ export function CustomerCatalogView({
                   : 'text-slate-600 hover:bg-white hover:text-slate-900'
               }`}
             >
-              ✨ A3 · {money(payload.priceCustom || 35000)}
+              ✨ Personalizada · {money(payload.priceCustom || 35000)}
             </button>
           </div>
         </div>
@@ -1100,9 +1100,9 @@ export function CustomerCatalogView({
               setSelectedDesignCode(d.code || null);
               setSelectedDesignPhotoId(d.photoId);
               setPlacement('back');
-              setScale(2.75);
+              setScale(2.0);
               setOffsetX(0);
-              setOffsetY(2);
+              setOffsetY(0);
             }}
             autoMotion
             stockBadge={{
@@ -1113,6 +1113,41 @@ export function CustomerCatalogView({
                   : `Talla ${size}: Disponible pronto (Bajo pedido)`
             }}
           />
+
+          {/* Selector de Tamaño de Estampado para el Cliente: A3 (200%) vs A4 (160%) */}
+          {hasDesign && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
+              <span className="text-xs font-black uppercase tracking-wider text-slate-700">
+                📐 Tamaño de Impresión:
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setScale(2.0)}
+                  className={`rounded-xl px-3 py-1 text-xs font-black transition ${
+                    scale >= 1.85
+                      ? 'border border-brand-600 bg-brand-600 text-white shadow-sm'
+                      : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  }`}
+                  title="Establecer tamaño grande A3 (200%)"
+                >
+                  ✨ Tamaño A3 (200%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScale(1.6)}
+                  className={`rounded-xl px-3 py-1 text-xs font-black transition ${
+                    scale < 1.85 && scale >= 1.4
+                      ? 'border border-brand-600 bg-brand-600 text-white shadow-sm'
+                      : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  }`}
+                  title="Establecer tamaño estándar A4 (160%)"
+                >
+                  📄 Tamaño A4 (160%)
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* PASO 3: SELECCIÓN DE TALLA ESTILO SISTEMA POS */}
@@ -1238,7 +1273,7 @@ export function CustomerCatalogView({
             </div>
             <div className="text-right">
               <div className="text-xs font-medium text-slate-500">
-                {hasDesign ? 'Personalizada A3' : 'Camisa Lisa'}:{' '}
+                {hasDesign ? 'Personalizada' : 'Normal L 300'}:{' '}
                 <strong className="text-slate-900">{money(unitPrice)} c/u</strong>
               </div>
               <div className="text-2xl font-black text-slate-900">{money(total)}</div>
@@ -1266,8 +1301,8 @@ export function CustomerCatalogView({
               {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'} ·{' '}
               <span className="font-extrabold text-brand-600">
                 {designUrl
-                  ? `${selectedDesignName || 'Diseño'} (${isBackSide ? 'EN ESPALDA' : 'EN FRENTE'})`
-                  : 'Camisa Lisa'}
+                  ? `${selectedDesignName || 'Personalizada'} (${isBackSide ? 'EN ESPALDA' : 'EN FRENTE'})`
+                  : 'L 300.00'}
               </span>
             </div>
             <div className="text-lg font-black text-slate-900">{money(total)}</div>
