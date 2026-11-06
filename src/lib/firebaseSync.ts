@@ -17,7 +17,7 @@ import type { AppState, SyncStatus } from './types';
 import { contentSignature, mergeStates, normalize } from './merge';
 import { db } from './db';
 import { getDeviceId } from './ids';
-import { buildPublicCatalog, LIVE_CATALOG_KEY } from './publicCatalog';
+import { buildPublicCatalog, LIVE_CATALOG_KEY, WEB_ORDER_LATEST_KEY } from './publicCatalog';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -464,6 +464,39 @@ export function subscribeLiveCatalogFirebase(
     );
   } catch (err) {
     console.warn('[subscribeLiveCatalogFirebase] error:', err);
+    return () => {};
+  }
+}
+
+/** Suscripción en tiempo real a pedidos que llegan desde la tienda pública (#tienda) */
+export function subscribeLatestWebOrderFirebase(
+  onOrder: (order: import('./publicCatalog').CustomerWebOrderPayload) => void
+): () => void {
+  const cfg = getFirebaseConfig();
+  if (!cfg) return () => {};
+  try {
+    const { fs } = getOrInitFirebase(cfg);
+    const orderDoc = doc(fs, 'cgs_photos', WEB_ORDER_LATEST_KEY);
+    return onSnapshot(
+      orderDoc,
+      (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        const raw = d?.data as string | undefined;
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw) as import('./publicCatalog').CustomerWebOrderPayload;
+          if (parsed && parsed.id && parsed.customerName) {
+            onOrder(parsed);
+          }
+        } catch {}
+      },
+      (err) => {
+        console.warn('[firebase latest order subscription]', err);
+      }
+    );
+  } catch (err) {
+    console.warn('[subscribeLatestWebOrderFirebase] error:', err);
     return () => {};
   }
 }

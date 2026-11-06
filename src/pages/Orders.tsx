@@ -12,7 +12,7 @@ import { uploadPhotoNow } from '../lib/sync';
 import { copyText } from '../lib/csv';
 import { buildBoxfulClipboardSummary, createBoxfulShipment, getBoxfulConfig } from '../lib/boxful';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
-import { ColorDot, Confirm, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
+import { ColorDot, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
 
 const STATUS_STYLE: Record<OrderStatus, string> = {
   borrador: 'bg-slate-200 text-slate-800',
@@ -99,24 +99,90 @@ export default function Orders() {
 
       <PhotoViewer src={viewer} onClose={() => setViewer(null)} />
 
-      <Confirm
-        open={!!cancelOrder}
-        onClose={() => setCancelOrder(null)}
-        title="Cancelar pedido"
-        text={
-          cancelOrder
-            ? `¿Cancelar ${folioLabel(cancelOrder.folio)}? Se devolverá automáticamente el stock descontado.`
-            : ''
-        }
-        confirmLabel="Sí, cancelar"
-        danger
-        onConfirm={() => {
-          if (!cancelOrder) return;
-          const err = setOrderStatus(cancelOrder.id, 'cancelado');
-          if (err) toast(err, 'error');
-          else toast(`${folioLabel(cancelOrder.folio)} cancelado`);
-        }}
-      />
+      {cancelOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Cancelar o Devolución · {folioLabel(cancelOrder.folio)}
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Cliente: {cancelOrder.shipTo.name || 'Consumidor'} · {cancelOrder.items.length} prenda(s)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancelOrder(null)}
+                className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <p className="font-bold">¿Cómo deseas reingresar la prenda al inventario?</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-800">
+                Si el pedido fue <strong>pago contra entrega</strong> y el cliente regresó la camisa ya estampada, guárdala como <strong>Prenda Ya Estampada</strong> para que quede disponible para entrega inmediata en esa talla y diseño, sin mezclarla con camisas lisas vírgenes.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const err = setOrderStatus(cancelOrder.id, 'cancelado', { returnAsReadyMade: true });
+                  if (err) toast(err, 'error');
+                  else toast(`¡Prenda reingresada como Prenda Ya Estampada (Stock Inmediato)!`, 'ok');
+                  setCancelOrder(null);
+                }}
+                className="flex w-full items-center justify-between rounded-2xl border-2 border-indigo-200 bg-indigo-50/70 p-3 text-left transition hover:border-indigo-600 hover:bg-indigo-50"
+              >
+                <div>
+                  <div className="text-xs font-black text-indigo-950">
+                    ⚡ Sí, la prenda ya está estampada
+                  </div>
+                  <div className="text-[11px] text-indigo-700">
+                    Guardar en "Prendas Listas" para venta o entrega inmediata en esa talla
+                  </div>
+                </div>
+                <span className="text-xl">👕</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const err = setOrderStatus(cancelOrder.id, 'cancelado', { returnAsReadyMade: false });
+                  if (err) toast(err, 'error');
+                  else toast(`Pedido cancelado. Stock devuelto a camisas en blanco.`);
+                  setCancelOrder(null);
+                }}
+                className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-slate-400 hover:bg-white"
+              >
+                <div>
+                  <div className="text-xs font-bold text-slate-800">
+                    👕 Era camisa lisa (sin estampar)
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Devolver a inventario regular de camisas vírgenes en blanco
+                  </div>
+                </div>
+                <span className="text-xl">↩️</span>
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setCancelOrder(null)}
+                className="btn-ghost text-xs text-slate-500"
+              >
+                No cancelar, mantener pedido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

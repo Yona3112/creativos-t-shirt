@@ -151,6 +151,25 @@ export interface CatalogDesign extends Entity {
   createdAt: number;
 }
 
+export interface ReadyMadeShirt {
+  id: string;
+  orderId?: string;
+  brandId: string;
+  brandName: string;
+  colorId: string;
+  colorName: string;
+  colorHex: string;
+  size: string;
+  designName: string;
+  designCode?: string | null;
+  photoId?: string | null;
+  placement?: string | null;
+  price: Cents;
+  qty: number;
+  createdAt: number;
+  notes?: string;
+}
+
 export interface AppState {
   version: 1;
   settings: Settings;
@@ -160,6 +179,7 @@ export interface AppState {
   orders: Order[];
   movements: Movement[];
   catalogDesigns?: CatalogDesign[];
+  readyMadeStock?: ReadyMadeShirt[];
   /** dispositivo que hizo la última escritura y cuándo */
   _by?: string;
   _at?: number;

@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import type { Section, SyncStatus } from '../lib/types';
 import { useSyncStatus } from '../lib/store';
+import { chime, requestNotificationPermission } from '../lib/soundNotification';
+import { toast } from './ui';
 
 export const SECTIONS: { id: Section; icon: string; label: string }[] = [
   { id: 'inicio', icon: '📊', label: 'Inicio' },
@@ -42,6 +44,18 @@ export function Header({ section, onMenu, onSell }: { section: Section; onMenu: 
           <span className={`h-2.5 w-2.5 rounded-full ${s.dot}`} />
           <span className="hidden min-[380px]:inline">{s.text}</span>
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            chime.playOrderChime();
+            void requestNotificationPermission();
+            toast('🔔 Timbre sonoro de alerta emitido', 'ok');
+          }}
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-sm text-white transition hover:bg-white/20 active:scale-95"
+          title="Probar sonido y timbre de pedidos"
+        >
+          🔔
+        </button>
         <button className="btn min-h-[44px] bg-white px-3 text-brand-900 hover:bg-brand-50" onClick={onSell}>
           🛒 Vender
         </button>

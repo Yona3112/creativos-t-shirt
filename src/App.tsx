@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Section } from './lib/types';
 import { useAppState, useReady } from './lib/store';
 import { Drawer, Header, SECTIONS } from './components/Shell';
-import { Toasts } from './components/ui';
+import { toast, Toasts } from './components/ui';
+import { subscribeLatestWebOrderFirebase } from './lib/firebaseSync';
+import { notifyIncomingOrder, requestNotificationPermission } from './lib/soundNotification';
+import type { CustomerWebOrderPayload } from './lib/publicCatalog';
 import Home from './pages/Home';
 import NewOrder from './pages/NewOrder';
 import Catalog3D, { CustomerCatalogView, readSharedCatalogHash, readWebOrderImportHash } from './pages/Catalog3D';
@@ -28,6 +31,35 @@ export default function App() {
   const [section, setSection] = useState<Section>(initialSection);
   const [menu, setMenu] = useState(false);
   const [sharedCatalog, setSharedCatalog] = useState(readSharedCatalogHash);
+  const [incomingOrder, setIncomingOrder] = useState<CustomerWebOrderPayload | null>(null);
+  const seenOrderIds = useRef<Set<string>>(new Set());
+  const mountTime = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (sharedCatalog) return;
+    void requestNotificationPermission();
+
+    const unsub = subscribeLatestWebOrderFirebase((order) => {
+      if (!order.id || seenOrderIds.current.has(order.id)) return;
+      seenOrderIds.current.add(order.id);
+
+      // Si el pedido fue generado en los últimos 15 minutos
+      if (order.createdAt >= mountTime.current - 900000) {
+        setIncomingOrder(order);
+        notifyIncomingOrder({
+          customerName: order.customerName,
+          qty: order.qty,
+          colorName: order.colorName,
+          size: order.size,
+          totalText: `L ${(order.qty * order.unitPrice) / 100}`,
+          isCustom: !!order.designId || !!order.designName
+        });
+        toast(`🔔 ¡Nuevo Pedido de ${order.customerName}! (${order.qty}x ${order.colorName} ${order.size})`, 'ok');
+      }
+    });
+
+    return unsub;
+  }, [sharedCatalog]);
 
   useEffect(() => {
     const onHash = () => {
@@ -89,6 +121,48 @@ export default function App() {
     <div className="min-h-screen">
       <Header section={section} onMenu={() => setMenu(true)} onSell={() => navigate('vender')} />
       <Drawer open={menu} section={section} onClose={() => setMenu(false)} onNavigate={navigate} badges={badges} />
+
+      {incomingOrder && (
+        <div className="sticky top-14 z-40 mx-auto max-w-4xl px-3 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-emerald-500 bg-emerald-50/95 p-3.5 shadow-xl backdrop-blur-md">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-xl text-white shadow">
+                🔔
+              </span>
+              <div>
+                <div className="text-xs font-black uppercase tracking-wider text-emerald-900">
+                  ¡Nuevo Pedido Entrante de la Tienda Web!
+                </div>
+                <div className="text-sm font-extrabold text-slate-900">
+                  {incomingOrder.customerName} · {incomingOrder.qty}x Camisa {incomingOrder.colorName} ({incomingOrder.size})
+                  {incomingOrder.designName ? ` · Estampado: ${incomingOrder.designName}` : ' · Camisa Lisa'}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  location.hash = `pedido=${incomingOrder.id}`;
+                  setIncomingOrder(null);
+                  navigate('vender');
+                }}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white shadow transition hover:bg-emerald-700 active:scale-95"
+              >
+                📥 Cargar en 1 Clic
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomingOrder(null)}
+                className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100"
+              >
+                ✕ Descartar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="safe-bottom mx-auto max-w-5xl px-3 pt-3">
         {section === 'inicio' && <Home navigate={navigate} />}
         {section === 'vender' && <NewOrder navigate={navigate} />}

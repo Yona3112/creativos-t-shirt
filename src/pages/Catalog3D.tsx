@@ -866,6 +866,20 @@ export function CustomerCatalogView({
 
   const selectedSizeStock = getSizeStock(selectedColor, size);
   const hasDesign = !!designUrl;
+
+  const readyMadeMatch = useMemo(() => {
+    const list = state.readyMadeStock || [];
+    if (!hasDesign || !selectedColor) return null;
+    return list.find(
+      (r) =>
+        r.qty > 0 &&
+        r.size === size &&
+        r.colorName.toLowerCase() === selectedColor.name.toLowerCase() &&
+        selectedDesignName &&
+        r.designName.toLowerCase() === selectedDesignName.toLowerCase()
+    );
+  }, [state.readyMadeStock, hasDesign, selectedColor, size, selectedDesignName]);
+
   const unitPrice = hasDesign ? (payload.priceCustom || 35000) : (payload.priceNormal || 30000);
   const total = qty * unitPrice;
 
@@ -929,7 +943,11 @@ export function CustomerCatalogView({
       ? `\n• Estilo: *Personalizada con Diseño (L 350)*\n• Diseño elegido: *${codePrefix}${selectedDesignName || 'Diseño del catálogo'}* (Tamaño A3)\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
       : `\n• Estilo: *Camisa Lisa sin estampado (L 300)*`;
 
-    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds (${money(unitPrice)} c/u)${designBlock}\n• Total: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
+    const readyMadeNote = readyMadeMatch
+      ? `\n⚡ *DISPONIBILIDAD:* ¡Prenda ya estampada lista para ENTREGA INMEDIATA!`
+      : '';
+
+    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds (${money(unitPrice)} c/u)${designBlock}${readyMadeNote}\n• Total: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
 
     const targetHref = payload.storePhone
       ? whatsappUrl(payload.storePhone, orderText)
@@ -1227,12 +1245,16 @@ export function CustomerCatalogView({
             </div>
           </div>
 
-          {selectedSizeStock === 0 && (
+          {readyMadeMatch ? (
+            <div className="rounded-2xl border border-emerald-300 bg-emerald-50 px-3.5 py-2.5 text-xs font-bold text-emerald-900 shadow-sm">
+              ⚡ ¡Disponible en Talla <strong>{size}</strong> para <strong>ENTREGA INMEDIATA HOY MISMO</strong> (Prenda ya estampada en stock)!
+            </div>
+          ) : selectedSizeStock === 0 ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
               ⏳ La talla <strong>{size}</strong> en color <strong>{selectedColor?.name}</strong> está{' '}
               <strong>Disponible pronto</strong>. Puedes apartarla o encargarla bajo pedido por WhatsApp.
             </div>
-          )}
+          ) : null}
         </section>
       </div>
 

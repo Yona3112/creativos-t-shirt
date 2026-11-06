@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, skuOf, vkey } from '../lib/inventory';
-import { setStockAbsolute } from '../lib/actions';
+import { setStockAbsolute, removeReadyMadeShirt } from '../lib/actions';
 import { money } from '../lib/money';
-import { ColorDot, Empty, Stepper } from '../components/ui';
+import { ColorDot, Empty, Stepper, toast } from '../components/ui';
 
 export default function Inventory() {
   const state = useAppState();
@@ -11,7 +11,7 @@ export default function Inventory() {
   const { settings } = state;
   const brands = activeBrands(state);
 
-  const [view, setView] = useState<'matriz' | 'tarjetas'>('matriz');
+  const [view, setView] = useState<'matriz' | 'tarjetas' | 'estampadas'>('matriz');
   const [query, setQuery] = useState('');
   const [brandFilter, setBrandFilter] = useState('all');
   const [colorFilter, setColorFilter] = useState('all');
@@ -69,26 +69,37 @@ export default function Inventory() {
     return sum;
   }, [rows, stock]);
 
+  const readyMadeList = (state.readyMadeStock || []).filter((r) => r.qty > 0);
+  const readyMadeCount = readyMadeList.reduce((sum, r) => sum + r.qty, 0);
+
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="grid flex-1 grid-cols-2 gap-2">
+          <div className="grid flex-1 grid-cols-3 gap-2">
             <button
               className={`chip ${view === 'matriz' ? 'chip-on' : 'chip-off'}`}
               onClick={() => setView('matriz')}
             >
-              📊 Vista Matriz
+              📊 Matriz
             </button>
             <button
               className={`chip ${view === 'tarjetas' ? 'chip-on' : 'chip-off'}`}
               onClick={() => setView('tarjetas')}
             >
-              🗂 Vista Tarjetas
+              🗂 Tarjetas
+            </button>
+            <button
+              className={`chip ${view === 'estampadas' ? 'chip-on' : 'chip-off'}`}
+              onClick={() => setView('estampadas')}
+            >
+              ⚡ Ya Estampadas ({readyMadeCount})
             </button>
           </div>
           <div className="rounded-xl bg-brand-50 px-3 py-2 text-sm font-extrabold text-brand-900">
-            Existencias: {totalUnits}
+            {view === 'estampadas'
+              ? `Listas para entrega: ${readyMadeCount} uds`
+              : `En blanco: ${totalUnits} uds`}
           </div>
         </div>
 
@@ -144,7 +155,87 @@ export default function Inventory() {
         </div>
       </div>
 
-      {rows.length === 0 ? (
+      {view === 'estampadas' ? (
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs text-indigo-950">
+            <p className="font-extrabold">👕 Stock de Prendas Ya Estampadas (Disponibles para Entrega Inmediata)</p>
+            <p className="mt-1 text-slate-600">
+              Estas camisas ya tienen un diseño impreso (por ejemplo devoluciones de pedidos contra entrega o prendas producidas para vitrina). No se pueden usar como camisas en blanco para otros diseños, pero están 100% disponibles para vender y entregar el mismo día en esa talla.
+            </p>
+          </div>
+
+          {readyMadeList.length === 0 ? (
+            <Empty icon="👕" text="No hay prendas ya estampadas en stock" />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {readyMadeList.map((r) => (
+                <div key={r.id} className="card space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-slate-200 shadow-inner"
+                        style={{ backgroundColor: r.colorHex }}
+                      >
+                        <span className="text-xl">👕</span>
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-lg bg-slate-900 px-2 py-0.5 text-xs font-black text-white">
+                            TALLA {r.size}
+                          </span>
+                          <span className="text-sm font-black text-slate-900">
+                            {r.brandName} · {r.colorName}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs font-bold text-indigo-700">
+                          Diseño: {r.designName}
+                        </div>
+                        {r.notes && (
+                          <div className="mt-0.5 text-[11px] text-slate-400">
+                            {r.notes}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-base font-black text-slate-900">{money(r.price)}</div>
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-extrabold text-emerald-800">
+                        {r.qty} ud{r.qty > 1 ? 's' : ''} disponible
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        removeReadyMadeShirt(r.id, 1);
+                        toast(`1 ud de ${r.designName} (${r.size}) descontada por venta`, 'ok');
+                      }}
+                      className="rounded-xl bg-slate-900 px-3.5 py-1.5 text-xs font-extrabold text-white shadow hover:bg-slate-800"
+                    >
+                      ✓ Marcar como Vendida (Descontar 1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm(`¿Deseas descartar esta prenda del inventario?`)) {
+                          removeReadyMadeShirt(r.id, r.qty);
+                          toast('Prenda descartada del inventario');
+                        }
+                      }}
+                      className="rounded-xl border border-slate-200 p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      title="Eliminar del inventario"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : rows.length === 0 ? (
         <Empty icon="👕" text="Sin variantes que coincidan" />
       ) : view === 'matriz' ? (
         <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">

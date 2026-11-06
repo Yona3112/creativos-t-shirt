@@ -1,4 +1,4 @@
-import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer, Movement, MovementReason, Order, OrderStatus, Settings, ShipTo } from './types';
+import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer, Movement, MovementReason, Order, OrderStatus, ReadyMadeShirt, Settings, ShipTo } from './types';
 import { getState, update } from './store';
 import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
@@ -32,6 +32,13 @@ export function addStock(key: string, delta: number): void {
 
 export function updateBrand(id: string, patch: Partial<Brand>): void {
   update((s) => ({ ...s, brands: s.brands.map((b) => (b.id === id ? { ...b, ...patch, updatedAt: now() } : b)) }));
+}
+
+export function deleteBrand(id: string): void {
+  update((s) => ({
+    ...s,
+    brands: s.brands.map((b) => (b.id === id ? { ...b, deleted: true, updatedAt: now() } : b))
+  }));
 }
 
 export function addBrand(name: string, code: string): string | null {
@@ -273,7 +280,11 @@ export const STATUS_LABEL: Record<OrderStatus, string> = {
 };
 
 /** Cambia el estado. Devuelve un mensaje de error si el candado lo impide. */
-export function setOrderStatus(id: string, status: OrderStatus): string | null {
+export function setOrderStatus(
+  id: string,
+  status: OrderStatus,
+  options?: { returnAsReadyMade?: boolean }
+): string | null {
   const o = getState().orders.find((x) => x.id === id);
   if (!o) return 'Pedido no encontrado';
   if (o.status === 'cancelado') return 'El pedido está cancelado';
@@ -281,18 +292,48 @@ export function setOrderStatus(id: string, status: OrderStatus): string | null {
   update((s) => {
     const t = now();
     const movements = [...s.movements];
+    let readyMadeStock = [...(s.readyMadeStock || [])];
     let items = o.items;
     if (status === 'cancelado') {
-      for (const it of o.items) {
-        if (it.fromStock > 0) {
-          movements.push({
-            id: `cancel-${o.id}-${it.id}`,
-            key: vkey(it.brandId, it.colorId, it.size),
-            delta: it.fromStock,
-            reason: 'cancelacion',
+      if (options?.returnAsReadyMade) {
+        // La camisa ya fue estampada (ej. devolución contra entrega).
+        // NO regresa a camisas en blanco para evitar falsas existencias de camisas lisas.
+        // Se añade como Prenda Ya Estampada lista para entrega inmediata.
+        for (const it of o.items) {
+          const dName = o.designName || `${it.brandName} ${it.colorName}` || 'Diseño Personalizado';
+          const pId = o.photoId || null;
+          readyMadeStock.unshift({
+            id: `rms_${t}_${uid().slice(0, 4)}`,
             orderId: o.id,
-            at: t
+            brandId: it.brandId,
+            brandName: it.brandName,
+            colorId: it.colorId,
+            colorName: it.colorName,
+            colorHex: it.colorHex,
+            size: it.size,
+            designName: dName,
+            designCode: o.designCode || null,
+            photoId: pId,
+            placement: o.placement || 'back',
+            price: it.unitPrice,
+            qty: it.qty,
+            createdAt: t,
+            notes: `Devolución contra entrega (Folio #${o.folio})`
           });
+        }
+      } else {
+        // Camisa lisa o sin estampar: regresa a inventario regular de camisas en blanco
+        for (const it of o.items) {
+          if (it.fromStock > 0) {
+            movements.push({
+              id: `cancel-${o.id}-${it.id}`,
+              key: vkey(it.brandId, it.colorId, it.size),
+              delta: it.fromStock,
+              reason: 'cancelacion',
+              orderId: o.id,
+              at: t
+            });
+          }
         }
       }
     } else if (status !== 'borrador') {
@@ -324,12 +365,35 @@ export function setOrderStatus(id: string, status: OrderStatus): string | null {
     return {
       ...s,
       movements: dedup,
+      readyMadeStock,
       orders: s.orders.map((x) =>
         x.id === id ? { ...x, items, status, updatedAt: t, history: [...(x.history || []), { status, at: t }] } : x
       )
     };
   });
   return null;
+}
+
+export function addReadyMadeShirt(item: Omit<ReadyMadeShirt, 'id' | 'createdAt'>): void {
+  update((s) => {
+    const list = s.readyMadeStock || [];
+    const newItem: ReadyMadeShirt = {
+      ...item,
+      id: `rms_${now()}_${uid().slice(0, 4)}`,
+      createdAt: now()
+    };
+    return { ...s, readyMadeStock: [newItem, ...list] };
+  });
+}
+
+export function removeReadyMadeShirt(id: string, qty = 1): void {
+  update((s) => {
+    const list = s.readyMadeStock || [];
+    const next = list
+      .map((r) => (r.id === id ? { ...r, qty: Math.max(0, r.qty - qty) } : r))
+      .filter((r) => r.qty > 0);
+    return { ...s, readyMadeStock: next };
+  });
 }
 
 export function markPaid(id: string): void {

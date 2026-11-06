@@ -77,6 +77,7 @@ service cloud.firestore {
              data.payload.orders is list &&
              data.payload.movements is list &&
              (!('catalogDesigns' in data.payload) || data.payload.catalogDesigns is list) &&
+             (!('readyMadeStock' in data.payload) || data.payload.readyMadeStock is list) &&
              (!('_by' in data.payload) || (data.payload._by is string && data.payload._by.size() <= 150)) &&
              (!('_at' in data.payload) || (data.payload._at is int || data.payload._at is float));
     }
