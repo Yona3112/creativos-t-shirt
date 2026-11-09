@@ -7,6 +7,7 @@ import {
   addReadyMadeShirt,
   deleteBrand,
   deleteColor,
+  purgeGarbageData,
   removeReadyMadeShirt,
   setStockAbsolute,
   updateBrand,
@@ -312,6 +313,22 @@ export default function Inventory() {
               onClick={() => setShowNewBrand(true)}
             >
               + Nueva Marca
+            </button>
+            <button
+              type="button"
+              className="btn-ghost px-3 py-2 text-xs text-emerald-700 hover:bg-emerald-50"
+              onClick={() => {
+                const res = purgeGarbageData();
+                const total = res.removedBrands + res.removedColors + res.removedDesigns + res.compactedMovements;
+                if (total > 0) {
+                  toast(`🧹 Se eliminaron ${total} registros basura/redundantes`, 'ok');
+                } else {
+                  toast('✨ El inventario ya está limpio y sin datos redundantes', 'ok');
+                }
+              }}
+              title="Eliminar marcas vacías, diseños rotos y compactar movimientos redundantes"
+            >
+              🧹 Limpiar Basura
             </button>
             {selectedBrandObj && (
               <button

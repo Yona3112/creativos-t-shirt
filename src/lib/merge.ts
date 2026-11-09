@@ -37,11 +37,99 @@ function mergeReadyMade(a: ReadyMadeShirt[], b: ReadyMadeShirt[]): ReadyMadeShir
   return Array.from(map.values()).filter((r) => !r.deleted && r.qty > 0);
 }
 
+const UNUSED_SEED_BRAND_IDS = new Set(['b-nx', 'b-pc', 'b-hn']);
+
+// IDs de diseños antiguos huérfanos cuyo archivo de imagen nunca se subió a Firestore cgs_photos
+const ORPHAN_DESIGN_IDS = new Set([
+  'cd-7191860a-f996-42cd-8a6b-0d4a06d0669a',
+  'cd-4c23b890-425d-4e01-a574-7f5b8d5f88d2',
+  'cd-4c50d5d2-83d0-4291-b016-656bc83552e6',
+  'cd-8c04960a-c6fb-4b3d-8adb-d729f4d6605a',
+  'cd-0e2f9732-cff8-44c7-a580-93593a9438fd',
+  'cd-4de414f8-37f9-4be2-b62d-c9ec8ece3b72',
+  'cd-9a263487-3b98-4657-8b64-0e026fe5f8fd',
+  'cd-fad83581-c769-4c2d-ae69-c493bb414a37',
+  'cd-68484978-24f3-4ff1-8f68-22a064b84f30',
+  'cd-83601232-916d-452d-957e-5eaaa94368d3',
+  'cd-0a3dbeb8-798a-4b0c-9bc1-40dd5ddc6cff',
+  'cd-fb67ee2d-01d2-4b1d-9587-abacd4cb3d3d',
+  'cd-4e8e4b62-2d94-48ea-8307-d538bca3b8a9',
+  'cd-07420ef9-dcc7-4be6-b82a-df0190d5c77c',
+  'cd-83b16446-bd34-4815-8595-5a4745442122',
+  'cd-b21f0ea4-5479-44cc-99c8-27a97121ceb7',
+  'cd-ff82f556-f008-454f-84a8-3f3fca2624bc',
+  'cd-23529a4c-2c1e-403b-b5ac-19b97f735351',
+  'cd-df32d856-4a8b-4c05-83ec-1a07fd37a364'
+]);
+
+/**
+ * Compacta movimientos manuales (`!m.orderId`) por variante `key` en un único registro neto `adj-${key}`.
+ * Elimina decenas de registros redundantes (+1 / -1) y descarta ajustes cuyo neto sea 0.
+ */
+export function compactMovements(movements: Movement[], validBrandIds?: Set<string>): Movement[] {
+  const orderMovements: Movement[] = [];
+  const adjByKey = new Map<string, { delta: number; at: number }>();
+
+  for (const m of movements) {
+    if (!m || !m.key) continue;
+    const brandId = m.key.split('|')[0];
+    if (validBrandIds && brandId && !validBrandIds.has(brandId)) continue;
+
+    if (m.orderId) {
+      orderMovements.push(m);
+    } else {
+      const prev = adjByKey.get(m.key);
+      // Si es un registro ya consolidado (`adj-...`) más reciente que los fragmentos viejos, o si sumamos fragmentos
+      if (m.id === `adj-${m.key}` && prev && m.at > prev.at) {
+        adjByKey.set(m.key, { delta: m.delta, at: m.at });
+      } else if (prev && prev.at > m.at && m.id !== `adj-${m.key}`) {
+        // Ignorar fragmento viejo anterior a una consolidación
+        continue;
+      } else {
+        adjByKey.set(m.key, {
+          delta: (prev?.delta || 0) + (Number(m.delta) || 0),
+          at: Math.max(prev?.at || 0, m.at || 0)
+        });
+      }
+    }
+  }
+
+  const compactedAdj: Movement[] = [];
+  for (const [key, info] of adjByKey.entries()) {
+    if (info.delta !== 0) {
+      compactedAdj.push({
+        id: `adj-${key}`,
+        key,
+        delta: info.delta,
+        reason: 'ajuste',
+        at: info.at || Date.now()
+      });
+    }
+  }
+
+  return [...orderMovements, ...compactedAdj].sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : 1));
+}
+
 function mergeMovements(a: Movement[], b: Movement[]): Movement[] {
-  const map = new Map<string, Movement>();
-  for (const m of a) map.set(m.id, m);
-  for (const m of b) if (!map.has(m.id)) map.set(m.id, m);
-  return Array.from(map.values()).sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : 1));
+  const orderMap = new Map<string, Movement>();
+  for (const m of a) if (m.orderId) orderMap.set(m.id, m);
+  for (const m of b) if (m.orderId && !orderMap.has(m.id)) orderMap.set(m.id, m);
+
+  // Para ajustes manuales sin pedido, consolidar por key priorizando el registro consolidado más reciente
+  const adjA = compactMovements(a.filter((m) => !m.orderId));
+  const adjB = compactMovements(b.filter((m) => !m.orderId));
+  const adjMap = new Map<string, Movement>();
+  for (const m of adjA) adjMap.set(m.key, m);
+  for (const m of adjB) {
+    const prev = adjMap.get(m.key);
+    if (!prev || (m.at || 0) >= (prev.at || 0)) {
+      adjMap.set(m.key, m);
+    }
+  }
+
+  return [...orderMap.values(), ...adjMap.values()].sort(
+    (x, y) => x.at - y.at || (x.id < y.id ? -1 : 1)
+  );
 }
 
 /** Si dos dispositivos crearon el mismo folio sin conexión, reasigna el más reciente. */
@@ -69,16 +157,54 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
   const base = createInitialState();
   if (!s || typeof s !== 'object') return base;
   const settings = upgradeSettings({ ...DEFAULT_SETTINGS, ...(s.settings || {}) });
+
+  const rawOrders = Array.isArray(s.orders) ? s.orders : [];
+  const rawMovements = Array.isArray(s.movements) ? s.movements : [];
+
+  // Identificar qué marcas tienen movimientos reales o pedidos para eliminar las marcas semilla basura (Next Apparel, Pacer, HN)
+  const usedBrandIds = new Set<string>();
+  for (const m of rawMovements) {
+    if (m?.key && m.delta) usedBrandIds.add(m.key.split('|')[0]);
+  }
+  for (const o of rawOrders) {
+    if (!o?.deleted) {
+      for (const it of o.items || []) if (it.brandId) usedBrandIds.add(it.brandId);
+    }
+  }
+
+  const incomingBrands = Array.isArray(s.brands) && s.brands.length > 0 ? s.brands : base.brands;
+  const cleanBrands = incomingBrands.filter((b) => {
+    if (!b || b.deleted) return false;
+    if (UNUSED_SEED_BRAND_IDS.has(b.id) && !usedBrandIds.has(b.id)) return false;
+    return true;
+  });
+  const finalBrands = cleanBrands.length > 0 ? cleanBrands : base.brands;
+  const activeBrandIdSet = new Set(finalBrands.map((b) => b.id));
+
+  const incomingColors = Array.isArray(s.colors) && s.colors.length > 0 ? s.colors : base.colors;
+  const cleanColors = upgradeColors(
+    incomingColors.filter((c) => c && activeBrandIdSet.has(c.brandId))
+  );
+
+  const rawDesigns = Array.isArray(s.catalogDesigns) ? s.catalogDesigns : [];
+  const cleanDesigns = assignDesignCodes(
+    rawDesigns
+      .filter((d) => d && d.photoId && !ORPHAN_DESIGN_IDS.has(d.id))
+      .map((d) => (d.name === 'RANCGHO' ? { ...d, name: 'RANCHO', code: 'D-001' } : d))
+  );
+
   return {
     version: 1,
     settings,
-    brands: mergeEntities(base.brands, Array.isArray(s.brands) ? s.brands : []),
-    colors: upgradeColors(mergeEntities(base.colors, Array.isArray(s.colors) ? s.colors : [])),
-    customers: Array.isArray(s.customers) ? s.customers : [],
-    orders: Array.isArray(s.orders) ? s.orders : [],
-    movements: Array.isArray(s.movements) ? s.movements : [],
-    catalogDesigns: assignDesignCodes(Array.isArray(s.catalogDesigns) ? s.catalogDesigns : []),
-    readyMadeStock: Array.isArray(s.readyMadeStock) ? s.readyMadeStock : [],
+    brands: finalBrands,
+    colors: cleanColors,
+    customers: (Array.isArray(s.customers) ? s.customers : []).filter(Boolean),
+    orders: rawOrders.filter(Boolean),
+    movements: compactMovements(rawMovements, activeBrandIdSet),
+    catalogDesigns: cleanDesigns,
+    readyMadeStock: (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(
+      (r) => r && !r.deleted && r.qty > 0
+    ),
     _by: s._by,
     _at: s._at
   };

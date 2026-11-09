@@ -2,6 +2,7 @@ import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer
 import { getState, update } from './store';
 import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
+import { compactMovements } from './merge';
 import { BASE_COLORS } from './seed';
 
 const now = () => Date.now();
@@ -14,8 +15,29 @@ export function setStockAbsolute(key: string, target: number, reason: MovementRe
     const current = computeStock(s).stock.get(key) || 0;
     const delta = t - current;
     if (!delta) return s;
-    const m: Movement = { id: uid(), key, delta, reason, at: now() };
-    return { ...s, movements: [...s.movements, m] };
+
+    // Calcular cuánto proviene de pedidos (`orderId`) y consolidar el ajuste manual en 1 solo registro por variante
+    let orderSum = 0;
+    const otherMovements: Movement[] = [];
+    for (const m of s.movements) {
+      if (m.key !== key) {
+        otherMovements.push(m);
+      } else if (m.orderId) {
+        orderSum += m.delta;
+        otherMovements.push(m);
+      }
+    }
+    const neededAdj = t - orderSum;
+    if (neededAdj !== 0) {
+      otherMovements.push({
+        id: `adj-${key}`,
+        key,
+        delta: neededAdj,
+        reason,
+        at: now()
+      });
+    }
+    return { ...s, movements: otherMovements };
   });
 }
 
@@ -586,4 +608,70 @@ export function deleteCatalogDesign(id: string): void {
       d.id === id ? { ...d, deleted: true, updatedAt: t } : d
     )
   }));
+}
+
+/**
+ * Purga registros basura, marcas semilla vacías sin stock, elementos marcados como eliminados (`deleted: true`),
+ * diseños huérfanos sin foto y compacta los movimientos redundantes de inventario.
+ */
+export function purgeGarbageData(): {
+  removedBrands: number;
+  removedColors: number;
+  removedDesigns: number;
+  compactedMovements: number;
+} {
+  let stats = {
+    removedBrands: 0,
+    removedColors: 0,
+    removedDesigns: 0,
+    compactedMovements: 0
+  };
+  update((s) => {
+    const stockInfo = computeStock(s);
+    const usedBrandIds = new Set<string>();
+    for (const [k, qty] of stockInfo.stock.entries()) {
+      if (qty > 0) usedBrandIds.add(k.split('|')[0]);
+    }
+    for (const o of s.orders) {
+      if (!o.deleted) {
+        for (const it of o.items) usedBrandIds.add(it.brandId);
+      }
+    }
+
+    const legacyEmptyBrands = new Set(['b-nx', 'b-pc', 'b-hn']);
+    const cleanBrands = s.brands.filter((b) => {
+      if (b.deleted) return false;
+      if (legacyEmptyBrands.has(b.id) && !usedBrandIds.has(b.id)) return false;
+      return true;
+    });
+    const finalBrands = cleanBrands.length > 0 ? cleanBrands : s.brands.filter((b) => !b.deleted).slice(0, 1);
+    const activeBrandSet = new Set(finalBrands.map((b) => b.id));
+
+    const cleanColors = s.colors.filter((c) => !c.deleted && activeBrandSet.has(c.brandId));
+    const cleanDesigns = (s.catalogDesigns || []).filter((d) => !d.deleted && !!d.photoId);
+    const cleanMovements = compactMovements(s.movements, activeBrandSet);
+
+    stats = {
+      removedBrands: s.brands.length - finalBrands.length,
+      removedColors: s.colors.length - cleanColors.length,
+      removedDesigns: (s.catalogDesigns || []).length - cleanDesigns.length,
+      compactedMovements: Math.max(0, s.movements.length - cleanMovements.length)
+    };
+
+    try {
+      sessionStorage.removeItem('cgs_new_order_draft_v1');
+    } catch {}
+
+    return {
+      ...s,
+      brands: finalBrands,
+      colors: cleanColors,
+      customers: s.customers.filter((c) => !c.deleted),
+      orders: s.orders.filter((o) => !o.deleted),
+      movements: cleanMovements,
+      catalogDesigns: cleanDesigns,
+      readyMadeStock: (s.readyMadeStock || []).filter((r) => !r.deleted && r.qty > 0)
+    };
+  });
+  return stats;
 }

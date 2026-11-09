@@ -269,23 +269,21 @@ void main() {
   vec3 decalColor = fabricBase;
   float decalMask = 0.0;
 
-  // 3. Proyección 3D del diseño / logo sobre el pecho o la espalda (usando normal pura sin corte Z en el centro)
+  // 3. Proyección 3D amplia sobre toda la superficie frontal o trasera (sin recortar ni borrar al agrandar el diseño)
   if (u_hasDecal == 1 && !interior) {
     bool isBackTarget = (u_decalOnBack == 1);
     float sideNz = isBackTarget ? -v_objNorm.z : v_objNorm.z;
 
-    // Solo proyectar en la cara frontal o trasera del torso según su normal 3D (sin manchar mangas ni cuello)
-    float maxTorsoX = v_objPos.y > -0.05 ? 0.265 : 0.285;
-    if (sideNz > 0.08 && abs(v_objPos.x) < maxTorsoX && v_objPos.y < 0.36 && v_objPos.y > -0.52) {
+    // Cobertura completa del shader en todo el ancho y alto del modelo 3D (x: ±0.74, y: -0.83 a +0.82)
+    if (sideNz > 0.03 && abs(v_objPos.x) < 0.74 && v_objPos.y < 0.82 && v_objPos.y > -0.83) {
       float sideX = isBackTarget ? -v_objPos.x : v_objPos.x;
       float du = (sideX - u_decalRect.x) / u_decalRect.z + 0.5;
       float dv = (u_decalRect.y - v_objPos.y) / u_decalRect.w + 0.5;
 
       if (du >= 0.0 && du <= 1.0 && dv >= 0.0 && dv <= 1.0) {
         vec4 tex = texture2D(u_decalTex, vec2(du, dv));
-        float angleFade = smoothstep(0.08, 0.24, sideNz);
-        float seamFade = smoothstep(maxTorsoX, maxTorsoX - 0.022, abs(v_objPos.x));
-        float alpha = tex.a * angleFade * seamFade;
+        float angleFade = smoothstep(0.03, 0.16, sideNz);
+        float alpha = tex.a * angleFade;
         // Des-premultiplicar RGB para que el filtrado bilineal de WebGL nunca manche de negro los bordes ni los huecos internos
         vec3 cleanDecalRgb = tex.a > 0.008 ? clamp(tex.rgb / tex.a, 0.0, 1.0) : fabricBase;
         decalColor = cleanDecalRgb;
@@ -394,31 +392,34 @@ function computeDecalRect3D(
   offsetY: number,
   aspect: number
 ): [number, number, number, number] {
-  const s = clamp(scale, 0.30, 3.00);
-  const safeAspect = clamp(aspect || 1, 0.45, 2.2);
+  const s = clamp(scale, 0.30, 4.00);
+  const safeAspect = clamp(aspect || 1, 0.40, 2.50);
 
   if (placement === 'pocket') {
-    const baseX = 0.125;
-    const baseY = 0.16;
-    const maxW = 0.085 * s;
-    const maxH = 0.095 * s;
+    const baseX = 0.135;
+    const baseY = 0.18;
+    const maxW = 0.11 * s;
+    const maxH = 0.125 * s;
     let widthX = maxW;
     let heightY = widthX / safeAspect;
     if (heightY > maxH) {
       heightY = maxH;
       widthX = heightY * safeAspect;
     }
-    const centerX = clamp(baseX + offsetX * 0.01, -0.22, 0.22);
-    const centerY = clamp(baseY - offsetY * 0.012, -0.38, 0.28);
+    const centerX = clamp(baseX + offsetX * 0.014, -0.45, 0.45);
+    const centerY = clamp(baseY - offsetY * 0.015, -0.58, 0.52);
     return [centerX, centerY, widthX, heightY];
   }
 
-  // Platen anatómico del torso: A3 (scale = 2.0 / 200%) y A4 (scale = 1.6 / 160%)
-  // Encaja tanto diseños verticales como cuadrados/horizontales dentro del pecho o espalda sin tocar cuello ni mangas
+  // El torso del modelo shirt_baked.glb mide ~0.86 de ancho (-0.43 a +0.43) y ~1.66 de alto (-0.83 a +0.83).
+  // En A3 automático (scale = 2.0 / 200%): maxW = 0.68 y maxH = 0.88 para que el diseño luzca grande y protagonista.
+  // En A4 (scale = 1.6 / 160%): maxW = 0.544 y maxH = 0.704.
   const baseX = 0.0;
-  const baseY = placement === 'back' ? 0.02 : 0.01;
-  const maxW = 0.215 * s; // En A3 (2.0) = 0.43 (cubre el ancho útil del torso entre sisas)
-  const maxH = 0.250 * s; // En A3 (2.0) = 0.50 (cubre el alto útil desde debajo del cuello hasta cintura)
+  const baseY = placement === 'back' ? 0.01 : 0.0;
+  const multW = placement === 'full' ? 0.38 : 0.34;
+  const multH = placement === 'full' ? 0.48 : 0.44;
+  const maxW = multW * s;
+  const maxH = multH * s;
 
   let widthX = maxW;
   let heightY = widthX / safeAspect;
@@ -427,8 +428,8 @@ function computeDecalRect3D(
     widthX = heightY * safeAspect;
   }
 
-  const centerX = clamp(baseX + offsetX * 0.01, -0.22, 0.22);
-  const centerY = clamp(baseY - offsetY * 0.012, -0.35, 0.24);
+  const centerX = clamp(baseX + offsetX * 0.014, -0.48, 0.48);
+  const centerY = clamp(baseY - offsetY * 0.015, -0.60, 0.55);
   return [centerX, centerY, widthX, heightY];
 }
 
@@ -646,7 +647,7 @@ export function InteractiveShirt3D({
   }, [showcaseActive, catalogDesigns, activeCatalogDesignId, designUrl, onSelectCatalogDesign]);
 
   const adjustScale = (delta: number) => {
-    const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.30, 3.00);
+    const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.30, 4.00);
     onDesignChange?.({ scale: next });
   };
 
@@ -790,7 +791,7 @@ export function InteractiveShirt3D({
                 <button
                   type="button"
                   onClick={() => {
-                    onDesignChange?.({ placement: 'back', offsetX: 0, offsetY: 2 });
+                    onDesignChange?.({ placement: 'back', offsetX: 0, offsetY: 0 });
                     setTargetAngleY(180);
                   }}
                   className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
@@ -805,7 +806,7 @@ export function InteractiveShirt3D({
                 <button
                   type="button"
                   onClick={() => {
-                    onDesignChange?.({ placement: 'center', offsetX: 0, offsetY: 2 });
+                    onDesignChange?.({ placement: 'center', offsetX: 0, offsetY: 0 });
                     setTargetAngleY(0);
                   }}
                   className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
@@ -2256,7 +2257,7 @@ function WebGLShirtCanvas({
         gl.uniform1i(uHasAoMap, st.hasAoMap ? 1 : 0);
         gl.uniform1i(uDecalOnBack, st.placement === 'back' ? 1 : 0);
 
-        const effectiveScale = clamp(r.smoothScale * r.decalPop, 0.25, 3.15);
+        const effectiveScale = clamp(r.smoothScale * r.decalPop, 0.25, 4.15);
         const rect = computeDecalRect3D(
           st.placement,
           effectiveScale,

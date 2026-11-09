@@ -47,10 +47,7 @@ export const QUICK_PALETTE: { name: string; hex: string }[] = [
 ];
 
 const BASE_BRANDS: { code: string; name: string; cost: number }[] = [
-  { code: 'BC', name: 'Bella+Canvas', cost: 15000 },
-  { code: 'NX', name: 'Next Apparel', cost: 14500 },
-  { code: 'PC', name: 'Pacer', cost: 11500 },
-  { code: 'HN', name: 'HN', cost: 9500 }
+  { code: 'BC', name: 'Bella+Canvas', cost: 15000 }
 ];
 
 export const DEFAULT_SETTINGS: Settings = {

@@ -93,7 +93,7 @@ export default function Catalog3D() {
   const [placement, setPlacement] = useState<DecalPlacement>('back');
   const [scale, setScale] = useState(2.0);
   const [offsetX, setOffsetX] = useState(0);
-  const [offsetY, setOffsetY] = useState(2);
+  const [offsetY, setOffsetY] = useState(0);
   const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(settings.storeTheme || 'ranchero');
   const [autoMotion, setAutoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
@@ -156,7 +156,7 @@ export default function Catalog3D() {
       setDesignUrl(processed);
       setScale(2.0);
       setOffsetX(0);
-      setOffsetY(2);
+      setOffsetY(0);
       toast(
         removeBg
           ? 'Diseño sin fondo aplicado en Tamaño A3 (200%)'

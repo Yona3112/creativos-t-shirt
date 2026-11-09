@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import type { AppState } from '../lib/types';
-import { engine, firebaseEngine, getState, replaceState, useAppState, useStock, useSyncStatus } from '../lib/store';
-import { updateSettings } from '../lib/actions';
-import { getConfig, pairingLink, saveConfig, firebasePairingLink } from '../lib/sync';
+import { firebaseEngine, getState, replaceState, useAppState, useStock } from '../lib/store';
+import { purgeGarbageData, updateSettings } from '../lib/actions';
+import { firebasePairingLink } from '../lib/sync';
 import { getFirebaseConfig, saveFirebaseConfig, type FirebaseConfig } from '../lib/firebaseSync';
 import { activeBrands, brandColors, skuOf, vkey } from '../lib/inventory';
 import { copyText, downloadText, toCSV } from '../lib/csv';
@@ -13,13 +13,7 @@ import { MoneyInput, toast } from '../components/ui';
 export default function SettingsPage() {
   const state = useAppState();
   const { stock } = useStock();
-  const { status, detail } = useSyncStatus();
   const { settings } = state;
-
-  const initialCfg = getConfig();
-  const [supaUrl, setSupaUrl] = useState(initialCfg?.url || '');
-  const [supaKey, setSupaKey] = useState(initialCfg?.key || '');
-  const [testing, setTesting] = useState(false);
 
   // Firebase Cloud State
   const initialFb = getFirebaseConfig();
@@ -161,34 +155,6 @@ export default function SettingsPage() {
     } finally {
       setTestingBoxful(false);
     }
-  };
-
-  const connectSupabase = async () => {
-    const url = supaUrl.trim().replace(/\/+$/, '');
-    const key = supaKey.trim();
-    if (!url || !key) return toast('Ingresa URL y Anon Key de Supabase', 'error');
-    setTesting(true);
-    const err = await engine.testConnection({ url, key });
-    setTesting(false);
-    if (err) return toast(`Error Supabase: ${err}`, 'error');
-    saveConfig({ url, key });
-    await engine.start({ url, key });
-    toast('Conectado en vivo a Supabase');
-  };
-
-  const disconnectSupabase = async () => {
-    saveConfig(null);
-    await engine.stop();
-    toast('Modo local activado', 'info');
-  };
-
-  const copyPairing = async () => {
-    const url = supaUrl.trim().replace(/\/+$/, '');
-    const key = supaKey.trim();
-    if (!url || !key) return toast('Guarda primero la conexión a Supabase', 'error');
-    const link = pairingLink({ url, key });
-    await copyText(link);
-    toast('Enlace copiado para conectar el Taller');
   };
 
   const addSize = () => {
@@ -350,49 +316,52 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* Conexión en Vivo a Supabase (Alternativa) */}
-      <section className="card space-y-3 border border-slate-200">
-        <div className="flex items-center justify-between">
-          <h2 className="section-title mb-0 text-slate-700">⚡ Conexión a Supabase (Opcional)</h2>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-extrabold text-slate-700">
-            {status.toUpperCase()}
-          </span>
-        </div>
-        {detail && <div className="text-xs font-semibold text-red-600">{detail}</div>}
-
-        <div>
-          <label className="label">Supabase Project URL</label>
-          <input
-            className="input font-mono text-sm"
-            placeholder="https://xxxx.supabase.co"
-            value={supaUrl}
-            onChange={(e) => setSupaUrl(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="label">Supabase Anon Public Key</label>
-          <input
-            className="input font-mono text-sm"
-            placeholder="eyJhbGciOi..."
-            value={supaKey}
-            onChange={(e) => setSupaKey(e.target.value)}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button className="btn-primary" onClick={connectSupabase} disabled={testing}>
-            {testing ? 'Probando...' : '⚡ Conectar y Sincronizar'}
-          </button>
-          <button className="btn-soft" onClick={copyPairing}>
-            🔗 Copiar Enlace para Conectar el Taller
+      {/* Limpieza y Optimización de Datos Basura y Redundantes */}
+      <section className="card space-y-3 border border-emerald-200 bg-gradient-to-b from-emerald-50/40 to-white">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="section-title mb-0 text-emerald-950">🧹 Optimización y Limpieza de Datos</h2>
+            <p className="text-xs text-slate-600">
+              Elimina diseños huérfanos sin foto, marcas vacías, registros borrados y compacta el historial de movimientos (+1/-1) conservando intacto el stock actual.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-primary bg-emerald-700 hover:bg-emerald-800 px-4 py-2 text-xs font-extrabold"
+            onClick={() => {
+              const res = purgeGarbageData();
+              const totalRemoved = res.removedBrands + res.removedColors + res.removedDesigns + res.compactedMovements;
+              if (totalRemoved > 0) {
+                toast(
+                  `🧹 Limpieza completada: ${res.removedDesigns} diseños basura, ${res.removedBrands} marcas vacías, ${res.removedColors} colores y ${res.compactedMovements} movimientos redundantes eliminados`,
+                  'ok'
+                );
+              } else {
+                toast('✨ La base de datos ya está limpia y optimizada', 'ok');
+              }
+            }}
+          >
+            🧹 Depurar Datos Basura Ahora
           </button>
         </div>
-
-        {engine.connected && (
-          <button className="btn-ghost w-full text-sm text-slate-600" onClick={disconnectSupabase}>
-            Desconectar de la nube
-          </button>
-        )}
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Marcas Activas</div>
+            <div className="text-base font-black text-slate-900">{state.brands.filter((b) => !b.deleted).length}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Colores Activos</div>
+            <div className="text-base font-black text-slate-900">{state.colors.filter((c) => !c.deleted).length}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Diseños Catálogo</div>
+            <div className="text-base font-black text-slate-900">{(state.catalogDesigns || []).filter((d) => !d.deleted).length}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Movimientos Stock</div>
+            <div className="text-base font-black text-slate-900">{state.movements.length}</div>
+          </div>
+        </div>
       </section>
 
       {/* Tienda y Precios */}
