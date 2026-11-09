@@ -99,7 +99,8 @@ function upgradeSettings(st: Settings): Settings {
   if (!workTypes.some((w) => w.trim().toLowerCase() === 'dtf espalda')) workTypes = ['DTF Espalda', ...workTypes];
   let carriers = Array.isArray(st.carriers) ? st.carriers : DEFAULT_SETTINGS.carriers;
   if (!carriers.some((c) => c.trim().toLowerCase() === 'boxful')) carriers = ['Boxful', ...carriers];
-  return { ...st, workTypes, carriers, storeTheme: st.storeTheme || 'ranchero' };
+  const lowStock = !st.lowStock || st.lowStock === 5 ? 10 : st.lowStock;
+  return { ...st, lowStock, workTypes, carriers, storeTheme: st.storeTheme || 'ranchero' };
 }
 
 /** Asigna códigos D-001, D-002… a los diseños que aún no tienen (orden estable por fecha). */

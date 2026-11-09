@@ -434,7 +434,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-4">
           <div>
             <label className="label">Precio Camisa Lisa (L)</label>
             <MoneyInput
@@ -458,6 +458,23 @@ export default function SettingsPage() {
               onChange={(c) => c !== null && updateSettings({ shipping: c })}
             />
             <p className="mt-1 text-[11px] text-slate-500">Tarifa estándar de entrega</p>
+          </div>
+          <div>
+            <label className="label">Alerta Stock Bajo (Uds)</label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              className="input"
+              value={settings.lowStock || 10}
+              onChange={(e) => {
+                const n = Math.max(1, Math.floor(Number(e.target.value) || 10));
+                updateSettings({ lowStock: n });
+              }}
+            />
+            <p className="mt-1 text-[11px] text-slate-500">
+              Notifica de 1 a {settings.lowStock || 10} uds (los que están en 0 no)
+            </p>
           </div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">

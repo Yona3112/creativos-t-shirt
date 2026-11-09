@@ -65,7 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   priceWholesale: 30000,
   wholesaleMin: 999999,
   shipping: 11000,
-  lowStock: 5,
+  lowStock: 10,
   carriers: ['Boxful', 'Cargo Expreso', 'C807 Express', 'Forza Delivery', 'Rápido Cargo', '504 Express', 'Entrega Local (Copán)'],
   paymentMethods: ['Transferencia BAC', 'Transferencia Atlántida', 'Transferencia Ficohsa', 'Efectivo', 'Contra Entrega'],
   workTypes: ['DTF Espalda', 'DTF Frontal', 'DTF Frente y Espalda', 'Camisa Lisa', 'Bordado', 'Vinil / Sublimación'],

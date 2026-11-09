@@ -49,9 +49,9 @@ function emptyDraft(): Draft {
     rawPhoto: null,
     removeBg: false,
     placement: 'back',
-    designScale: 2.75,
+    designScale: 2.0,
     designOffsetX: 0,
-    designOffsetY: 2,
+    designOffsetY: 0,
     customerId: null,
     addressId: null,
     withShipping: true,
@@ -66,7 +66,14 @@ function emptyDraft(): Draft {
 function loadDraft(): Draft {
   try {
     const raw = localStorage.getItem(LS_CART);
-    if (raw) return { ...emptyDraft(), ...(JSON.parse(raw) as Draft) };
+    if (raw) {
+      const parsed = JSON.parse(raw) as Draft;
+      if (parsed.designScale && parsed.designScale > 2.2) {
+        parsed.designScale = 2.0;
+        parsed.designOffsetY = 0;
+      }
+      return { ...emptyDraft(), ...parsed };
+    }
   } catch {
     /* ignorar */
   }
@@ -192,9 +199,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         designId: null,
         designName: cleanFileName ? cleanFileName.slice(0, 32) : 'Diseño personalizado',
         designCode: draft.designCode || 'CUSTOM',
-        designScale: 2.75,
+        designScale: 2.0,
         designOffsetX: 0,
-        designOffsetY: 2
+        designOffsetY: 0
       });
       toast(
         shouldRemoveBg
@@ -537,9 +544,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             brandName={brand?.name || ''}
             designUrl={draft.photo}
             placement={draft.placement || 'back'}
-            designScale={draft.designScale ?? 2.75}
+            designScale={draft.designScale ?? 2.0}
             designOffsetX={draft.designOffsetX ?? 0}
-            designOffsetY={draft.designOffsetY ?? 2}
+            designOffsetY={draft.designOffsetY ?? 0}
             onDesignChange={(patch) => {
               const next: Partial<Draft> = {};
               if (patch.scale !== undefined) next.designScale = patch.scale;
@@ -590,9 +597,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 designName: d.name,
                 designCode: d.code || 'D-001',
                 placement: 'back',
-                designScale: 2.75,
+                designScale: 2.0,
                 designOffsetX: 0,
-                designOffsetY: 2
+                designOffsetY: 0
               });
               toast(`"${d.code ? `[${d.code}] ` : ''}${d.name}" colocado en ESPALDA (Tamaño A3)`);
             }}

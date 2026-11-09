@@ -5,6 +5,7 @@ import { fromCents, money } from '../lib/money';
 import { folioLabel } from '../lib/ids';
 import { STATUS_LABEL } from '../lib/actions';
 import { downloadText, toCSV } from '../lib/csv';
+import { printDailyOrdersReport } from '../lib/printReports';
 import { ColorDot, Empty, toast } from '../components/ui';
 
 type Preset = 'hoy' | '7d' | '30d' | 'todo' | 'rango';
@@ -236,9 +237,26 @@ export default function Reports() {
           </div>
         )}
 
-        <button className="btn-soft w-full" onClick={exportCsv} disabled={orders.length === 0}>
-          📥 Exportar a CSV
-        </button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            className="btn-primary w-full"
+            onClick={() =>
+              printDailyOrdersReport(
+                orders,
+                state.settings,
+                preset === 'hoy'
+                  ? `Pedidos de Hoy (${today})`
+                  : `Pedidos del Período (${range.startKey} a ${range.endKey})`
+              )
+            }
+            disabled={orders.length === 0}
+          >
+            🖨️ Imprimir Pedidos ({orders.length}) · PDF
+          </button>
+          <button className="btn-soft w-full" onClick={exportCsv} disabled={orders.length === 0}>
+            📥 Exportar a CSV
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

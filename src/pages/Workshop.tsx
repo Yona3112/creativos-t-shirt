@@ -4,6 +4,7 @@ import { useAppState } from '../lib/store';
 import { folioLabel } from '../lib/ids';
 import { money } from '../lib/money';
 import { patchOrder, setOrderStatus } from '../lib/actions';
+import { printDailyOrdersReport } from '../lib/printReports';
 import { ColorDot, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
 
 export default function Workshop() {
@@ -24,6 +25,24 @@ export default function Workshop() {
 
   return (
     <div className="space-y-4">
+      <div className="card flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 py-3">
+        <div className="text-xs font-extrabold text-slate-700">
+          🔨 {queue.length} pedido{queue.length === 1 ? '' : 's'} en cola de producción / taller
+        </div>
+        <button
+          type="button"
+          className="btn-primary px-3.5 py-2 text-xs"
+          onClick={() =>
+            printDailyOrdersReport(
+              queue,
+              state.settings,
+              `Cola de Producción en Taller (${queue.length} pedidos)`
+            )
+          }
+        >
+          🖨️ Imprimir Cola de Taller / Pedidos
+        </button>
+      </div>
       {queue.map((order) => (
         <WorkshopCard key={order.id} order={order} onZoom={setViewer} />
       ))}

@@ -3,8 +3,9 @@ import type { Order, OrderStatus, Settings } from '../lib/types';
 import { notifyPhotos, useAppState } from '../lib/store';
 import { folioLabel, uid } from '../lib/ids';
 import { fromCents, money, toCents } from '../lib/money';
-import { fmtDateTime } from '../lib/time';
+import { dayKey, fmtDateTime } from '../lib/time';
 import { deleteOrder, markPaid, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
+import { printDailyOrdersReport } from '../lib/printReports';
 import { shareLabel } from '../lib/pdf';
 import { compressImage } from '../lib/image';
 import { savePhoto } from '../lib/db';
@@ -33,18 +34,30 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
 export default function Orders() {
   const state = useAppState();
   const { settings } = state;
+  const today = dayKey();
 
   const [filter, setFilter] = useState<'all' | OrderStatus>('all');
   const [query, setQuery] = useState('');
+  const [printDate, setPrintDate] = useState(today);
+  const [onlySelectedDay, setOnlySelectedDay] = useState(false);
   const [viewer, setViewer] = useState<string | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<Order | null>(null);
 
+  const dayOrders = useMemo(
+    () =>
+      state.orders
+        .filter((o) => !o.deleted && o.status !== 'cancelado' && dayKey(o.createdAt) === printDate)
+        .sort((a, b) => a.folio - b.folio),
+    [state.orders, printDate]
+  );
+
   const orders = useMemo(() => {
     const q = query.trim().toLowerCase();
     return state.orders
       .filter((o) => !o.deleted)
+      .filter((o) => (onlySelectedDay ? dayKey(o.createdAt) === printDate : true))
       .filter((o) => (filter === 'all' ? true : o.status === filter))
       .filter((o) => {
         if (!q) return true;
@@ -59,11 +72,68 @@ export default function Orders() {
         );
       })
       .sort((a, b) => b.folio - a.folio);
-  }, [state.orders, filter, query]);
+  }, [state.orders, onlySelectedDay, printDate, filter, query]);
 
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
+        {/* Barra de Impresión de Pedidos del Día (Talla, Diseño, Color, Cliente, Dirección, Estado de Pago) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 p-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-extrabold text-slate-700">🖨️ Pedidos del Día:</span>
+            <input
+              type="date"
+              className="input h-9 w-auto px-2.5 py-1 text-xs font-bold"
+              value={printDate}
+              onChange={(e) => setPrintDate(e.target.value || today)}
+              aria-label="Fecha para imprimir pedidos"
+            />
+            <button
+              type="button"
+              onClick={() => setOnlySelectedDay((v) => !v)}
+              className={`rounded-xl border px-2.5 py-1.5 text-xs font-bold transition ${
+                onlySelectedDay
+                  ? 'border-brand-700 bg-brand-700 text-white'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {onlySelectedDay ? `📅 Mostrando solo ${printDate}` : '📅 Filtrar pantalla por este día'}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-primary px-3 py-2 text-xs"
+              onClick={() => {
+                if (dayOrders.length === 0) {
+                  return toast(`No hay pedidos registrados el día ${printDate}`, 'info');
+                }
+                printDailyOrdersReport(
+                  dayOrders,
+                  settings,
+                  printDate === today ? `Pedidos de Hoy (${printDate})` : `Pedidos del Día (${printDate})`
+                );
+              }}
+            >
+              🖨️ Imprimir Pedidos del Día ({dayOrders.length})
+            </button>
+            <button
+              type="button"
+              className="btn-soft px-3 py-2 text-xs"
+              disabled={orders.length === 0}
+              onClick={() =>
+                printDailyOrdersReport(
+                  orders,
+                  settings,
+                  `Listado de Pedidos Filtrados (${orders.length} pedidos)`
+                )
+              }
+            >
+              🖨️ Imprimir Lista Visible ({orders.length})
+            </button>
+          </div>
+        </div>
+
         <input
           className="input"
           placeholder="Buscar por folio, cliente, teléfono o guía..."

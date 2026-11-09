@@ -108,3 +108,33 @@ export function notifyIncomingOrder(opts: {
     } catch {}
   }
 }
+
+/** Dispara alerta sonora y notificación cuando un color queda entre 1 y 10 unidades (excluyendo 0) */
+export function notifyLowStockColor(opts: {
+  brandName: string;
+  colorName: string;
+  totalStock: number;
+  sizesText: string;
+}) {
+  if (opts.totalStock <= 0) return; // Nunca notificar los que están en 0
+  chime.playOrderChime();
+
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try {
+      navigator.vibrate([180, 90, 180]);
+    } catch {}
+  }
+
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try {
+      const title = `⚠️ Stock Bajo: ${opts.colorName} (${opts.totalStock} uds)`;
+      const body = `Quedan ${opts.totalStock} unidades de ${opts.brandName} · ${opts.colorName} (${opts.sizesText}).`;
+      new Notification(title, {
+        body,
+        icon: '/favicon.ico',
+        tag: `cgs-low-stock-${opts.brandName}-${opts.colorName}`
+      });
+    } catch {}
+  }
+}
+

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState, useStock } from '../lib/store';
-import { activeBrands, brandColors, normalPrice, skuOf, vkey } from '../lib/inventory';
+import { activeBrands, brandColors, lowColorStockList, normalPrice, skuOf, vkey } from '../lib/inventory';
+import { printInventoryReport } from '../lib/printReports';
 import {
   addBrand,
   addReadyMadeShirt,
@@ -21,15 +22,19 @@ import type { Brand, Color, ReadyMadeShirt } from '../lib/types';
 
 export default function Inventory() {
   const state = useAppState();
-  const { stock } = useStock();
+  const stockInfo = useStock();
+  const { stock } = stockInfo;
   const { settings } = state;
   const brands = activeBrands(state);
+  const lowThreshold = Math.max(1, settings.lowStock || 10);
 
   const [view, setView] = useState<'matriz' | 'tarjetas' | 'estampadas'>('matriz');
   const [query, setQuery] = useState('');
   const [brandFilter, setBrandFilter] = useState('all');
   const [colorFilter, setColorFilter] = useState('all');
   const [sizeFilter, setSizeFilter] = useState('all');
+
+  const lowColors = useMemo(() => lowColorStockList(state, stockInfo), [state, stockInfo]);
 
   // Modales de Color (Crear / Editar / Eliminar)
   const [showNewColor, setShowNewColor] = useState(false);
@@ -280,6 +285,19 @@ export default function Inventory() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              className="btn-soft px-3 py-2 text-xs font-extrabold text-slate-900"
+              onClick={() =>
+                printInventoryReport(state, {
+                  brandFilter,
+                  colorFilter
+                })
+              }
+              title="Imprimir o guardar en PDF el inventario y matriz de tallas"
+            >
+              🖨️ Imprimir Inventario
+            </button>
+            <button
+              type="button"
               className="btn-primary px-3 py-2 text-xs"
               onClick={() => {
                 setNewColorBrandId(brandFilter !== 'all' ? brandFilter : brands[0]?.id);
@@ -315,6 +333,77 @@ export default function Inventory() {
             )}
           </div>
         </div>
+
+        {/* Banner de Alerta de Colores por Agotarse (1 a 10 unidades, excluyendo los que están en 0) */}
+        {lowColors.length > 0 && (
+          <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/90 p-3 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500 text-sm text-white shadow-sm">
+                  ⚠️
+                </span>
+                <div>
+                  <div className="text-xs font-black uppercase tracking-wide text-amber-950">
+                    Alerta de Colores por Agotarse (1 a {lowThreshold} unidades) · {lowColors.length} color{lowColors.length === 1 ? '' : 'es'}
+                  </div>
+                  <div className="text-[11px] font-medium text-amber-800">
+                    Solo se notifican colores con existencias reales entre 1 y {lowThreshold} uds (los que están en 0 no se notifican).
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  printInventoryReport(state, {
+                    brandFilter,
+                    colorFilter
+                  })
+                }
+                className="rounded-xl border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-extrabold text-amber-900 hover:bg-amber-100"
+              >
+                🖨️ Imprimir Alerta + Inventario
+              </button>
+            </div>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              {lowColors.map((item) => {
+                const activeSizes = item.sizesBreakdown
+                  .map((s) => `${s.size}:${s.qty}`)
+                  .join(' · ');
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => {
+                      setBrandFilter(item.brand.id);
+                      setColorFilter(item.color.name);
+                      setView('matriz');
+                    }}
+                    className="flex items-center gap-2 rounded-xl border border-amber-300 bg-white px-2.5 py-1.5 text-left text-xs shadow-sm transition hover:border-amber-500 hover:bg-amber-50"
+                    title="Clic para filtrar este color en la matriz"
+                  >
+                    <span
+                      className="h-4 w-4 shrink-0 rounded-full border border-black/20"
+                      style={{ backgroundColor: item.color.hex }}
+                    />
+                    <div>
+                      <div className="font-extrabold text-slate-900">
+                        {item.brand.name} · {item.color.name}{' '}
+                        <span className="ml-1 rounded-md bg-amber-100 px-1.5 py-0.5 font-black text-amber-900">
+                          Quedan {item.totalStock} uds
+                        </span>
+                      </div>
+                      {activeSizes && (
+                        <div className="text-[10px] font-semibold text-slate-500">
+                          Tallas: {activeSizes}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <input
           className="input"
@@ -501,8 +590,12 @@ export default function Inventory() {
                   (s, sz) => s + (stock.get(vkey(brand.id, color.id, sz)) || 0),
                   0
                 );
+                const isLowColor = rowTotal >= 1 && rowTotal <= lowThreshold;
                 return (
-                  <tr key={`${brand.id}-${color.id}`} className="hover:bg-slate-50/70">
+                  <tr
+                    key={`${brand.id}-${color.id}`}
+                    className={isLowColor ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50/70'}
+                  >
                     <td className="sticky left-0 z-10 bg-white px-3 py-2.5">
                       <div className="flex items-center gap-2.5">
                         <ColorSwatchPicker
@@ -511,7 +604,7 @@ export default function Inventory() {
                           onChange={(hex: string) => updateColor(color.id, { hex })}
                         />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() => openEditColorModal(color)}
@@ -523,6 +616,11 @@ export default function Inventory() {
                             <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-500">
                               {color.code}
                             </span>
+                            {isLowColor && (
+                              <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-black text-amber-900 ring-1 ring-amber-300">
+                                ⚠️ Quedan {rowTotal} uds
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-1 text-xs text-slate-500">
                             <button
@@ -551,7 +649,19 @@ export default function Inventory() {
                         </td>
                       );
                     })}
-                    <td className="px-3 py-2.5 text-right font-extrabold text-slate-900">{rowTotal}</td>
+                    <td className="px-3 py-2.5 text-right font-extrabold text-slate-900">
+                      <span
+                        className={
+                          isLowColor
+                            ? 'rounded-lg bg-amber-100 px-2 py-1 text-amber-900'
+                            : rowTotal === 0
+                            ? 'text-slate-400'
+                            : 'text-slate-900'
+                        }
+                      >
+                        {rowTotal}
+                      </span>
+                    </td>
                     <td className="px-2 py-2.5 text-center">
                       <div className="inline-flex items-center gap-1">
                         <button
@@ -585,8 +695,12 @@ export default function Inventory() {
               (s, sz) => s + (stock.get(vkey(brand.id, color.id, sz)) || 0),
               0
             );
+            const isLowColor = colorTotal >= 1 && colorTotal <= lowThreshold;
             return (
-              <div key={`${brand.id}-${color.id}`} className="card space-y-3">
+              <div
+                key={`${brand.id}-${color.id}`}
+                className={`card space-y-3 ${isLowColor ? 'border-amber-300 bg-amber-50/30' : ''}`}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
                     <ColorSwatchPicker
@@ -595,11 +709,16 @@ export default function Inventory() {
                       onChange={(hex: string) => updateColor(color.id, { hex })}
                     />
                     <div>
-                      <div className="flex items-center gap-2 font-extrabold text-slate-900">
+                      <div className="flex flex-wrap items-center gap-2 font-extrabold text-slate-900">
                         <span>{brand.name} · {color.name}</span>
                         <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-500">
                           {color.code}
                         </span>
+                        {isLowColor && (
+                          <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-black text-amber-900 ring-1 ring-amber-300">
+                            ⚠️ Stock bajo: quedan {colorTotal} uds
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs font-semibold text-slate-500">
                         {money(normalPrice(settings, brand))} · Mayorista {money(settings.priceWholesale)}
@@ -607,7 +726,15 @@ export default function Inventory() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-extrabold text-slate-800">
+                    <span
+                      className={`rounded-xl px-3 py-1.5 text-sm font-extrabold ${
+                        isLowColor
+                          ? 'bg-amber-100 text-amber-900'
+                          : colorTotal === 0
+                          ? 'bg-slate-100 text-slate-400'
+                          : 'bg-slate-100 text-slate-800'
+                      }`}
+                    >
                       {colorTotal} uds
                     </span>
                     <button

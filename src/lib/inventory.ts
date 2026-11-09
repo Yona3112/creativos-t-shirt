@@ -71,15 +71,59 @@ export interface LowVariant {
   stock: number;
 }
 
+export interface LowColorStock {
+  key: string;
+  brand: Brand;
+  color: Color;
+  totalStock: number;
+  sizesBreakdown: { size: string; qty: number }[];
+}
+
+/**
+ * Devuelve los colores cuyo total de unidades está entre 1 y 10 (o settings.lowStock).
+ * Los colores en 0 unidades NO se incluyen (solo de 1 a 10 unidades).
+ */
+export function lowColorStockList(state: AppState, info: StockInfo): LowColorStock[] {
+  const threshold = state.settings.lowStock || 10;
+  const out: LowColorStock[] = [];
+  for (const brand of activeBrands(state)) {
+    for (const color of brandColors(state, brand.id)) {
+      let totalStock = 0;
+      const sizesBreakdown: { size: string; qty: number }[] = [];
+      for (const size of state.settings.sizes) {
+        const key = vkey(brand.id, color.id, size);
+        const qty = info.stock.get(key) || 0;
+        totalStock += qty;
+        if (qty > 0) sizesBreakdown.push({ size, qty });
+      }
+      if (totalStock >= 1 && totalStock <= threshold) {
+        out.push({
+          key: `${brand.id}|${color.id}`,
+          brand,
+          color,
+          totalStock,
+          sizesBreakdown
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => a.totalStock - b.totalStock);
+}
+
+/**
+ * Variantes con existencias bajas entre 1 y el umbral (excluye las que están en 0).
+ */
 export function lowStockList(state: AppState, info: StockInfo): LowVariant[] {
+  const threshold = state.settings.lowStock || 10;
   const out: LowVariant[] = [];
   for (const brand of activeBrands(state)) {
     for (const color of brandColors(state, brand.id)) {
       for (const size of state.settings.sizes) {
         const key = vkey(brand.id, color.id, size);
-        if (!info.everStocked.has(key)) continue;
         const stock = info.stock.get(key) || 0;
-        if (stock <= state.settings.lowStock) out.push({ key, brand, color, size, stock });
+        if (stock >= 1 && stock <= threshold) {
+          out.push({ key, brand, color, size, stock });
+        }
       }
     }
   }
