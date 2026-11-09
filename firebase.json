@@ -3,6 +3,7 @@
     "rules": "firestore.rules"
   },
   "hosting": {
+    "site": "creativos-t-shirt",
     "public": "dist",
     "ignore": [
       "firebase.json",
