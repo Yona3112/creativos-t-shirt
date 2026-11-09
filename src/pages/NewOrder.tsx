@@ -7,7 +7,7 @@ import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto } from '../lib/sync';
-import { addressOneLine, createOrder, quickCustomer, updateBrand, updateSettings } from '../lib/actions';
+import { addressOneLine, createOrder, deleteColor, quickCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -97,6 +97,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [qty, setQty] = useState(1);
   const [manualPrice, setManualPrice] = useState<number | null>(null);
   const [colorModal, setColorModal] = useState(false);
+  const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string } | null>(null);
   const [pendingColorName, setPendingColorName] = useState<string | null>(null);
   const [viewer, setViewer] = useState<string | null>(null);
   const [done, setDone] = useState<Order | null>(null);
@@ -569,6 +570,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             activeColorId={color?.id}
             onSelectColor={(id) => setColorId(id)}
             onAddNewColor={() => setColorModal(true)}
+            onEditColor={(id) => {
+              const target = colors.find((c) => c.id === id);
+              if (target) setEditingColor({ id: target.id, name: target.name, hex: target.hex });
+            }}
+            onDeleteColor={(id) => {
+              deleteColor(id);
+              toast('Color eliminado');
+            }}
             isStoreOwner
             catalogDesigns={allDesigns}
             activeCatalogDesignId={draft.designId || null}
@@ -1073,6 +1082,61 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 💬 Enviar confirmación por WhatsApp
               </a>
             )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!editingColor}
+        onClose={() => setEditingColor(null)}
+        title={`Editar Color · ${editingColor?.name || ''}`}
+      >
+        {editingColor && (
+          <div className="space-y-3">
+            <div>
+              <label className="label">Nombre del color</label>
+              <input
+                className="input"
+                value={editingColor.name}
+                onChange={(e) => setEditingColor({ ...editingColor, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Tono Hexadecimal</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  className="h-11 w-14 cursor-pointer rounded-xl border border-slate-200 p-0.5"
+                  value={editingColor.hex.startsWith('#') && editingColor.hex.length === 7 ? editingColor.hex : '#1A1A1C'}
+                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value.toUpperCase() })}
+                />
+                <input
+                  className="input font-mono uppercase"
+                  value={editingColor.hex}
+                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value.toUpperCase() })}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" className="btn-ghost" onClick={() => setEditingColor(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  if (!editingColor.name.trim()) return toast('Escribe un nombre para el color', 'error');
+                  updateColor(editingColor.id, {
+                    name: editingColor.name.trim(),
+                    hex: editingColor.hex.trim().toUpperCase()
+                  });
+                  setEditingColor(null);
+                  toast('Color actualizado', 'ok');
+                }}
+              >
+                Guardar
+              </button>
+            </div>
           </div>
         )}
       </Modal>

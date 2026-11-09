@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react';
 import type { Address, Customer } from '../lib/types';
 import { useAppState } from '../lib/store';
-import { addressText, saveCustomer } from '../lib/actions';
+import { addressText, deleteCustomer, saveCustomer } from '../lib/actions';
 import { copyText } from '../lib/csv';
 import { uid } from '../lib/ids';
-import { Empty, Modal, toast } from '../components/ui';
+import { Confirm, Empty, Modal, toast } from '../components/ui';
 
 export default function Customers() {
   const state = useAppState();
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Customer | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Customer | null>(null);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -75,9 +76,17 @@ export default function Customers() {
                   <div className="text-sm font-semibold text-slate-600">{c.phone}</div>
                   {c.notes && <div className="mt-1 text-xs text-slate-500">{c.notes}</div>}
                 </div>
-                <button className="btn-ghost min-h-[44px] px-3 text-sm" onClick={() => setEditing(c)}>
-                  Editar
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button className="btn-ghost min-h-[40px] px-3 text-xs" onClick={() => setEditing(c)}>
+                    ✏️ Editar
+                  </button>
+                  <button
+                    className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100"
+                    onClick={() => setConfirmDelete(c)}
+                  >
+                    🗑️ Eliminar
+                  </button>
+                </div>
               </div>
 
               {c.addresses.length > 0 && (
@@ -125,6 +134,25 @@ export default function Customers() {
           }}
         />
       )}
+
+      <Confirm
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        title="Eliminar cliente"
+        text={
+          confirmDelete
+            ? `¿Eliminar al cliente "${confirmDelete.name}"? El historial de sus pedidos anteriores se conservará.`
+            : ''
+        }
+        confirmLabel="Sí, eliminar cliente"
+        danger
+        onConfirm={() => {
+          if (confirmDelete) {
+            deleteCustomer(confirmDelete.id);
+            toast(`Cliente "${confirmDelete.name}" eliminado`);
+          }
+        }}
+      />
     </div>
   );
 }

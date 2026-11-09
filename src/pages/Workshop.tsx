@@ -3,7 +3,7 @@ import type { Order } from '../lib/types';
 import { useAppState } from '../lib/store';
 import { folioLabel } from '../lib/ids';
 import { money } from '../lib/money';
-import { setOrderStatus } from '../lib/actions';
+import { patchOrder, setOrderStatus } from '../lib/actions';
 import { ColorDot, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
 
 export default function Workshop() {
@@ -34,6 +34,8 @@ export default function Workshop() {
 
 function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) => void }) {
   const photo = usePhoto(order.photoId);
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState(order.notes || '');
 
   const finish = () => {
     const err = setOrderStatus(order.id, 'enviado');
@@ -47,6 +49,16 @@ function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) =
         <div className="flex items-center gap-2">
           <span className="font-mono text-xl font-extrabold text-brand-900">{folioLabel(order.folio)}</span>
           <span className="rounded-lg bg-brand-100 px-3 py-1 text-sm font-bold text-brand-900">{order.workType}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setNotesDraft(order.notes || '');
+              setEditingNotes((v) => !v);
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50"
+          >
+            ✏️ Notas
+          </button>
         </div>
         {order.balance > 0 ? (
           <span className="rounded-xl bg-red-600 px-3 py-1.5 text-sm font-extrabold text-white">
@@ -81,10 +93,39 @@ function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) =
         </div>
       )}
 
-      {order.notes && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-950">
-          📝 {order.notes}
+      {editingNotes ? (
+        <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50/70 p-3">
+          <label className="label text-xs text-amber-950">Notas de taller / producción</label>
+          <textarea
+            rows={2}
+            className="input bg-white"
+            value={notesDraft}
+            onChange={(e) => setNotesDraft(e.target.value)}
+            placeholder="Especificaciones de estampado, talla, ubicación..."
+          />
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-ghost text-xs" onClick={() => setEditingNotes(false)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              onClick={() => {
+                patchOrder(order.id, { notes: notesDraft.trim() });
+                setEditingNotes(false);
+                toast('Notas de taller actualizadas', 'ok');
+              }}
+            >
+              Guardar notas
+            </button>
+          </div>
         </div>
+      ) : (
+        order.notes && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-950">
+            📝 {order.notes}
+          </div>
+        )
       )}
 
       <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/60">

@@ -2,6 +2,7 @@ import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer
 import { getState, update } from './store';
 import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
+import { BASE_COLORS } from './seed';
 
 const now = () => Date.now();
 
@@ -31,20 +32,26 @@ export function addStock(key: string, delta: number): void {
 /* ------------------------------ Marcas ------------------------------- */
 
 export function updateBrand(id: string, patch: Partial<Brand>): void {
-  update((s) => ({ ...s, brands: s.brands.map((b) => (b.id === id ? { ...b, ...patch, updatedAt: now() } : b)) }));
-}
-
-export function deleteBrand(id: string): void {
+  const t = now();
   update((s) => ({
     ...s,
-    brands: s.brands.map((b) => (b.id === id ? { ...b, deleted: true, updatedAt: now() } : b))
+    brands: s.brands.map((b) => (b.id === id ? { ...b, ...patch, updatedAt: Math.max(t, (b.updatedAt || 0) + 1) } : b))
   }));
 }
 
-export function addBrand(name: string, code: string): string | null {
+export function deleteBrand(id: string): void {
+  const t = now();
+  update((s) => ({
+    ...s,
+    brands: s.brands.map((b) => (b.id === id ? { ...b, deleted: true, updatedAt: Math.max(t, (b.updatedAt || 0) + 1) } : b))
+  }));
+}
+
+export function addBrand(name: string, code: string, seedBaseColors = true): string | null {
   const s = getState();
   const c = code.trim().toUpperCase().slice(0, 4) || name.slice(0, 2).toUpperCase();
   if (!name.trim() || s.brands.some((b) => !b.deleted && (b.code === c || b.name.toLowerCase() === name.trim().toLowerCase()))) return null;
+  const t = now();
   const id = `b-${slug(c)}-${uid().slice(0, 4)}`;
   const brand: Brand = {
     id,
@@ -53,14 +60,39 @@ export function addBrand(name: string, code: string): string | null {
     priceOverride: null,
     cost: 0,
     order: s.brands.length,
-    updatedAt: now()
+    updatedAt: t
   };
-  update((st) => ({ ...st, brands: [...st.brands, brand] }));
+  const seededColors: Color[] = [];
+  if (seedBaseColors) {
+    const usedCodes: string[] = [];
+    BASE_COLORS.forEach((bc, ci) => {
+      const cc = colorCode(bc.name, usedCodes);
+      usedCodes.push(cc);
+      seededColors.push({
+        id: `c-${c.toLowerCase()}-${slug(bc.name)}-${uid().slice(0, 4)}`,
+        brandId: id,
+        name: bc.name,
+        hex: bc.hex.toUpperCase(),
+        code: cc,
+        order: ci,
+        updatedAt: t
+      });
+    });
+  }
+  update((st) => ({
+    ...st,
+    brands: [...st.brands, brand],
+    colors: seededColors.length > 0 ? [...st.colors, ...seededColors] : st.colors
+  }));
   return id;
 }
 
 export function updateSettings(patch: Partial<Settings>): void {
-  update((s) => ({ ...s, settings: { ...s.settings, ...patch, updatedAt: now() } }));
+  const t = now();
+  update((s) => ({
+    ...s,
+    settings: { ...s.settings, ...patch, updatedAt: Math.max(t, (s.settings.updatedAt || 0) + 1) }
+  }));
 }
 
 /* ------------------------------ Colores ------------------------------ */
@@ -68,63 +100,119 @@ export function updateSettings(patch: Partial<Settings>): void {
 export function addColor(name: string, hex: string, brandIds: string[]): { added: number; skipped: number } {
   let added = 0;
   let skipped = 0;
+  const cleanName = name.trim();
+  const cleanHex = (hex || '#1A1A1C').trim().toUpperCase();
+  if (!cleanName || brandIds.length === 0) return { added: 0, skipped: 0 };
   update((s) => {
+    const t = now();
     const colors = [...s.colors];
+    const newIds: string[] = [];
     for (const bId of brandIds) {
       const existing = colors.filter((c) => c.brandId === bId && !c.deleted);
-      if (existing.some((c) => c.name.trim().toLowerCase() === name.trim().toLowerCase())) {
+      if (existing.some((c) => c.name.trim().toLowerCase() === cleanName.toLowerCase())) {
         skipped++;
         continue;
       }
       const brand = s.brands.find((b) => b.id === bId);
-      // reactivar si existía borrado
-      const ghost = colors.find((c) => c.brandId === bId && c.deleted && c.name.toLowerCase() === name.trim().toLowerCase());
+      // Reactivar si existía borrado
+      const ghost = colors.find((c) => c.brandId === bId && c.deleted && c.name.trim().toLowerCase() === cleanName.toLowerCase());
       if (ghost) {
         const i = colors.indexOf(ghost);
-        colors[i] = { ...ghost, deleted: false, hex: hex.toUpperCase(), updatedAt: now() };
+        const reactivated: Color = {
+          ...ghost,
+          name: cleanName,
+          deleted: false,
+          hex: cleanHex,
+          updatedAt: Math.max(t, (ghost.updatedAt || 0) + 1)
+        };
+        colors[i] = reactivated;
+        newIds.push(reactivated.id);
         added++;
         continue;
       }
       const c: Color = {
-        id: `c-${(brand?.code || 'x').toLowerCase()}-${slug(name)}-${uid().slice(0, 4)}`,
+        id: `c-${(brand?.code || 'x').toLowerCase()}-${slug(cleanName)}-${uid().slice(0, 4)}`,
         brandId: bId,
-        name: name.trim(),
-        hex: hex.toUpperCase(),
-        code: colorCode(name, existing.map((e) => e.code)),
+        name: cleanName,
+        hex: cleanHex,
+        code: colorCode(cleanName, existing.map((e) => e.code)),
         order: existing.reduce((m, e) => Math.max(m, e.order), -1) + 1,
-        updatedAt: now()
+        updatedAt: t
       };
       colors.push(c);
+      newIds.push(c.id);
       added++;
     }
-    return added ? { ...s, colors } : s;
+    if (!added) return s;
+    const nextSettings = { ...s.settings };
+    if (Array.isArray(nextSettings.storeColorIds) && nextSettings.storeColorIds.length > 0) {
+      nextSettings.storeColorIds = Array.from(new Set([...nextSettings.storeColorIds, ...newIds]));
+      nextSettings.updatedAt = Math.max(t, (nextSettings.updatedAt || 0) + 1);
+    }
+    return { ...s, colors, settings: nextSettings };
   });
   return { added, skipped };
 }
 
 export function updateColor(id: string, patch: Partial<Color>): void {
-  update((s) => ({ ...s, colors: s.colors.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: now() } : c)) }));
+  const t = now();
+  update((s) => ({
+    ...s,
+    colors: s.colors.map((c) => {
+      if (c.id !== id) return c;
+      const nextHex = patch.hex ? patch.hex.trim().toUpperCase() : c.hex;
+      const nextName = patch.name !== undefined ? patch.name.trim() || c.name : c.name;
+      return {
+        ...c,
+        ...patch,
+        name: nextName,
+        hex: nextHex,
+        deleted: patch.deleted ?? false,
+        updatedAt: Math.max(t, (c.updatedAt || 0) + 1)
+      };
+    })
+  }));
 }
 
 export function deleteColor(id: string): void {
-  update((s) => ({
-    ...s,
-    colors: s.colors.map((c) => (c.id === id ? { ...c, deleted: true, updatedAt: now() } : c)),
-    settings: {
-      ...s.settings,
-      storeColorIds: s.settings.storeColorIds ? s.settings.storeColorIds.filter((cid) => cid !== id) : undefined
+  const t = now();
+  update((s) => {
+    const nextSettings: Settings = { ...s.settings };
+    if (Array.isArray(nextSettings.storeColorIds)) {
+      nextSettings.storeColorIds = nextSettings.storeColorIds.filter((cid) => cid !== id);
+      nextSettings.updatedAt = Math.max(t, (nextSettings.updatedAt || 0) + 1);
+    } else {
+      delete nextSettings.storeColorIds;
     }
-  }));
+    return {
+      ...s,
+      colors: s.colors.map((c) =>
+        c.id === id ? { ...c, deleted: true, updatedAt: Math.max(t, (c.updatedAt || 0) + 1) } : c
+      ),
+      settings: nextSettings
+    };
+  });
 }
 
 /* ------------------------------ Clientes ----------------------------- */
 
 export function saveCustomer(c: Customer): void {
+  const t = now();
   update((s) => {
     const exists = s.customers.some((x) => x.id === c.id);
-    const next = { ...c, updatedAt: now() };
+    const next = { ...c, deleted: false, updatedAt: Math.max(t, (c.updatedAt || 0) + 1) };
     return { ...s, customers: exists ? s.customers.map((x) => (x.id === c.id ? next : x)) : [...s.customers, next] };
   });
+}
+
+export function deleteCustomer(id: string): void {
+  const t = now();
+  update((s) => ({
+    ...s,
+    customers: s.customers.map((c) =>
+      c.id === id ? { ...c, deleted: true, updatedAt: Math.max(t, (c.updatedAt || 0) + 1) } : c
+    )
+  }));
 }
 
 export function quickCustomer(name: string, phone: string, address: string): Customer {
@@ -266,7 +354,23 @@ export function createOrder(input: NewOrderInput): Order {
 }
 
 export function patchOrder(id: string, patch: Partial<Order>): void {
-  update((s) => ({ ...s, orders: s.orders.map((o) => (o.id === id ? { ...o, ...patch, updatedAt: now() } : o)) }));
+  const t = now();
+  update((s) => ({
+    ...s,
+    orders: s.orders.map((o) =>
+      o.id === id ? { ...o, ...patch, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) } : o
+    )
+  }));
+}
+
+export function deleteOrder(id: string): void {
+  const t = now();
+  update((s) => ({
+    ...s,
+    orders: s.orders.map((o) =>
+      o.id === id ? { ...o, deleted: true, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) } : o
+    )
+  }));
 }
 
 export const STATUS_FLOW: OrderStatus[] = ['borrador', 'en_produccion', 'enviado', 'entregado'];
@@ -375,23 +479,47 @@ export function setOrderStatus(
 }
 
 export function addReadyMadeShirt(item: Omit<ReadyMadeShirt, 'id' | 'createdAt'>): void {
+  const t = now();
   update((s) => {
     const list = s.readyMadeStock || [];
     const newItem: ReadyMadeShirt = {
       ...item,
-      id: `rms_${now()}_${uid().slice(0, 4)}`,
-      createdAt: now()
+      id: `rms_${t}_${uid().slice(0, 4)}`,
+      createdAt: t,
+      updatedAt: t,
+      deleted: false
     };
     return { ...s, readyMadeStock: [newItem, ...list] };
   });
 }
 
-export function removeReadyMadeShirt(id: string, qty = 1): void {
+export function updateReadyMadeShirt(id: string, patch: Partial<ReadyMadeShirt>): void {
+  const t = now();
   update((s) => {
     const list = s.readyMadeStock || [];
     const next = list
-      .map((r) => (r.id === id ? { ...r, qty: Math.max(0, r.qty - qty) } : r))
-      .filter((r) => r.qty > 0);
+      .map((r) => (r.id === id ? { ...r, ...patch, updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1) } : r))
+      .filter((r) => !r.deleted && r.qty > 0);
+    return { ...s, readyMadeStock: next };
+  });
+}
+
+export function removeReadyMadeShirt(id: string, qty = 1): void {
+  const t = now();
+  update((s) => {
+    const list = s.readyMadeStock || [];
+    const next = list
+      .map((r) => {
+        if (r.id !== id) return r;
+        const nextQty = Math.max(0, r.qty - qty);
+        return {
+          ...r,
+          qty: nextQty,
+          deleted: nextQty <= 0,
+          updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
+        };
+      })
+      .filter((r) => !r.deleted && r.qty > 0);
     return { ...s, readyMadeStock: next };
   });
 }

@@ -2,9 +2,9 @@ import { useMemo, useRef, useState } from 'react';
 import type { Order, OrderStatus, Settings } from '../lib/types';
 import { notifyPhotos, useAppState } from '../lib/store';
 import { folioLabel, uid } from '../lib/ids';
-import { money } from '../lib/money';
+import { fromCents, money, toCents } from '../lib/money';
 import { fmtDateTime } from '../lib/time';
-import { markPaid, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
+import { deleteOrder, markPaid, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
 import { shareLabel } from '../lib/pdf';
 import { compressImage } from '../lib/image';
 import { savePhoto } from '../lib/db';
@@ -12,7 +12,7 @@ import { uploadPhotoNow } from '../lib/sync';
 import { copyText } from '../lib/csv';
 import { buildBoxfulClipboardSummary, createBoxfulShipment, getBoxfulConfig } from '../lib/boxful';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
-import { ColorDot, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
+import { ColorDot, Confirm, Empty, Modal, PhotoViewer, toast, usePhoto } from '../components/ui';
 
 const STATUS_STYLE: Record<OrderStatus, string> = {
   borrador: 'bg-slate-200 text-slate-800',
@@ -38,6 +38,8 @@ export default function Orders() {
   const [query, setQuery] = useState('');
   const [viewer, setViewer] = useState<string | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<Order | null>(null);
 
   const orders = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -92,12 +94,41 @@ export default function Orders() {
               settings={settings}
               onZoom={setViewer}
               onAskCancel={() => setCancelOrder(o)}
+              onEdit={() => setEditingOrder(o)}
+              onAskDelete={() => setConfirmDeleteOrder(o)}
             />
           ))}
         </div>
       )}
 
       <PhotoViewer src={viewer} onClose={() => setViewer(null)} />
+
+      {editingOrder && (
+        <EditOrderModal
+          order={editingOrder}
+          settings={settings}
+          onClose={() => setEditingOrder(null)}
+        />
+      )}
+
+      <Confirm
+        open={!!confirmDeleteOrder}
+        onClose={() => setConfirmDeleteOrder(null)}
+        title="Eliminar pedido"
+        text={
+          confirmDeleteOrder
+            ? `¿Eliminar el pedido ${folioLabel(confirmDeleteOrder.folio)} del listado?`
+            : ''
+        }
+        confirmLabel="Sí, eliminar pedido"
+        danger
+        onConfirm={() => {
+          if (confirmDeleteOrder) {
+            deleteOrder(confirmDeleteOrder.id);
+            toast(`Pedido ${folioLabel(confirmDeleteOrder.folio)} eliminado`);
+          }
+        }}
+      />
 
       {cancelOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -191,12 +222,16 @@ function OrderCard({
   order,
   settings,
   onZoom,
-  onAskCancel
+  onAskCancel,
+  onEdit,
+  onAskDelete
 }: {
   order: Order;
   settings: Settings;
   onZoom: (src: string) => void;
   onAskCancel: () => void;
+  onEdit: () => void;
+  onAskDelete: () => void;
 }) {
   const photo = usePhoto(order.photoId);
   const guidePhoto = usePhoto(order.guidePhotoId || null);
@@ -359,7 +394,25 @@ function OrderCard({
             </span>
           )}
         </div>
-        <span className="text-xs font-semibold text-slate-500">{fmtDateTime(order.createdAt)}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-semibold text-slate-500">{fmtDateTime(order.createdAt)}</span>
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            title="Editar datos del pedido"
+          >
+            ✏️ Editar
+          </button>
+          <button
+            type="button"
+            onClick={onAskDelete}
+            className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-100"
+            title="Eliminar pedido"
+          >
+            🗑️
+          </button>
+        </div>
       </div>
 
       {/* Totales y Saldo pendiente resaltado en rojo */}
@@ -600,5 +653,231 @@ function OrderCard({
         </a>
       </div>
     </article>
+  );
+}
+
+function EditOrderModal({
+  order,
+  settings,
+  onClose
+}: {
+  order: Order;
+  settings: Settings;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(order.shipTo.name || '');
+  const [phone, setPhone] = useState(order.shipTo.phone || '');
+  const [address, setAddress] = useState(order.shipTo.address || '');
+  const [workType, setWorkType] = useState(order.workType || settings.workTypes[0] || '');
+  const [paymentMethod, setPaymentMethod] = useState(order.paymentMethod || settings.paymentMethods[0] || '');
+  const [designName, setDesignName] = useState(order.designName || '');
+  const [designCode, setDesignCode] = useState(order.designCode || '');
+  const [notes, setNotes] = useState(order.notes || '');
+  const [shipping, setShipping] = useState(String(fromCents(order.shipping)));
+  const [deposit, setDeposit] = useState(String(fromCents(order.deposit)));
+  const [items, setItems] = useState(
+    order.items.map((it) => ({
+      ...it,
+      priceInput: String(fromCents(it.unitPrice)),
+      qtyInput: String(it.qty)
+    }))
+  );
+
+  const handleSave = () => {
+    const nextItems = items.map((it) => ({
+      id: it.id,
+      brandId: it.brandId,
+      colorId: it.colorId,
+      size: it.size,
+      qty: Math.max(1, Math.floor(Number(it.qtyInput) || 1)),
+      unitPrice: toCents(it.priceInput),
+      manualPrice: true,
+      fromStock: it.fromStock,
+      brandName: it.brandName,
+      colorName: it.colorName,
+      colorHex: it.colorHex,
+      sku: it.sku
+    }));
+    const subtotal = nextItems.reduce((sum, i) => sum + i.qty * i.unitPrice, 0);
+    const shipCents = toCents(shipping);
+    const total = subtotal + shipCents;
+    const depCents = Math.min(total, Math.max(0, toCents(deposit)));
+
+    patchOrder(order.id, {
+      shipTo: {
+        name: name.trim(),
+        phone: phone.trim(),
+        address: address.trim()
+      },
+      workType,
+      paymentMethod,
+      designName: designName.trim() || null,
+      designCode: designCode.trim().toUpperCase() || null,
+      notes: notes.trim(),
+      items: nextItems,
+      subtotal,
+      shipping: shipCents,
+      total,
+      deposit: depCents,
+      balance: Math.max(0, total - depCents)
+    });
+    toast(`Pedido ${folioLabel(order.folio)} actualizado`, 'ok');
+    onClose();
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Editar Pedido · ${folioLabel(order.folio)}`}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="button" className="btn-primary" onClick={handleSave}>
+            Guardar cambios
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div>
+            <label className="label">Destinatario / Cliente</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Teléfono</label>
+            <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Dirección de entrega</label>
+          <textarea
+            rows={2}
+            className="input"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div>
+            <label className="label">Tipo de trabajo</label>
+            <select className="input" value={workType} onChange={(e) => setWorkType(e.target.value)}>
+              {settings.workTypes.map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Método de pago</label>
+            <select className="input" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+              {settings.paymentMethods.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div>
+            <label className="label">Código diseño</label>
+            <input
+              className="input uppercase"
+              value={designCode}
+              onChange={(e) => setDesignCode(e.target.value.toUpperCase())}
+              placeholder="D-001"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Nombre del diseño</label>
+            <input
+              className="input"
+              value={designName}
+              onChange={(e) => setDesignName(e.target.value)}
+              placeholder="Diseño personalizado"
+            />
+          </div>
+        </div>
+
+        {/* Prendas del pedido */}
+        <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-xs font-extrabold uppercase text-slate-600">Prendas y Precios Unitarios</div>
+          {items.map((it, idx) => (
+            <div key={it.id} className="grid grid-cols-12 items-center gap-2 text-xs">
+              <div className="col-span-5 font-bold text-slate-800">
+                {it.brandName} · {it.colorName} ({it.size})
+              </div>
+              <div className="col-span-3">
+                <label className="block text-[10px] text-slate-500">Cant.</label>
+                <input
+                  type="number"
+                  min={1}
+                  className="input h-9 px-2"
+                  value={it.qtyInput}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qtyInput: v } : x)));
+                  }}
+                />
+              </div>
+              <div className="col-span-4">
+                <label className="block text-[10px] text-slate-500">Precio (L)</label>
+                <input
+                  type="number"
+                  min={0}
+                  className="input h-9 px-2"
+                  value={it.priceInput}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, priceInput: v } : x)));
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="label">Envío (L)</label>
+            <input
+              type="number"
+              min={0}
+              className="input"
+              value={shipping}
+              onChange={(e) => setShipping(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Pagado / Anticipo (L)</label>
+            <input
+              type="number"
+              min={0}
+              className="input"
+              value={deposit}
+              onChange={(e) => setDeposit(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Notas de producción / entrega</label>
+          <textarea
+            rows={2}
+            className="input"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }

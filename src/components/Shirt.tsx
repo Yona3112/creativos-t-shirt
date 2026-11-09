@@ -510,6 +510,7 @@ export function InteractiveShirt3D({
   onSelectColor,
   onToggleColorIncluded,
   onAddNewColor,
+  onEditColor,
   onDeleteColor,
   catalogDesigns,
   activeCatalogDesignId,
@@ -553,6 +554,7 @@ export function InteractiveShirt3D({
   onSelectColor?: (colorId: string) => void;
   onToggleColorIncluded?: (colorId: string) => void;
   onAddNewColor?: () => void;
+  onEditColor?: (colorId: string) => void;
   onDeleteColor?: (colorId: string) => void;
   catalogDesigns?: CatalogQuickDesign[];
   activeCatalogDesignId?: string | null;
@@ -1066,12 +1068,12 @@ export function InteractiveShirt3D({
       >
         {/* PANEL LATERAL IZQUIERDO: Color de Camisa (Slide Compacto), Ángulo 3D, Zoom y Movimiento */}
         <div className="order-2 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-sm md:order-1 md:flex-col md:items-stretch">
-          {/* 1. COLOR DE CAMISA EN EL PANEL DE HERRAMIENTAS (Slide compacto + puntos rápidos) */}
+          {/* 1. COLOR DE CAMISA EN EL PANEL DE HERRAMIENTAS (Sin palabras ocultas + edición directa) */}
           {colorOptions && colorOptions.length > 0 && onSelectColor && (
             <div className="w-full border-b border-slate-100 pb-2">
               <div className="mb-1.5 flex items-center justify-between gap-1">
-                <span className="truncate text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
-                  🎨 Color · <strong className="text-slate-800">{colorName}</strong>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                  🎨 Color de Camisa
                 </span>
                 {isStoreOwner && onAddNewColor && (
                   <button
@@ -1085,7 +1087,7 @@ export function InteractiveShirt3D({
                 )}
               </div>
 
-              {/* Selector de Color Paso a Paso (‹ ›) + Tarjeta Destacada Sin Truncamientos */}
+              {/* Selector de Color Paso a Paso (‹ ›) + Tarjeta Completa Sin Cortar Palabras */}
               {(() => {
                 const activeIdx = colorOptions.findIndex((c) =>
                   activeColorId ? c.id === activeColorId : c.name === colorName
@@ -1101,25 +1103,25 @@ export function InteractiveShirt3D({
                 };
 
                 return (
-                  <div className="flex items-center gap-1">
-                    {colorOptions.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => stepColor(-1)}
-                        className="flex h-9 w-6 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-slate-700 hover:bg-slate-200 active:scale-95 transition"
-                        aria-label="Color anterior"
-                        title="Color anterior"
-                      >
-                        ‹
-                      </button>
-                    )}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1">
+                      {colorOptions.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => stepColor(-1)}
+                          className="flex h-10 w-6 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-slate-700 hover:bg-slate-200 active:scale-95 transition"
+                          aria-label="Color anterior"
+                          title="Color anterior"
+                        >
+                          ‹
+                        </button>
+                      )}
 
-                    {/* Tarjeta destacada del Color Actual - Espaciosa y 100% legible */}
-                    <div className="flex min-w-0 flex-1 items-center justify-between gap-1.5 rounded-xl border border-slate-900 bg-slate-900 px-2 py-1.5 text-white shadow-sm">
+                      {/* Tarjeta destacada del Color Actual - Ancho completo para el nombre sin cortar letras */}
                       <button
                         type="button"
                         onClick={() => onSelectColor(curColor.id)}
-                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-slate-900 bg-slate-900 px-2.5 py-1.5 text-left text-white shadow-sm"
                         title={`${curColor.name}${curColor.stockText ? ` (${curColor.stockText})` : ''}`}
                       >
                         <span
@@ -1132,8 +1134,8 @@ export function InteractiveShirt3D({
                             }`}
                           />
                         </span>
-                        <div className="min-w-0 leading-tight">
-                          <div className="truncate text-xs font-black text-white" title={curColor.name}>
+                        <div className="min-w-0 flex-1 leading-tight">
+                          <div className="break-words text-[11px] font-black leading-snug text-white">
                             {curColor.name}
                           </div>
                           <div
@@ -1146,59 +1148,61 @@ export function InteractiveShirt3D({
                         </div>
                       </button>
 
-                      {/* Botones Admin para este Color */}
-                      {isStoreOwner && (
-                        <div className="flex shrink-0 items-center gap-1">
-                          {onToggleColorIncluded && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onToggleColorIncluded(curColor.id);
-                              }}
-                              className={`flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-black transition ${
-                                curIncluded
-                                  ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                              }`}
-                              title={
-                                curIncluded
-                                  ? 'Visible en la tienda (clic para ocultar al cliente)'
-                                  : 'Oculto en la tienda (clic para mostrar al cliente)'
-                              }
-                            >
-                              {curIncluded ? '✓' : '×'}
-                            </button>
-                          )}
-                          {onDeleteColor && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (window.confirm(`¿Eliminar color "${curColor.name}" de la tienda?`)) {
-                                  onDeleteColor(curColor.id);
-                                }
-                              }}
-                              className="flex h-5 w-5 items-center justify-center rounded-md bg-rose-500/30 text-[11px] font-black text-rose-300 hover:bg-rose-500 hover:text-white transition"
-                              title={`Eliminar color "${curColor.name}"`}
-                            >
-                              −
-                            </button>
-                          )}
-                        </div>
+                      {colorOptions.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => stepColor(1)}
+                          className="flex h-10 w-6 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-slate-700 hover:bg-slate-200 active:scale-95 transition"
+                          aria-label="Color siguiente"
+                          title="Color siguiente"
+                        >
+                          ›
+                        </button>
                       )}
                     </div>
 
-                    {colorOptions.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => stepColor(1)}
-                        className="flex h-9 w-6 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-slate-700 hover:bg-slate-200 active:scale-95 transition"
-                        aria-label="Color siguiente"
-                        title="Color siguiente"
-                      >
-                        ›
-                      </button>
+                    {/* Fila de Botones Admin para el Color Actual (Visible / Editar / Eliminar) */}
+                    {isStoreOwner && (onToggleColorIncluded || onEditColor || onDeleteColor) && (
+                      <div className="flex items-center justify-center gap-1">
+                        {onToggleColorIncluded && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleColorIncluded(curColor.id)}
+                            className={`flex flex-1 items-center justify-center gap-1 rounded-lg px-1.5 py-1 text-[10px] font-extrabold transition ${
+                              curIncluded
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200'
+                            }`}
+                            title={
+                              curIncluded
+                                ? 'Visible en la tienda (clic para ocultar al cliente)'
+                                : 'Oculto en la tienda (clic para mostrar al cliente)'
+                            }
+                          >
+                            <span>{curIncluded ? '✓ Visible' : '× Oculto'}</span>
+                          </button>
+                        )}
+                        {onEditColor && (
+                          <button
+                            type="button"
+                            onClick={() => onEditColor(curColor.id)}
+                            className="flex items-center justify-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-extrabold text-slate-700 hover:bg-slate-100 transition"
+                            title={`Editar nombre o tono de "${curColor.name}"`}
+                          >
+                            ✏️ Editar
+                          </button>
+                        )}
+                        {onDeleteColor && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteColor(curColor.id)}
+                            className="flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-extrabold text-rose-700 hover:bg-rose-100 transition"
+                            title={`Eliminar color "${curColor.name}"`}
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 );

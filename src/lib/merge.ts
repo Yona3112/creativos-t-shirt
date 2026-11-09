@@ -1,8 +1,12 @@
-import type { AppState, CatalogDesign, Color, Entity, Movement, Order, Settings } from './types';
+import type { AppState, CatalogDesign, Color, Entity, Movement, Order, ReadyMadeShirt, Settings } from './types';
 import { DEFAULT_SETTINGS, LEGACY_COLOR_HEX, createInitialState } from './seed';
 
 function newer<T extends Entity>(a: T, b: T): T {
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt ? a : b;
+  const ua = a.updatedAt || 0;
+  const ub = b.updatedAt || 0;
+  if (ua !== ub) return ua > ub ? a : b;
+  // Si uno está marcado como eliminado con el mismo timestamp, gana el eliminado o el modificado
+  if (Boolean(a.deleted) !== Boolean(b.deleted)) return a.deleted ? a : b;
   // Desempate determinista para que todos los dispositivos converjan igual.
   return JSON.stringify(a) >= JSON.stringify(b) ? a : b;
 }
@@ -15,6 +19,22 @@ function mergeEntities<T extends Entity>(a: T[], b: T[]): T[] {
     map.set(y.id, x ? newer(x, y) : y);
   }
   return Array.from(map.values());
+}
+
+function mergeReadyMade(a: ReadyMadeShirt[], b: ReadyMadeShirt[]): ReadyMadeShirt[] {
+  const map = new Map<string, ReadyMadeShirt>();
+  for (const x of a) map.set(x.id, x);
+  for (const y of b) {
+    const x = map.get(y.id);
+    if (!x) {
+      map.set(y.id, y);
+    } else {
+      const tx = x.updatedAt ?? x.createdAt ?? 0;
+      const ty = y.updatedAt ?? y.createdAt ?? 0;
+      map.set(y.id, ty >= tx ? y : x);
+    }
+  }
+  return Array.from(map.values()).filter((r) => !r.deleted && r.qty > 0);
 }
 
 function mergeMovements(a: Movement[], b: Movement[]): Movement[] {
@@ -58,14 +78,16 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     orders: Array.isArray(s.orders) ? s.orders : [],
     movements: Array.isArray(s.movements) ? s.movements : [],
     catalogDesigns: assignDesignCodes(Array.isArray(s.catalogDesigns) ? s.catalogDesigns : []),
+    readyMadeStock: Array.isArray(s.readyMadeStock) ? s.readyMadeStock : [],
     _by: s._by,
     _at: s._at
   };
 }
 
-/** Reemplaza los tonos genéricos anteriores por colores reales de tela (determinista). */
+/** Reemplaza los tonos genéricos anteriores solo en colores sin modificaciones manuales (updatedAt === 0). */
 function upgradeColors(colors: Color[]): Color[] {
   return colors.map((c) => {
+    if (c.updatedAt && c.updatedAt > 0) return c;
     const next = LEGACY_COLOR_HEX[(c.hex || '').toUpperCase()];
     return next ? { ...c, hex: next } : c;
   });
@@ -110,6 +132,7 @@ export function mergeStates(local: AppState, remote: AppState): AppState {
     orders: fixFolios(mergeEntities(local.orders, remote.orders)),
     movements: mergeMovements(local.movements, remote.movements),
     catalogDesigns: mergeEntities(local.catalogDesigns || [], remote.catalogDesigns || []),
+    readyMadeStock: mergeReadyMade(local.readyMadeStock || [], remote.readyMadeStock || []),
     _by: local._by,
     _at: Math.max(local._at || 0, remote._at || 0)
   };
@@ -125,6 +148,7 @@ export function contentSignature(s: AppState): string {
     customers: byId(s.customers),
     orders: byId(s.orders),
     movements: byId(s.movements),
-    catalogDesigns: byId(s.catalogDesigns || [])
+    catalogDesigns: byId(s.catalogDesigns || []),
+    readyMadeStock: byId(s.readyMadeStock || [])
   });
 }

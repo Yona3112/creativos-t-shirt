@@ -167,6 +167,8 @@ export interface ReadyMadeShirt {
   price: Cents;
   qty: number;
   createdAt: number;
+  updatedAt?: number;
+  deleted?: boolean;
   notes?: string;
 }
 

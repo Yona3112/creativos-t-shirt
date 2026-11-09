@@ -240,7 +240,9 @@ export class FirebaseSyncEngine {
   private async write(state: AppState) {
     if (!this.fs) return;
     const now = new Date().toISOString();
-    const payload: AppState = { ...state, _by: this.device, _at: Date.now() };
+    const rawPayload: AppState = { ...state, _by: this.device, _at: Date.now() };
+    // Firestore rechaza propiedades con valor `undefined`; serializamos para limpiarlas de forma segura
+    const payload: AppState = JSON.parse(JSON.stringify(rawPayload));
     const syncDocRef = doc(this.fs, 'cgs_sync', 'app_state');
     await setDoc(syncDocRef, { payload, updated_at: now });
 

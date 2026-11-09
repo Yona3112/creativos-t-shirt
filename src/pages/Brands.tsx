@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
 import { setStockAbsolute, updateBrand, updateColor, updateSettings, deleteColor, addBrand, deleteBrand } from '../lib/actions';
-import { MoneyInput, Stepper, toast } from '../components/ui';
+import { Confirm, Modal, MoneyInput, Stepper, toast } from '../components/ui';
 import { ColorSwatchPicker, ShirtPreview } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
+import { BASE_COLORS, QUICK_PALETTE } from '../lib/seed';
 
 export default function Brands() {
   const state = useAppState();
@@ -18,8 +19,16 @@ export default function Brands() {
 
   const [previewColorId, setPreviewColorId] = useState(colors[0]?.id || '');
   const [colorModal, setColorModal] = useState(false);
-  const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string } | null>(null);
+  const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string; code: string } | null>(null);
   const [confirmDeleteColor, setConfirmDeleteColor] = useState<{ id: string; name: string } | null>(null);
+
+  // Modales de Marca (sin depender de window.prompt bloqueado en móviles/navegadores)
+  const [showNewBrand, setShowNewBrand] = useState(false);
+  const [newBrandName, setNewBrandName] = useState('');
+  const [newBrandCode, setNewBrandCode] = useState('');
+  const [newBrandSeedColors, setNewBrandSeedColors] = useState(true);
+  const [editingBrand, setEditingBrand] = useState<{ id: string; name: string; code: string } | null>(null);
+  const [confirmDeleteBrand, setConfirmDeleteBrand] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     if (!colors.some((c) => c.id === previewColorId)) {
@@ -29,21 +38,23 @@ export default function Brands() {
 
   const activeColor = colors.find((c) => c.id === previewColorId) || colors[0];
 
-  const brandTotalStock = colors.reduce(
-    (sum, c) =>
-      sum +
-      settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0),
-    0
-  );
+  const brandTotalStock = brand
+    ? colors.reduce(
+        (sum, c) =>
+          sum +
+          settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0),
+        0
+      )
+    : 0;
 
   return (
     <div className="space-y-4">
       {/* Precios generales */}
       <section className="card space-y-3">
         <h2 className="section-title mb-0">Precios Generales</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
           <div>
-            <label className="label">Normal 1–{settings.wholesaleMin - 1} uds</label>
+            <label className="label">Normal 1–{settings.wholesaleMin - 1} uds (L)</label>
             <MoneyInput
               ariaLabel="Precio normal general"
               value={settings.priceNormal}
@@ -51,7 +62,15 @@ export default function Brands() {
             />
           </div>
           <div>
-            <label className="label">Mayorista {settings.wholesaleMin}+ uds</label>
+            <label className="label">Personalizada (L)</label>
+            <MoneyInput
+              ariaLabel="Precio personalizada"
+              value={settings.priceCustom || 35000}
+              onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
+            />
+          </div>
+          <div>
+            <label className="label">Mayorista {settings.wholesaleMin}+ uds (L)</label>
             <MoneyInput
               ariaLabel="Precio mayorista general"
               value={settings.priceWholesale}
@@ -59,7 +78,7 @@ export default function Brands() {
             />
           </div>
           <div>
-            <label className="label">Envío</label>
+            <label className="label">Envío (L)</label>
             <MoneyInput
               ariaLabel="Precio de envío"
               value={settings.shipping}
@@ -72,37 +91,26 @@ export default function Brands() {
       {/* Selector y administración de marca */}
       <section className="card space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="section-title mb-0">Marca</h2>
             {brand && (
               <button
                 type="button"
-                onClick={() => {
-                  const newName = window.prompt(`Nuevo nombre para la marca "${brand.name}":`, brand.name);
-                  if (newName && newName.trim() && newName.trim() !== brand.name) {
-                    updateBrand(brand.id, { name: newName.trim() });
-                    toast(`Marca renombrada a "${newName.trim()}"`);
-                  }
-                }}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
-                title="Renombrar esta marca"
+                onClick={() => setEditingBrand({ id: brand.id, name: brand.name, code: brand.code })}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                title="Editar nombre y código de esta marca"
               >
-                ✏️ Renombrar
+                ✏️ Editar Marca
               </button>
             )}
             {brands.length > 1 && brand && (
               <button
                 type="button"
-                onClick={() => {
-                  if (window.confirm(`¿Eliminar la marca "${brand.name}"? Los colores asociados se ocultarán.`)) {
-                    deleteBrand(brand.id);
-                    toast(`Marca "${brand.name}" eliminada`);
-                  }
-                }}
-                className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
+                onClick={() => setConfirmDeleteBrand({ id: brand.id, name: brand.name })}
+                className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700 hover:bg-rose-100"
                 title="Eliminar esta marca"
               >
-                🗑️ Eliminar
+                🗑️ Eliminar Marca
               </button>
             )}
           </div>
@@ -110,16 +118,10 @@ export default function Brands() {
             <button
               type="button"
               onClick={() => {
-                const name = window.prompt('Nombre de la nueva marca (ej. Gildan Softstyle):');
-                if (!name || !name.trim()) return;
-                const code = window.prompt('Código corto de 2 a 4 letras (ej. GIL):', name.slice(0, 3).toUpperCase());
-                const newId = addBrand(name.trim(), code || name.slice(0, 3).toUpperCase());
-                if (newId) {
-                  setBrandId(newId);
-                  toast(`Marca "${name.trim()}" agregada`, 'ok');
-                } else {
-                  toast('No se pudo crear la marca (nombre o código ya existe)', 'error');
-                }
+                setNewBrandName('');
+                setNewBrandCode('');
+                setNewBrandSeedColors(true);
+                setShowNewBrand(true);
               }}
               className="btn-soft text-xs font-bold"
             >
@@ -164,7 +166,7 @@ export default function Brands() {
         )}
       </section>
 
-      {/* Vista previa de camisa + selector de colores */}
+      {/* Vista previa de camisa + selector y edición directa de colores */}
       {brand && (
         <section className="card">
           <div className="flex flex-col items-center gap-4 sm:flex-row">
@@ -173,29 +175,99 @@ export default function Brands() {
               size={145}
               label={activeColor ? `${brand.name} · ${activeColor.name}` : brand.name}
             />
-            <div className="flex-1 space-y-3">
-              <div className="flex flex-wrap gap-2">
-                {colors.map((c) => (
+            <div className="flex-1 space-y-3 w-full">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                  Colores de {brand.name} ({colors.length})
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {activeColor && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingColor({
+                            id: activeColor.id,
+                            name: activeColor.name,
+                            hex: activeColor.hex,
+                            code: activeColor.code || ''
+                          })
+                        }
+                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
+                      >
+                        ✏️ Editar "{activeColor.name}"
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteColor({ id: activeColor.id, name: activeColor.name })}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
+                      >
+                        🗑️ Borrar "{activeColor.name}"
+                      </button>
+                    </>
+                  )}
                   <button
-                    key={c.id}
                     type="button"
-                    className={`inline-flex min-h-[48px] items-center gap-2 rounded-xl border-2 px-3 font-semibold ${
-                      c.id === activeColor?.id
-                        ? 'border-brand-700 bg-brand-50 text-brand-900'
-                        : 'border-slate-200 bg-white text-slate-700'
-                    }`}
-                    onClick={() => setPreviewColorId(c.id)}
+                    className="btn-primary px-3 py-1.5 text-xs"
+                    onClick={() => setColorModal(true)}
                   >
-                    <span
-                      className="h-5 w-5 rounded-full border border-black/15"
-                      style={{ background: c.hex }}
-                    />
-                    {c.name}
+                    + Nuevo color
                   </button>
-                ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {colors.map((c) => {
+                  const isSelected = c.id === activeColor?.id;
+                  return (
+                    <div
+                      key={c.id}
+                      className={`inline-flex min-h-[46px] items-center gap-1.5 rounded-xl border-2 pl-2.5 pr-1.5 font-semibold transition ${
+                        isSelected
+                          ? 'border-brand-700 bg-brand-50 text-brand-900 shadow-sm'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPreviewColorId(c.id)}
+                        className="inline-flex items-center gap-2 py-1 text-left text-sm font-bold"
+                      >
+                        <span
+                          className="h-5 w-5 shrink-0 rounded-full border border-black/15"
+                          style={{ background: c.hex }}
+                        />
+                        <span>{c.name}</span>
+                      </button>
+                      <button
+                        type="button"
+                        title={`Editar ${c.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPreviewColorId(c.id);
+                          setEditingColor({ id: c.id, name: c.name, hex: c.hex, code: c.code || '' });
+                        }}
+                        className="ml-1 rounded-lg p-1 text-xs text-slate-500 hover:bg-slate-200/70 hover:text-slate-900"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        type="button"
+                        title={`Eliminar ${c.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmDeleteColor({ id: c.id, name: c.name });
+                        }}
+                        className="rounded-lg p-1 text-xs text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
                 <button
                   type="button"
-                  className="btn-soft min-h-[48px]"
+                  className="btn-soft min-h-[46px]"
                   onClick={() => setColorModal(true)}
                 >
                   + Nuevo color
@@ -234,12 +306,15 @@ export default function Brands() {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-base font-extrabold text-slate-900">{c.name}</span>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-500">
+                          {c.code}
+                        </span>
                         <button
                           type="button"
                           title={`Editar nombre y tono de ${c.name}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setEditingColor({ id: c.id, name: c.name, hex: c.hex });
+                            setEditingColor({ id: c.id, name: c.name, hex: c.hex, code: c.code || '' });
                           }}
                           className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
                         >
@@ -301,106 +376,265 @@ export default function Brands() {
         />
       )}
 
-      {/* Modal para editar nombre y código hexadecimal de color */}
-      {editingColor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-extrabold text-slate-900">Editar Color</h3>
-              <button
-                type="button"
-                onClick={() => setEditingColor(null)}
-                className="rounded-full p-1 text-slate-400 hover:bg-slate-100"
-              >
-                ✕
-              </button>
-            </div>
-            <div>
-              <label className="label">Nombre del color</label>
-              <input
-                className="input"
-                value={editingColor.name}
-                onChange={(e) => setEditingColor({ ...editingColor, name: e.target.value })}
-                placeholder="Ej. Negro Carbón, Azul Marino"
-              />
+      {/* Modal para editar nombre, código y tono hexadecimal de cualquier color */}
+      <Modal
+        open={!!editingColor}
+        onClose={() => setEditingColor(null)}
+        title={`Editar Color · ${editingColor?.name || ''}`}
+      >
+        {editingColor && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="sm:col-span-2">
+                <label className="label">Nombre del color</label>
+                <input
+                  className="input"
+                  value={editingColor.name}
+                  onChange={(e) => setEditingColor({ ...editingColor, name: e.target.value })}
+                  placeholder="Ej. Negro Carbón, Azul Marino"
+                />
+              </div>
+              <div>
+                <label className="label">Código SKU</label>
+                <input
+                  className="input uppercase"
+                  maxLength={4}
+                  value={editingColor.code}
+                  onChange={(e) => setEditingColor({ ...editingColor, code: e.target.value.toUpperCase() })}
+                  placeholder="NEG"
+                />
+              </div>
             </div>
             <div>
               <label className="label">Tono Hexadecimal</label>
               <div className="flex items-center gap-2">
                 <input
                   type="color"
-                  className="h-10 w-12 cursor-pointer rounded-xl border border-slate-200 p-0.5"
-                  value={editingColor.hex}
-                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value })}
+                  className="h-11 w-14 cursor-pointer rounded-xl border border-slate-200 p-0.5"
+                  value={editingColor.hex.startsWith('#') && editingColor.hex.length === 7 ? editingColor.hex : '#1A1A1C'}
+                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value.toUpperCase() })}
                 />
                 <input
                   className="input font-mono uppercase"
                   value={editingColor.hex}
-                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value })}
-                  placeholder="#000000"
+                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value.toUpperCase() })}
+                  placeholder="#1A1A1C"
                 />
               </div>
             </div>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setEditingColor(null)}
-                className="btn-ghost text-xs"
-              >
-                Cancelar
-              </button>
+            <div>
+              <label className="label">Paleta rápida de tonos textiles</label>
+              <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8">
+                {[...BASE_COLORS, ...QUICK_PALETTE].map((p) => (
+                  <button
+                    key={`${p.name}-${p.hex}`}
+                    type="button"
+                    onClick={() => setEditingColor({ ...editingColor, hex: p.hex.toUpperCase() })}
+                    className={`flex flex-col items-center gap-1 rounded-xl border p-1.5 text-[10px] font-bold transition ${
+                      editingColor.hex.toUpperCase() === p.hex.toUpperCase()
+                        ? 'border-brand-700 bg-brand-50 ring-2 ring-brand-500/30'
+                        : 'border-slate-200 hover:bg-slate-50'
+                    }`}
+                    title={`${p.name} (${p.hex})`}
+                  >
+                    <span
+                      className="h-5 w-5 rounded-full border border-black/15"
+                      style={{ backgroundColor: p.hex }}
+                    />
+                    <span className="w-full truncate text-center">{p.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
               <button
                 type="button"
                 onClick={() => {
-                  if (!editingColor.name.trim()) return toast('El nombre no puede estar vacío', 'error');
-                  updateColor(editingColor.id, {
-                    name: editingColor.name.trim(),
-                    hex: editingColor.hex
-                  });
-                  toast('Color actualizado', 'ok');
+                  const target = { id: editingColor.id, name: editingColor.name };
                   setEditingColor(null);
+                  setConfirmDeleteColor(target);
                 }}
-                className="btn-primary text-xs"
+                className="btn-danger px-3 py-2 text-xs"
               >
-                Guardar Cambios
+                🗑️ Eliminar color
               </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingColor(null)}
+                  className="btn-ghost text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!editingColor.name.trim()) return toast('El nombre no puede estar vacío', 'error');
+                    const cleanHex = editingColor.hex.trim().startsWith('#')
+                      ? editingColor.hex.trim().toUpperCase()
+                      : `#${editingColor.hex.trim().toUpperCase()}`;
+                    updateColor(editingColor.id, {
+                      name: editingColor.name.trim(),
+                      hex: cleanHex,
+                      ...(editingColor.code.trim() ? { code: editingColor.code.trim().toUpperCase().slice(0, 4) } : {})
+                    });
+                    toast(`Color "${editingColor.name.trim()}" actualizado`, 'ok');
+                    setEditingColor(null);
+                  }}
+                  className="btn-primary text-xs"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* Modal para confirmar eliminación de color */}
-      {confirmDeleteColor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
-            <h3 className="text-base font-extrabold text-slate-900">¿Eliminar este color?</h3>
-            <p className="text-xs text-slate-600">
-              ¿Deseas eliminar el color <strong>"{confirmDeleteColor.name}"</strong>?
-              Se ocultará de la lista y del catálogo del cliente.
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteColor(null)}
-                className="btn-ghost text-xs"
-              >
+      <Confirm
+        open={!!confirmDeleteColor}
+        onClose={() => setConfirmDeleteColor(null)}
+        title="¿Eliminar este color?"
+        text={
+          confirmDeleteColor
+            ? `¿Deseas eliminar el color "${confirmDeleteColor.name}"? Se ocultará de la matriz, del inventario y del catálogo del cliente.`
+            : ''
+        }
+        confirmLabel="Sí, eliminar color"
+        danger
+        onConfirm={() => {
+          if (confirmDeleteColor) {
+            deleteColor(confirmDeleteColor.id);
+            toast(`Color "${confirmDeleteColor.name}" eliminado`, 'ok');
+          }
+        }}
+      />
+
+      {/* Modal Nueva Marca */}
+      <Modal
+        open={showNewBrand}
+        onClose={() => setShowNewBrand(false)}
+        title="Nueva Marca"
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="label">Nombre de la nueva marca</label>
+            <input
+              className="input"
+              placeholder="Ej. Gildan Softstyle"
+              value={newBrandName}
+              onChange={(e) => setNewBrandName(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Código corto (2 a 4 letras)</label>
+            <input
+              className="input uppercase"
+              maxLength={4}
+              placeholder="Ej. GIL"
+              value={newBrandCode}
+              onChange={(e) => setNewBrandCode(e.target.value.toUpperCase())}
+            />
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-bold text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded accent-brand-700"
+              checked={newBrandSeedColors}
+              onChange={(e) => setNewBrandSeedColors(e.target.checked)}
+            />
+            <span>Crear con los 8 colores base iniciales (listos para editar o borrar)</span>
+          </label>
+          <button
+            type="button"
+            className="btn-primary w-full"
+            onClick={() => {
+              if (!newBrandName.trim()) return toast('Escribe el nombre de la marca', 'error');
+              const id = addBrand(
+                newBrandName.trim(),
+                newBrandCode.trim() || newBrandName.trim().slice(0, 3).toUpperCase(),
+                newBrandSeedColors
+              );
+              if (!id) return toast('No se pudo crear la marca (nombre o código ya existe)', 'error');
+              setBrandId(id);
+              setShowNewBrand(false);
+              toast(`Marca "${newBrandName.trim()}" agregada`, 'ok');
+            }}
+          >
+            Crear Marca
+          </button>
+        </div>
+      </Modal>
+
+      {/* Modal Editar Marca */}
+      <Modal
+        open={!!editingBrand}
+        onClose={() => setEditingBrand(null)}
+        title="Editar Marca"
+      >
+        {editingBrand && (
+          <div className="space-y-3">
+            <div>
+              <label className="label">Nombre de la marca</label>
+              <input
+                className="input"
+                value={editingBrand.name}
+                onChange={(e) => setEditingBrand({ ...editingBrand, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Código corto SKU</label>
+              <input
+                className="input uppercase"
+                maxLength={4}
+                value={editingBrand.code}
+                onChange={(e) => setEditingBrand({ ...editingBrand, code: e.target.value.toUpperCase() })}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" className="btn-ghost" onClick={() => setEditingBrand(null)}>
                 Cancelar
               </button>
               <button
                 type="button"
+                className="btn-primary"
                 onClick={() => {
-                  deleteColor(confirmDeleteColor.id);
-                  toast(`Color "${confirmDeleteColor.name}" eliminado`);
-                  setConfirmDeleteColor(null);
+                  if (!editingBrand.name.trim()) return toast('Escribe un nombre válido', 'error');
+                  updateBrand(editingBrand.id, {
+                    name: editingBrand.name.trim(),
+                    code: editingBrand.code.trim().toUpperCase().slice(0, 4) || 'MK'
+                  });
+                  toast(`Marca "${editingBrand.name.trim()}" actualizada`, 'ok');
+                  setEditingBrand(null);
                 }}
-                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow hover:bg-rose-700"
               >
-                Sí, eliminar color
+                Guardar
               </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
+
+      {/* Confirmar Eliminar Marca */}
+      <Confirm
+        open={!!confirmDeleteBrand}
+        onClose={() => setConfirmDeleteBrand(null)}
+        title="Eliminar Marca"
+        text={
+          confirmDeleteBrand
+            ? `¿Eliminar la marca "${confirmDeleteBrand.name}"? Los colores asociados se ocultarán.`
+            : ''
+        }
+        confirmLabel="Eliminar marca"
+        danger
+        onConfirm={() => {
+          if (confirmDeleteBrand) {
+            deleteBrand(confirmDeleteBrand.id);
+            toast(`Marca "${confirmDeleteBrand.name}" eliminada`, 'ok');
+          }
+        }}
+      />
     </div>
   );
 }

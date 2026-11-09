@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getState, useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
-import { updateSettings, deleteColor } from '../lib/actions';
+import { updateSettings, deleteColor, updateColor } from '../lib/actions';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
@@ -12,7 +12,7 @@ import { copyText } from '../lib/csv';
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
-import { Stepper, toast } from '../components/ui';
+import { Modal, Stepper, toast } from '../components/ui';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
 import {
   buildPublicCatalog,
@@ -97,6 +97,7 @@ export default function Catalog3D() {
   const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(settings.storeTheme || 'ranchero');
   const [autoMotion, setAutoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
+  const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string } | null>(null);
   const [previewClient, setPreviewClient] = useState<SharedCatalogPayload | null>(null);
 
   const {
@@ -424,6 +425,10 @@ export default function Catalog3D() {
           onSelectColor={(id) => setActiveColorId(id)}
           onToggleColorIncluded={(id) => toggleColorIncluded(id)}
           onAddNewColor={() => setColorModal(true)}
+          onEditColor={(id) => {
+            const target = colors.find((c) => c.id === id);
+            if (target) setEditingColor({ id: target.id, name: target.name, hex: target.hex });
+          }}
           onDeleteColor={(id) => {
             deleteColor(id);
             toast('Color eliminado del sistema');
@@ -633,16 +638,25 @@ export default function Catalog3D() {
                   </button>
                   <button
                     type="button"
+                    title={`Editar ${c.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingColor({ id: c.id, name: c.name, hex: c.hex });
+                    }}
+                    className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-800"
+                  >
+                    ✏️
+                  </button>
+                  <button
+                    type="button"
                     title={`Eliminar ${c.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (window.confirm(`¿Eliminar el color "${c.name}" de la tienda?`)) {
-                        deleteColor(c.id);
-                        toast(`Color ${c.name} eliminado`);
-                        void syncLiveCatalogSnapshot();
-                      }
+                      deleteColor(c.id);
+                      toast(`Color ${c.name} eliminado`);
+                      void syncLiveCatalogSnapshot();
                     }}
-                    className="ml-1 flex h-4 w-4 items-center justify-center rounded-full text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                    className="flex h-4 w-4 items-center justify-center rounded-full text-rose-500 hover:bg-rose-100 hover:text-rose-700"
                   >
                     ×
                   </button>
@@ -700,6 +714,62 @@ export default function Catalog3D() {
           brandId={brand.id}
         />
       )}
+
+      <Modal
+        open={!!editingColor}
+        onClose={() => setEditingColor(null)}
+        title={`Editar Color · ${editingColor?.name || ''}`}
+      >
+        {editingColor && (
+          <div className="space-y-3">
+            <div>
+              <label className="label">Nombre del color</label>
+              <input
+                className="input"
+                value={editingColor.name}
+                onChange={(e) => setEditingColor({ ...editingColor, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Tono Hexadecimal</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  className="h-11 w-14 cursor-pointer rounded-xl border border-slate-200 p-0.5"
+                  value={editingColor.hex.startsWith('#') && editingColor.hex.length === 7 ? editingColor.hex : '#1A1A1C'}
+                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value.toUpperCase() })}
+                />
+                <input
+                  className="input font-mono uppercase"
+                  value={editingColor.hex}
+                  onChange={(e) => setEditingColor({ ...editingColor, hex: e.target.value.toUpperCase() })}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" className="btn-ghost" onClick={() => setEditingColor(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  if (!editingColor.name.trim()) return toast('Escribe un nombre para el color', 'error');
+                  updateColor(editingColor.id, {
+                    name: editingColor.name.trim(),
+                    hex: editingColor.hex.trim().toUpperCase()
+                  });
+                  setEditingColor(null);
+                  toast('Color actualizado', 'ok');
+                  void syncLiveCatalogSnapshot();
+                }}
+              >
+                Guardar
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

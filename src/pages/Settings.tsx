@@ -128,6 +128,8 @@ export default function SettingsPage() {
 
   const [newSize, setNewSize] = useState('');
   const [newCarrier, setNewCarrier] = useState('');
+  const [newPaymentMethod, setNewPaymentMethod] = useState('');
+  const [newWorkType, setNewWorkType] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleSaveBoxful = async () => {
@@ -537,6 +539,123 @@ export default function SettingsPage() {
           </button>
         </div>
       </section>
+
+      {/* Métodos de Pago y Tipos de Trabajo */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <section className="card space-y-3">
+          <h2 className="section-title mb-0">💳 Métodos de Pago</h2>
+          <div className="flex flex-wrap gap-2">
+            {settings.paymentMethods.map((m) => (
+              <span
+                key={m}
+                className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold"
+              >
+                {m}
+                {settings.paymentMethods.length > 1 && (
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-red-600"
+                    onClick={() =>
+                      updateSettings({
+                        paymentMethods: settings.paymentMethods.filter((x) => x !== m)
+                      })
+                    }
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              placeholder="Ej. Contra entrega, BAC, Tigo Money..."
+              value={newPaymentMethod}
+              onChange={(e) => setNewPaymentMethod(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newPaymentMethod.trim()) {
+                  if (!settings.paymentMethods.includes(newPaymentMethod.trim())) {
+                    updateSettings({ paymentMethods: [...settings.paymentMethods, newPaymentMethod.trim()] });
+                    setNewPaymentMethod('');
+                  }
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn-soft"
+              onClick={() => {
+                const v = newPaymentMethod.trim();
+                if (!v) return;
+                if (settings.paymentMethods.includes(v)) return toast('Ya existe ese método de pago', 'error');
+                updateSettings({ paymentMethods: [...settings.paymentMethods, v] });
+                setNewPaymentMethod('');
+                toast(`Método "${v}" agregado`);
+              }}
+            >
+              + Agregar
+            </button>
+          </div>
+        </section>
+
+        <section className="card space-y-3">
+          <h2 className="section-title mb-0">🎨 Tipos de Trabajo</h2>
+          <div className="flex flex-wrap gap-2">
+            {settings.workTypes.map((w) => (
+              <span
+                key={w}
+                className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold"
+              >
+                {w}
+                {settings.workTypes.length > 1 && (
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-red-600"
+                    onClick={() =>
+                      updateSettings({
+                        workTypes: settings.workTypes.filter((x) => x !== w)
+                      })
+                    }
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              placeholder="Ej. DTF Espalda, Vinil Textil, Bordado..."
+              value={newWorkType}
+              onChange={(e) => setNewWorkType(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newWorkType.trim()) {
+                  if (!settings.workTypes.includes(newWorkType.trim())) {
+                    updateSettings({ workTypes: [...settings.workTypes, newWorkType.trim()] });
+                    setNewWorkType('');
+                  }
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn-soft"
+              onClick={() => {
+                const v = newWorkType.trim();
+                if (!v) return;
+                if (settings.workTypes.includes(v)) return toast('Ya existe ese tipo de trabajo', 'error');
+                updateSettings({ workTypes: [...settings.workTypes, v] });
+                setNewWorkType('');
+                toast(`Tipo "${v}" agregado`);
+              }}
+            >
+              + Agregar
+            </button>
+          </div>
+        </section>
+      </div>
 
       {/* Integración Boxful API (Honduras / El Salvador) */}
       <section className="card space-y-3 border-2 border-indigo-200">
