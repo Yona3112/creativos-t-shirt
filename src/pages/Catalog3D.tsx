@@ -95,7 +95,7 @@ export default function Catalog3D() {
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
   const [boutiqueTheme, setBoutiqueTheme] = useState<BoutiqueTheme>(settings.storeTheme || 'ranchero');
-  const [autoMotion, setAutoMotion] = useState(true);
+  const [autoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
   const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string } | null>(null);
   const [previewClient, setPreviewClient] = useState<SharedCatalogPayload | null>(null);
@@ -341,18 +341,13 @@ export default function Catalog3D() {
 
   return (
     <div className="space-y-4 pb-6">
-      {/* Estudio 3D en vivo */}
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-b from-slate-100 via-white to-slate-100 p-4 shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      {/* Cabecera minimalista del Estudio 3D */}
+      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <div>
-              <h2 className="text-base font-extrabold text-slate-900">✨ Estudio y Catálogo 3D en Vivo</h2>
-              <p className="text-xs font-medium text-slate-500">
-                Prenda 3D Real (WebGL 360°) · Stock en tiempo real por color y talla
-              </p>
-            </div>
+            <h2 className="text-base font-extrabold text-slate-900">Catálogo 3D</h2>
             {brands.length > 1 && (
-              <div className="flex flex-wrap items-center gap-1 rounded-2xl bg-slate-200/70 p-1">
+              <div className="flex flex-wrap items-center gap-1 rounded-2xl bg-slate-100 p-1">
                 {brands.map((b) => (
                   <button
                     key={b.id}
@@ -361,7 +356,7 @@ export default function Catalog3D() {
                     className={`rounded-xl px-2.5 py-1 text-xs font-extrabold transition ${
                       b.id === brand?.id
                         ? 'bg-slate-900 text-white shadow-sm'
-                        : 'text-slate-700 hover:bg-white/70'
+                        : 'text-slate-700 hover:bg-white'
                     }`}
                   >
                     {b.name}
@@ -370,15 +365,42 @@ export default function Catalog3D() {
               </div>
             )}
           </div>
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${
-              autoMotion ? 'bg-sky-100 text-sky-900' : 'bg-slate-200 text-slate-700'
-            }`}
-            onClick={() => setAutoMotion((v) => !v)}
-          >
-            {autoMotion ? '🔄 Movimiento 3D Suave: ON' : '⏸ Movimiento 3D: Pausa'}
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
+              onClick={() => {
+                void syncLiveCatalogSnapshot();
+                setPreviewClient(buildPayload());
+              }}
+            >
+              Vista Cliente
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
+              onClick={handleShareLink}
+            >
+              Copiar Enlace
+            </button>
+            <button
+              type="button"
+              className="rounded-full bg-[#25D366] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#1ebe5b]"
+              onClick={handleShareWhatsApp}
+            >
+              WhatsApp
+            </button>
+            <button
+              type="button"
+              className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800"
+              onClick={async () => {
+                await syncLiveCatalogSnapshot();
+                toast('Catálogo sincronizado', 'ok');
+              }}
+            >
+              Sincronizar
+            </button>
+          </div>
         </div>
 
         <InteractiveShirt3D
@@ -542,168 +564,100 @@ export default function Catalog3D() {
         </div>
       </section>
 
-      {/* Control de Colores y Tallas visibles para el Cliente */}
-      <section className="card space-y-4">
-        <div>
-          <h2 className="section-title mb-1">👀 Colores y Tallas Visibles para el Cliente en #tienda</h2>
-          <p className="text-xs text-slate-500">
-            Define con un clic qué colores y qué tallas estarán visibles para tus clientes. Los cambios se actualizan al instante en la tienda pública.
-          </p>
+      {/* Colores y Tallas Visibles en #tienda */}
+      <section className="card space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-extrabold text-slate-900">Visibilidad en Tienda (#tienda)</h2>
+          <button
+            type="button"
+            onClick={() => setColorModal(true)}
+            className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-800 hover:bg-slate-200"
+          >
+            + Color
+          </button>
         </div>
 
-        {/* Tallas visibles */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-            <span>Tallas habilitadas en la tienda del cliente:</span>
-            <span className="text-[11px] text-slate-500">
-              {(settings.storeSizes?.length || settings.sizes.length)} de {settings.sizes.length} activas
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {settings.sizes.map((sz) => {
-              const activeList = settings.storeSizes || settings.sizes;
-              const isEnabled = activeList.includes(sz);
-              return (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {settings.sizes.map((sz) => {
+            const activeList = settings.storeSizes || settings.sizes;
+            const isEnabled = activeList.includes(sz);
+            return (
+              <button
+                key={sz}
+                type="button"
+                onClick={() => {
+                  const next = isEnabled
+                    ? activeList.filter((x) => x !== sz)
+                    : [...activeList, sz];
+                  const finalSizes = next.length > 0 ? next : [sz];
+                  updateSettings({ storeSizes: finalSizes });
+                  void syncLiveCatalogSnapshot();
+                }}
+                className={`rounded-lg border px-2.5 py-1 text-xs font-extrabold transition ${
+                  isEnabled
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-400 line-through'
+                }`}
+              >
+                {sz}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
+          {colors.map((c) => {
+            const isEnabled = enabledColorIds.includes(c.id);
+            return (
+              <div
+                key={c.id}
+                className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition ${
+                  isEnabled
+                    ? 'border-slate-300 bg-white text-slate-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-400'
+                }`}
+              >
                 <button
-                  key={sz}
                   type="button"
                   onClick={() => {
-                    const next = isEnabled
-                      ? activeList.filter((x) => x !== sz)
-                      : [...activeList, sz];
-                    const finalSizes = next.length > 0 ? next : [sz];
-                    updateSettings({ storeSizes: finalSizes });
-                    toast(`Talla ${sz} ${isEnabled ? 'ocultada' : 'visible'} para el cliente`);
+                    toggleColorIncluded(c.id);
                     void syncLiveCatalogSnapshot();
                   }}
-                  className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-extrabold transition ${
-                    isEnabled
-                      ? 'border-brand-600 bg-brand-50 text-brand-900 shadow-sm'
-                      : 'border-slate-200 bg-slate-100 text-slate-400 line-through'
-                  }`}
+                  className="flex items-center gap-1.5"
                 >
-                  <span>{isEnabled ? '✓' : '✗'}</span>
-                  <span>{sz}</span>
+                  <span
+                    className="h-3.5 w-3.5 rounded-full border border-black/20"
+                    style={{ backgroundColor: c.hex }}
+                  />
+                  <span className={isEnabled ? '' : 'line-through'}>{c.name}</span>
                 </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Colores visibles */}
-        <div className="space-y-2 border-t border-slate-100 pt-3">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-            <span>Colores habilitados en la tienda del cliente:</span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setColorModal(true)}
-                className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
-              >
-                + Nuevo Color
-              </button>
-              <span className="text-[11px] text-slate-500">
-                {enabledColorIds.length} de {colors.length} activos
-              </span>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {colors.map((c) => {
-              const isEnabled = enabledColorIds.includes(c.id);
-              return (
-                <div
-                  key={c.id}
-                  className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition ${
-                    isEnabled
-                      ? 'border-slate-300 bg-white text-slate-800 shadow-sm'
-                      : 'border-slate-200 bg-slate-100 text-slate-400'
-                  }`}
+                <button
+                  type="button"
+                  title={`Editar ${c.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingColor({ id: c.id, name: c.name, hex: c.hex });
+                  }}
+                  className="ml-0.5 text-slate-400 hover:text-slate-800"
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      toggleColorIncluded(c.id);
-                      void syncLiveCatalogSnapshot();
-                    }}
-                    className="flex items-center gap-1.5"
-                  >
-                    <span
-                      className="h-3.5 w-3.5 rounded-full border border-black/20 shadow-inner"
-                      style={{ backgroundColor: c.hex }}
-                    />
-                    <span className={isEnabled ? '' : 'line-through'}>{c.name}</span>
-                    <span className={`text-[10px] font-extrabold ${isEnabled ? 'text-emerald-600' : 'text-slate-400'}`}>
-                      {isEnabled ? '✓' : '✗'}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    title={`Editar ${c.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingColor({ id: c.id, name: c.name, hex: c.hex });
-                    }}
-                    className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-800"
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    type="button"
-                    title={`Eliminar ${c.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteColor(c.id);
-                      toast(`Color ${c.name} eliminado`);
-                      void syncLiveCatalogSnapshot();
-                    }}
-                    className="flex h-4 w-4 items-center justify-center rounded-full text-rose-500 hover:bg-rose-100 hover:text-rose-700"
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Compartir catálogo 3D con Enlace Corto */}
-      <section className="card space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="section-title mb-0">Compartir Tienda 3D con el Cliente (Enlace Corto)</h2>
-          <code className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-sky-800">
-            {buildShareUrl()}
-          </code>
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-          <button className="btn-primary" onClick={handleShareLink}>
-            🔗 Copiar Enlace (#tienda)
-          </button>
-          <button
-            className="btn bg-[#25D366] text-white hover:bg-[#1ebe5b]"
-            onClick={handleShareWhatsApp}
-          >
-            💬 Enviar por WhatsApp
-          </button>
-          <button
-            className="btn-soft"
-            onClick={() => {
-              void syncLiveCatalogSnapshot();
-              setPreviewClient(buildPayload());
-            }}
-          >
-            🛍️ Ver Tienda del Cliente
-          </button>
-          <button
-            className="btn bg-indigo-600 text-white hover:bg-indigo-700"
-            onClick={async () => {
-              toast('Sincronizando catálogo e imágenes con Firebase...');
-              await syncLiveCatalogSnapshot();
-              toast('¡Catálogo e imágenes sincronizados y respaldados en la nube!', 'ok');
-            }}
-          >
-            ☁️ Subir / Respaldar Fotos
-          </button>
+                  ✏️
+                </button>
+                <button
+                  type="button"
+                  title={`Eliminar ${c.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteColor(c.id);
+                    toast(`Color ${c.name} eliminado`);
+                    void syncLiveCatalogSnapshot();
+                  }}
+                  className="text-rose-500 hover:text-rose-700"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -790,7 +744,7 @@ export function CustomerCatalogView({
 }) {
   const state = useAppState();
   const { stock } = useStock();
-  const { status } = useSyncStatus();
+  useSyncStatus();
 
   const [cloudPayload, setCloudPayload] = useState<SharedCatalogPayload | null>(null);
 
@@ -1027,55 +981,32 @@ export function CustomerCatalogView({
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-28 text-slate-800">
-      {/* AVISO CUANDO EL ADMINISTRADOR ESTÁ PREVISUALIZANDO LA TIENDA DEL CLIENTE */}
+    <div className="min-h-screen bg-[#F5F5F7] pb-28 text-slate-900">
+      {/* Barra superior cuando el administrador previsualiza la tienda */}
       {onExitPreview && (
-        <div className="sticky top-0 z-50 border-b border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 shadow-sm">
-          <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-bold">
-              <span className="rounded-md bg-amber-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-950">
-                Modo Previsualización
-              </span>
-              <span>Así es exactamente como tus clientes navegan la Tienda (#tienda)</span>
-            </div>
+        <div className="sticky top-0 z-50 border-b border-black/10 bg-slate-900 px-4 py-2 text-white">
+          <div className="mx-auto flex max-w-2xl items-center justify-between gap-2">
+            <span className="text-xs font-medium text-white/80">Vista previa del cliente</span>
             <button
               type="button"
               onClick={onExitPreview}
-              className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-extrabold text-white shadow hover:bg-slate-800"
+              className="rounded-full bg-white px-3.5 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-100"
             >
-              ← Volver al Panel Admin
+              ← Volver
             </button>
           </div>
         </div>
       )}
 
-      {/* CABECERA MODERNA Y ELEGANTE DEL SISTEMA */}
-      <header className="border-b border-slate-200 bg-white/95 px-4 py-4 shadow-sm backdrop-blur-md">
-        <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-slate-700">
-                👕 Catálogo 3D Oficial
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    status === 'live' ? 'bg-emerald-500 animate-pulse' : 'bg-sky-500'
-                  }`}
-                />
-                Stock en Vivo
-              </span>
-            </div>
-            <h1 className="mt-1 text-xl font-black tracking-tight text-slate-900">
-              {payload.storeName}
-            </h1>
-            <p className="text-xs font-medium text-slate-500">
-              Personalizador 3D Interactivo · Prenda {payload.brandName}
-            </p>
-          </div>
+      {/* CABECERA MINIMALISTA ESTILO APPLE */}
+      <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-white/85 px-4 py-3 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
+          <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">
+            {payload.storeName}
+          </h1>
 
-          {/* SELECTOR CLARO DE ESTILO: NORMAL (L 300) vs PERSONALIZADA (L 350) */}
-          <div className="flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 p-1">
+          {/* Selector segmentado limpio: Lisa (L 300) vs Personalizada (L 350) */}
+          <div className="inline-flex rounded-full bg-slate-100 p-1">
             <button
               type="button"
               onClick={() => {
@@ -1085,13 +1016,13 @@ export function CustomerCatalogView({
                 setSelectedDesignCode(null);
                 setSelectedDesignPhotoId(null);
               }}
-              className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+              className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
                 !hasDesign
-                  ? 'border border-slate-900 bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-600 hover:bg-white hover:text-slate-900'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              👕 L 300.00
+              Lisa · {money(payload.priceNormal || 30000)}
             </button>
             <button
               type="button"
@@ -1107,131 +1038,84 @@ export function CustomerCatalogView({
                   setScale(2.0);
                 }
               }}
-              className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+              className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
                 hasDesign
-                  ? 'border border-brand-600 bg-brand-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:bg-white hover:text-slate-900'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              ✨ Personalizada · {money(payload.priceCustom || 35000)}
+              Personalizada · {money(payload.priceCustom || 35000)}
             </button>
           </div>
         </div>
       </header>
 
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
-        {/* ESCAPARATE 3D INTERACTIVO DEL CLIENTE */}
-        <section className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
-          <InteractiveShirt3D
-            hex={selectedColor?.hex || '#111827'}
-            colorName={selectedColor?.name || ''}
-            brandName={payload.brandName}
-            designUrl={designUrl}
-            placement={placement}
-            designScale={scale}
-            designOffsetX={offsetX}
-            designOffsetY={offsetY}
-            onDesignChange={(patch) => {
-              if (patch.placement !== undefined) setPlacement(patch.placement);
-              if (patch.scale !== undefined) setScale(patch.scale);
-              if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
-              if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
-            }}
-            onClearDesign={() => {
-              setDesignUrl(null);
-              setActiveCatalogDesignId(null);
-              setSelectedDesignName(null);
-              setSelectedDesignCode(null);
-              setSelectedDesignPhotoId(null);
-            }}
-            boutiqueTheme={boutiqueTheme}
-            colorOptions={payload.colors.map((c) => {
-              const totalC = getColorTotalStock(c);
-              return {
-                id: c.name,
-                name: c.name,
-                hex: c.hex,
-                available: totalC > 0,
-                stockText: totalC > 0 ? '● Disponible' : '⏳ Pronto'
-              };
-            })}
-            activeColorId={selectedColor?.name}
-            onSelectColor={(cName) => {
-              const found = payload.colors.find((x) => x.name === cName);
-              if (found) handleSelectColor(found);
-            }}
-            catalogDesigns={clientDesigns}
-            activeCatalogDesignId={activeCatalogDesignId}
-            onSelectCatalogDesign={(d) => {
-              if (!d.imageUrl) return;
-              setDesignUrl(d.imageUrl);
-              setActiveCatalogDesignId(d.id);
-              setSelectedDesignName(d.name);
-              setSelectedDesignCode(d.code || null);
-              setSelectedDesignPhotoId(d.photoId);
-              setPlacement('back');
-              setScale(2.0);
-              setOffsetX(0);
-              setOffsetY(0);
-            }}
-            autoMotion
-            stockBadge={{
-              available: selectedSizeStock > 0,
-              text:
-                selectedSizeStock > 0
-                  ? `Talla ${size}: Disponible (${selectedSizeStock} uds)`
-                  : `Talla ${size}: Disponible pronto (Bajo pedido)`
-            }}
-          />
+        <InteractiveShirt3D
+          hex={selectedColor?.hex || '#111827'}
+          colorName={selectedColor?.name || ''}
+          brandName={payload.brandName}
+          designUrl={designUrl}
+          placement={placement}
+          designScale={scale}
+          designOffsetX={offsetX}
+          designOffsetY={offsetY}
+          onDesignChange={(patch) => {
+            if (patch.placement !== undefined) setPlacement(patch.placement);
+            if (patch.scale !== undefined) setScale(patch.scale);
+            if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
+            if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
+          }}
+          onClearDesign={() => {
+            setDesignUrl(null);
+            setActiveCatalogDesignId(null);
+            setSelectedDesignName(null);
+            setSelectedDesignCode(null);
+            setSelectedDesignPhotoId(null);
+          }}
+          boutiqueTheme={boutiqueTheme}
+          colorOptions={payload.colors.map((c) => {
+            const totalC = getColorTotalStock(c);
+            return {
+              id: c.name,
+              name: c.name,
+              hex: c.hex,
+              available: totalC > 0
+            };
+          })}
+          activeColorId={selectedColor?.name}
+          onSelectColor={(cName) => {
+            const found = payload.colors.find((x) => x.name === cName);
+            if (found) handleSelectColor(found);
+          }}
+          catalogDesigns={clientDesigns}
+          activeCatalogDesignId={activeCatalogDesignId}
+          onSelectCatalogDesign={(d) => {
+            if (!d.imageUrl) return;
+            setDesignUrl(d.imageUrl);
+            setActiveCatalogDesignId(d.id);
+            setSelectedDesignName(d.name);
+            setSelectedDesignCode(d.code || null);
+            setSelectedDesignPhotoId(d.photoId);
+            setPlacement('back');
+            setScale(2.0);
+            setOffsetX(0);
+            setOffsetY(0);
+          }}
+          autoMotion
+        />
 
-          {/* Selector de Tamaño de Estampado para el Cliente: A3 (200%) vs A4 (160%) */}
-          {hasDesign && (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
-              <span className="text-xs font-black uppercase tracking-wider text-slate-700">
-                📐 Tamaño de Impresión:
-              </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setScale(2.0)}
-                  className={`rounded-xl px-3 py-1 text-xs font-black transition ${
-                    scale >= 1.85
-                      ? 'border border-brand-600 bg-brand-600 text-white shadow-sm'
-                      : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                  }`}
-                  title="Establecer tamaño grande A3 (200%)"
-                >
-                  ✨ Tamaño A3 (200%)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setScale(1.6)}
-                  className={`rounded-xl px-3 py-1 text-xs font-black transition ${
-                    scale < 1.85 && scale >= 1.4
-                      ? 'border border-brand-600 bg-brand-600 text-white shadow-sm'
-                      : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                  }`}
-                  title="Establecer tamaño estándar A4 (160%)"
-                >
-                  📄 Tamaño A4 (160%)
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* PASO 3: SELECCIÓN DE TALLA ESTILO SISTEMA POS */}
-        <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wide text-white">
-                📏 Paso 3
-              </span>
-              <h2 className="text-sm font-extrabold text-slate-900">
-                Elige tu Talla ({selectedColor?.name})
-              </h2>
-            </div>
-            <span className="text-xs font-semibold text-emerald-600">● Stock en tiempo real</span>
+        {/* SELECCIÓN DE TALLA MINIMALISTA */}
+        <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold tracking-tight text-slate-900">Talla</h2>
+            <span
+              className={`text-xs font-medium ${
+                selectedSizeStock > 0 ? 'text-emerald-600' : 'text-amber-600'
+              }`}
+            >
+              {selectedSizeStock > 0 ? 'Disponible' : 'Bajo pedido'}
+            </span>
           </div>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {payload.sizes.map((sz) => {
@@ -1242,148 +1126,97 @@ export function CustomerCatalogView({
                   key={sz}
                   type="button"
                   onClick={() => setSize(sz)}
-                  className={`flex min-h-[62px] flex-col items-center justify-center rounded-2xl border transition ${
+                  className={`flex min-h-[54px] flex-col items-center justify-center rounded-2xl border transition ${
                     isSel
-                      ? 'scale-[1.03] border-slate-900 bg-slate-900 text-white shadow-md ring-2 ring-brand-500'
+                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
                       : st > 0
-                      ? 'border-slate-200 bg-slate-50 text-slate-900 hover:border-brand-500 hover:bg-white'
-                      : 'border-slate-100 bg-slate-50/60 text-slate-400'
+                      ? 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
+                      : 'border-slate-100 bg-slate-50 text-slate-400'
                   }`}
                 >
-                  <span className="text-base font-extrabold">{sz}</span>
-                  {st > 0 ? (
-                    <span
-                      className={`text-[10px] font-extrabold ${
-                        isSel ? 'text-emerald-300' : st <= 5 ? 'text-amber-600' : 'text-emerald-600'
-                      }`}
-                    >
-                      {st <= 5 ? `¡Últimas ${st}!` : `Disponible`}
-                    </span>
-                  ) : (
-                    <span
-                      className={`text-[10px] font-bold ${
-                        isSel ? 'text-white/70' : 'text-slate-400'
-                      }`}
-                    >
-                      Pronto
-                    </span>
-                  )}
+                  <span className="text-sm font-bold">{sz}</span>
+                  <span
+                    className={`text-[10px] font-medium ${
+                      isSel
+                        ? st > 0
+                          ? 'text-emerald-300'
+                          : 'text-white/70'
+                        : st > 0
+                        ? 'text-emerald-600'
+                        : 'text-slate-400'
+                    }`}
+                  >
+                    {st > 0 ? 'En stock' : 'Encargo'}
+                  </span>
                 </button>
               );
             })}
           </div>
         </section>
 
-        {/* PASO 4: DATOS DEL CLIENTE, CANTIDAD Y CONFIRMACIÓN */}
-        <section className="space-y-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        {/* DATOS DE ENTREGA Y CANTIDAD */}
+        <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold tracking-tight text-slate-900">Datos de entrega</h2>
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wide text-white">
-                👤 Paso 4
-              </span>
-              <h2 className="text-sm font-extrabold text-slate-900">
-                Tus Datos y Resumen de Pedido
-              </h2>
-            </div>
-            <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-extrabold text-slate-700">
-              📍 {sideLabelExplicit}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-xs font-bold text-slate-700">
-                Tu Nombre Completo *
-              </label>
-              <input
-                type="text"
-                maxLength={80}
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Ej. Juan Pérez"
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 placeholder-slate-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-bold text-slate-700">
-                Tu Teléfono / WhatsApp *
-              </label>
-              <input
-                type="tel"
-                maxLength={24}
-                value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
-                placeholder="Ej. 9999-8888"
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 placeholder-slate-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-bold text-slate-700">
-                Dirección o Nota de Entrega
-              </label>
-              <input
-                type="text"
-                maxLength={300}
-                value={customerAddress}
-                onChange={(e) => setCustomerAddress(e.target.value)}
-                placeholder="Barrio / Colonia / Ciudad"
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-bold text-slate-900 placeholder-slate-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-            <div>
-              <div className="mb-1 text-xs font-extrabold uppercase tracking-wider text-slate-500">
-                Cantidad de Camisas
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-1 text-slate-900">
+              <span className="text-xs font-medium text-slate-500">Cantidad</span>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-slate-900">
                 <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-xs font-medium text-slate-500">
-                {hasDesign ? 'Personalizada' : 'Normal L 300'}:{' '}
-                <strong className="text-slate-900">{money(unitPrice)} c/u</strong>
-              </div>
-              <div className="text-2xl font-black text-slate-900">{money(total)}</div>
-            </div>
           </div>
 
-          {readyMadeMatch ? (
-            <div className="rounded-2xl border border-emerald-300 bg-emerald-50 px-3.5 py-2.5 text-xs font-bold text-emerald-900 shadow-sm">
-              ⚡ ¡Disponible en Talla <strong>{size}</strong> para <strong>ENTREGA INMEDIATA HOY MISMO</strong> (Prenda ya estampada en stock)!
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            <input
+              type="text"
+              maxLength={80}
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              placeholder="Nombre completo"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+            />
+            <input
+              type="tel"
+              maxLength={24}
+              value={customerPhone}
+              onChange={(e) => setCustomerPhone(e.target.value)}
+              placeholder="Teléfono / WhatsApp"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+            />
+            <input
+              type="text"
+              maxLength={300}
+              value={customerAddress}
+              onChange={(e) => setCustomerAddress(e.target.value)}
+              placeholder="Dirección o ciudad"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+            />
+          </div>
+
+          {readyMadeMatch && (
+            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+              ⚡ Disponible para entrega inmediata en talla {size}.
             </div>
-          ) : selectedSizeStock === 0 ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-              ⏳ La talla <strong>{size}</strong> en color <strong>{selectedColor?.name}</strong> está{' '}
-              <strong>Disponible pronto</strong>. Puedes apartarla o encargarla bajo pedido por WhatsApp.
-            </div>
-          ) : null}
+          )}
         </section>
       </div>
 
-      {/* BARRA INFERIOR FIJA DE COMPRA (ESTILO ELEGANTE Y LIMPIO) */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+      {/* BARRA INFERIOR FLOTANTE ESTILO APPLE */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.06] bg-white/90 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-xs font-medium text-slate-600">
-              {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'} ·{' '}
-              <span className="font-extrabold text-brand-600">
-                {designUrl
-                  ? `${selectedDesignName || 'Personalizada'} (${isBackSide ? 'EN ESPALDA' : 'EN FRENTE'})`
-                  : 'L 300.00'}
-              </span>
+            <div className="truncate text-xs font-medium text-slate-500">
+              {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
+              {designUrl ? ` · ${selectedDesignName || 'Personalizada'}` : ' · Lisa'}
             </div>
-            <div className="text-lg font-black text-slate-900">{money(total)}</div>
+            <div className="text-lg font-bold tracking-tight text-slate-900">{money(total)}</div>
           </div>
           <button
             type="button"
             onClick={() => void handleSendOrderWhatsApp()}
-            className="inline-flex min-h-[48px] shrink-0 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-6 py-2.5 text-sm font-extrabold text-white shadow-lg transition hover:bg-emerald-700 active:scale-95"
+            className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-full bg-slate-900 px-6 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
           >
-            <span>💬</span>
-            <span>{selectedSizeStock > 0 ? 'Pedir por WhatsApp' : 'Encargar por WhatsApp'}</span>
+            Pedir por WhatsApp
           </button>
         </div>
       </div>

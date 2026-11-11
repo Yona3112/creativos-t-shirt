@@ -1,4 +1,4 @@
-import type { AppState, CatalogDesign, Color, Entity, Movement, Order, ReadyMadeShirt, Settings } from './types';
+import type { AppState, CatalogDesign, Color, Entity, Movement, Order, ReadyMadeShirt, Settings, StockEntry } from './types';
 import { DEFAULT_SETTINGS, LEGACY_COLOR_HEX, createInitialState } from './seed';
 
 function newer<T extends Entity>(a: T, b: T): T {
@@ -62,8 +62,11 @@ const ORPHAN_DESIGN_IDS = new Set([
   'cd-df32d856-4a8b-4c05-83ec-1a07fd37a364'
 ]);
 
+/** Movimientos con historial propio (pedidos, ingresos, cuadres) que nunca se compactan. */
+export const isLedgerMovement = (m: Movement) => Boolean(m.orderId || m.entryId);
+
 /**
- * Compacta movimientos manuales (`!m.orderId`) por variante `key` en un único registro neto `adj-${key}`.
+ * Compacta movimientos manuales (sin pedido ni ingreso) por variante `key` en un único registro neto `adj-${key}`.
  * Elimina decenas de registros redundantes (+1 / -1) y descarta ajustes cuyo neto sea 0.
  */
 export function compactMovements(movements: Movement[], validBrandIds?: Set<string>): Movement[] {
@@ -75,7 +78,7 @@ export function compactMovements(movements: Movement[], validBrandIds?: Set<stri
     const brandId = m.key.split('|')[0];
     if (validBrandIds && brandId && !validBrandIds.has(brandId)) continue;
 
-    if (m.orderId) {
+    if (isLedgerMovement(m)) {
       orderMovements.push(m);
     } else {
       const prev = adjByKey.get(m.key);
@@ -112,12 +115,12 @@ export function compactMovements(movements: Movement[], validBrandIds?: Set<stri
 
 function mergeMovements(a: Movement[], b: Movement[]): Movement[] {
   const orderMap = new Map<string, Movement>();
-  for (const m of a) if (m.orderId) orderMap.set(m.id, m);
-  for (const m of b) if (m.orderId && !orderMap.has(m.id)) orderMap.set(m.id, m);
+  for (const m of a) if (isLedgerMovement(m)) orderMap.set(m.id, m);
+  for (const m of b) if (isLedgerMovement(m) && !orderMap.has(m.id)) orderMap.set(m.id, m);
 
-  // Para ajustes manuales sin pedido, consolidar por key priorizando el registro consolidado más reciente
-  const adjA = compactMovements(a.filter((m) => !m.orderId));
-  const adjB = compactMovements(b.filter((m) => !m.orderId));
+  // Para ajustes manuales sueltos, consolidar por key priorizando el registro consolidado más reciente
+  const adjA = compactMovements(a.filter((m) => !isLedgerMovement(m)));
+  const adjB = compactMovements(b.filter((m) => !isLedgerMovement(m)));
   const adjMap = new Map<string, Movement>();
   for (const m of adjA) adjMap.set(m.key, m);
   for (const m of adjB) {
@@ -193,6 +196,8 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
       .map((d) => (d.name === 'RANCGHO' ? { ...d, name: 'RANCHO', code: 'D-001' } : d))
   );
 
+  const stockEntries = (Array.isArray(s.stockEntries) ? s.stockEntries : []).filter(Boolean);
+
   return {
     version: 1,
     settings,
@@ -200,14 +205,22 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     colors: cleanColors,
     customers: (Array.isArray(s.customers) ? s.customers : []).filter(Boolean),
     orders: rawOrders.filter(Boolean),
-    movements: compactMovements(rawMovements, activeBrandIdSet),
+    movements: dropDeletedEntryMovements(compactMovements(rawMovements, activeBrandIdSet), stockEntries),
     catalogDesigns: cleanDesigns,
     readyMadeStock: (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(
       (r) => r && !r.deleted && r.qty > 0
     ),
+    stockEntries,
     _by: s._by,
     _at: s._at
   };
+}
+
+/** Si un ingreso/cuadre fue anulado (deleted), sus movimientos dejan de contar en todos los dispositivos. */
+function dropDeletedEntryMovements(movements: Movement[], entries: StockEntry[]): Movement[] {
+  const dead = new Set(entries.filter((e) => e.deleted).map((e) => e.id));
+  if (!dead.size) return movements;
+  return movements.filter((m) => !m.entryId || !dead.has(m.entryId));
 }
 
 /** Reemplaza los tonos genéricos anteriores solo en colores sin modificaciones manuales (updatedAt === 0). */
@@ -250,6 +263,7 @@ function assignDesignCodes(list: CatalogDesign[]): CatalogDesign[] {
 }
 
 export function mergeStates(local: AppState, remote: AppState): AppState {
+  const stockEntries = mergeEntities(local.stockEntries || [], remote.stockEntries || []);
   return {
     version: 1,
     settings: mergeSettings(local.settings, remote.settings),
@@ -257,9 +271,10 @@ export function mergeStates(local: AppState, remote: AppState): AppState {
     colors: mergeEntities(local.colors, remote.colors),
     customers: mergeEntities(local.customers, remote.customers),
     orders: fixFolios(mergeEntities(local.orders, remote.orders)),
-    movements: mergeMovements(local.movements, remote.movements),
+    movements: dropDeletedEntryMovements(mergeMovements(local.movements, remote.movements), stockEntries),
     catalogDesigns: mergeEntities(local.catalogDesigns || [], remote.catalogDesigns || []),
     readyMadeStock: mergeReadyMade(local.readyMadeStock || [], remote.readyMadeStock || []),
+    stockEntries,
     _by: local._by,
     _at: Math.max(local._at || 0, remote._at || 0)
   };
@@ -276,6 +291,7 @@ export function contentSignature(s: AppState): string {
     orders: byId(s.orders),
     movements: byId(s.movements),
     catalogDesigns: byId(s.catalogDesigns || []),
-    readyMadeStock: byId(s.readyMadeStock || [])
+    readyMadeStock: byId(s.readyMadeStock || []),
+    stockEntries: byId(s.stockEntries || [])
   });
 }

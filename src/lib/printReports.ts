@@ -1,8 +1,8 @@
-import type { AppState, Order, Settings } from './types';
-import { activeBrands, brandColors, computeStock, lowColorStockList, vkey } from './inventory';
+import type { AppState, Order, Settings, StockEntry } from './types';
+import { activeBrands, brandColors, computeStock, lowColorStockList, parseVKey, vkey } from './inventory';
 import { money } from './money';
 import { folioLabel } from './ids';
-import { fmtDateTime } from './time';
+import { dayKey, fmtDateTime } from './time';
 import { STATUS_LABEL } from './actions';
 import { toast } from '../components/ui';
 
@@ -646,3 +646,101 @@ export function printDailyOrdersReport(
 
   openPrintDocument(`${periodLabel} - ${settings.storeName}`, bodyHtml);
 }
+
+/**
+ * Imprime el comprobante detallado de un Lote de Ingreso (ING-XXXX) o Cuadre Físico (CUA-XXXX)
+ * mostrando qué había antes, cuánto ingresó o se ajustó ese día, y cuánto quedó en sistema.
+ */
+export function printStockEntryReport(state: AppState, entry: StockEntry): void {
+  const { settings } = state;
+  const code = entry.folio;
+  const entryDay = dayKey(entry.createdAt);
+  const totalUnits = entry.lines.reduce((s, l) => s + l.qty, 0);
+  const isCuadre = entry.kind === 'cuadre';
+
+  const brandMap = new Map(state.brands.map((b) => [b.id, b]));
+  const colorMap = new Map(state.colors.map((c) => [c.id, c]));
+
+  const rowsHtml = entry.lines
+    .map((ln) => {
+      const { brandId, colorId, size } = parseVKey(ln.key);
+      const brand = brandMap.get(brandId);
+      const color = colorMap.get(colorId);
+      const diffLabel = ln.qty > 0 ? `+${ln.qty}` : `${ln.qty}`;
+      const diffStyle =
+        ln.qty > 0
+          ? 'color:#15803d;font-weight:900;'
+          : ln.qty < 0
+          ? 'color:#dc2626;font-weight:900;'
+          : 'color:#64748b;';
+
+      return `
+        <tr>
+          <td class="bold">${esc(brand?.name || brandId)}</td>
+          <td>
+            <span class="swatch" style="background:${esc(color?.hex || '#111111')}"></span>
+            <span class="bold">${esc(color?.name || colorId)}</span>
+          </td>
+          <td class="center"><span class="badge-size">${esc(size)}</span></td>
+          <td class="right">${ln.before}</td>
+          <td class="right" style="${diffStyle}">${esc(diffLabel)}</td>
+          <td class="right bold" style="font-size:13px;">${ln.after}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const bodyHtml = `
+    <div class="header">
+      <div>
+        <h1>${esc(settings.storeName || 'Creativos Gift Shop')} · ${
+    isCuadre ? 'Acta de Cuadre Físico' : 'Comprobante de Ingreso de Inventario'
+  }</h1>
+        <div class="sub">Folio: <strong>${esc(code)}</strong> · Fecha: ${esc(entryDay)} · Nota: ${esc(entry.note || '—')}</div>
+      </div>
+      <div class="right">
+        <div class="bold">Registrado el</div>
+        <div class="sub">${esc(fmtDateTime(entry.createdAt))}</div>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="lbl">Folio</div>
+        <div class="val">${esc(code)}</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">Fecha del Día</div>
+        <div class="val">${esc(entryDay)}</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">${isCuadre ? 'Diferencia Neta' : 'Unidades Ingresadas'}</div>
+        <div class="val" style="color:#15803d;">${totalUnits > 0 ? `+${totalUnits}` : totalUnits} uds</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">Tallas / Variantes</div>
+        <div class="val">${entry.lines.length}</div>
+      </div>
+    </div>
+
+    <h2>📋 Comparación: Lo que Había vs ${isCuadre ? 'Ajuste de Cuadre' : 'Lo que Ingresó'} vs Lo que Quedó</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Marca</th>
+          <th>Color</th>
+          <th class="center">Talla</th>
+          <th class="right">Había (Antes)</th>
+          <th class="right">${isCuadre ? 'Diferencia' : 'Ingresó (+)'}</th>
+          <th class="right">Quedó (Hay)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+    </table>
+  `;
+
+  openPrintDocument(`${code} - ${settings.storeName}`, bodyHtml);
+}
+

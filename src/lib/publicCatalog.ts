@@ -123,9 +123,9 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     wholesaleMin: 999999,
     photoId: null,
     placement: 'back',
-    scale: 2.75,
+    scale: 2.0,
     offsetX: 0,
-    offsetY: 2,
+    offsetY: 0,
     boutiqueTheme: st.storeTheme || 'ranchero',
     designs,
     stock: stockMap
@@ -165,6 +165,6 @@ export function sanitizeWebOrder(raw: unknown): CustomerWebOrderPayload | null {
     designCode: str(o.designCode, 20) || null,
     photoId: str(o.photoId, 60) || null,
     placement,
-    scale: num(o.scale, 0.3, 3, 2.75)
+    scale: num(o.scale, 0.3, 4, 2.0)
   };
 }

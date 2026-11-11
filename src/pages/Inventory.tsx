@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState, useStock } from '../lib/store';
-import { activeBrands, brandColors, lowColorStockList, normalPrice, skuOf, vkey } from '../lib/inventory';
-import { printInventoryReport } from '../lib/printReports';
+import { activeBrands, brandColors, lowColorStockList, normalPrice, parseVKey, skuOf, vkey } from '../lib/inventory';
+import { printInventoryReport, printStockEntryReport } from '../lib/printReports';
 import {
   addBrand,
   addReadyMadeShirt,
+  createStockCount,
+  createStockEntry,
   deleteBrand,
   deleteColor,
   purgeGarbageData,
@@ -12,9 +14,11 @@ import {
   setStockAbsolute,
   updateBrand,
   updateColor,
-  updateReadyMadeShirt
+  updateReadyMadeShirt,
+  voidStockEntry
 } from '../lib/actions';
 import { fromCents, money, toCents } from '../lib/money';
+import { dayKey, fmtDateTime } from '../lib/time';
 import { Confirm, Empty, Modal, Stepper, toast } from '../components/ui';
 import { ColorSwatchPicker } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -29,13 +33,47 @@ export default function Inventory() {
   const brands = activeBrands(state);
   const lowThreshold = Math.max(1, settings.lowStock || 10);
 
-  const [view, setView] = useState<'matriz' | 'tarjetas' | 'estampadas'>('matriz');
+  const [view, setView] = useState<'matriz' | 'ingresos' | 'tarjetas' | 'estampadas'>('matriz');
+  const [ingresoTab, setIngresoTab] = useState<'nuevo' | 'cuadre' | 'historial'>('nuevo');
+  const [entryDay, setEntryDay] = useState(() => dayKey());
+  const [entryNote, setEntryNote] = useState('');
+  const [entryDraft, setEntryDraft] = useState<Record<string, number>>({});
+  const [countDraft, setCountDraft] = useState<Record<string, string>>({});
+
   const [query, setQuery] = useState('');
   const [brandFilter, setBrandFilter] = useState('all');
   const [colorFilter, setColorFilter] = useState('all');
   const [sizeFilter, setSizeFilter] = useState('all');
 
   const lowColors = useMemo(() => lowColorStockList(state, stockInfo), [state, stockInfo]);
+
+  const activeEntries = useMemo(
+    () =>
+      [...(state.stockEntries || [])]
+        .filter((e) => !e.deleted)
+        .sort((a, b) => b.createdAt - a.createdAt),
+    [state.stockEntries]
+  );
+
+  // Resumen del día seleccionado: Lo que había vs Lo que ingresó ese día vs Ventas vs Lo que hay
+  const dailyComparison = useMemo(() => {
+    const inByKey = new Map<string, number>();
+    const outByKey = new Map<string, number>();
+    const adjByKey = new Map<string, number>();
+
+    for (const m of state.movements) {
+      if (dayKey(m.at) !== entryDay) continue;
+      if (m.reason === 'compra' || m.reason === 'devolucion' || m.reason === 'cancelacion') {
+        inByKey.set(m.key, (inByKey.get(m.key) || 0) + m.delta);
+      } else if (m.reason === 'venta' || m.reason === 'merma') {
+        outByKey.set(m.key, (outByKey.get(m.key) || 0) + Math.abs(m.delta));
+      } else if (m.reason === 'ajuste') {
+        adjByKey.set(m.key, (adjByKey.get(m.key) || 0) + m.delta);
+      }
+    }
+
+    return { inByKey, outByKey, adjByKey };
+  }, [state.movements, entryDay]);
 
   // Modales de Color (Crear / Editar / Eliminar)
   const [showNewColor, setShowNewColor] = useState(false);
@@ -247,141 +285,178 @@ export default function Inventory() {
 
   const selectedBrandObj = brandFilter !== 'all' ? brands.find((b) => b.id === brandFilter) : null;
 
+  const draftTotalUnits = useMemo(
+    () => Object.values(entryDraft).reduce((s, n) => s + (n > 0 ? n : 0), 0),
+    [entryDraft]
+  );
+
+  const handleSaveStockEntry = () => {
+    const items = Object.entries(entryDraft)
+      .filter(([, qty]) => qty > 0)
+      .map(([key, qty]) => ({ key, qty }));
+    if (items.length === 0) {
+      toast('Ingresa al menos 1 camisa nueva en alguna talla', 'error');
+      return;
+    }
+    const created = createStockEntry(
+      items,
+      entryNote.trim() || `Ingreso del día ${entryDay}`
+    );
+    if (created) {
+      const addedUnits = created.lines.reduce((s, l) => s + l.qty, 0);
+      setEntryDraft({});
+      setEntryNote('');
+      setIngresoTab('cuadre');
+      toast(
+        `Ingreso ${created.folio} guardado (+${addedUnits} camisas)`,
+        'ok'
+      );
+    }
+  };
+
+  const handleSavePhysicalCount = () => {
+    const counts: { key: string; counted: number }[] = [];
+    for (const [key, raw] of Object.entries(countDraft)) {
+      if (raw.trim() === '') continue;
+      const num = Math.max(0, Math.floor(Number(raw) || 0));
+      counts.push({ key, counted: num });
+    }
+    if (counts.length === 0) {
+      toast('Escribe el conteo físico en al menos una talla para cuadrar', 'error');
+      return;
+    }
+    const created = createStockCount(
+      counts,
+      entryNote.trim() || `Cuadre físico ${entryDay}`
+    );
+    if (created) {
+      setCountDraft({});
+      toast(`Cuadre ${created.folio} aplicado al inventario`, 'ok');
+    } else {
+      toast('Todo cuadra exactamente con el sistema (0 diferencias)', 'ok');
+      setCountDraft({});
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="grid flex-1 grid-cols-3 gap-2">
+          <div className="grid flex-1 grid-cols-2 gap-1.5 sm:grid-cols-4">
             <button
               className={`chip ${view === 'matriz' ? 'chip-on' : 'chip-off'}`}
               onClick={() => setView('matriz')}
             >
-              📊 Matriz
+              Matriz
+            </button>
+            <button
+              className={`chip ${view === 'ingresos' ? 'chip-on' : 'chip-off'}`}
+              onClick={() => setView('ingresos')}
+            >
+              Ingresos y Cuadre
             </button>
             <button
               className={`chip ${view === 'tarjetas' ? 'chip-on' : 'chip-off'}`}
               onClick={() => setView('tarjetas')}
             >
-              🗂 Tarjetas
+              Tarjetas
             </button>
             <button
               className={`chip ${view === 'estampadas' ? 'chip-on' : 'chip-off'}`}
               onClick={() => setView('estampadas')}
             >
-              ⚡ Ya Estampadas ({readyMadeCount})
+              Estampadas ({readyMadeCount})
             </button>
           </div>
-          <div className="rounded-xl bg-brand-50 px-3 py-2 text-sm font-extrabold text-brand-900">
+          <div className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white">
             {view === 'estampadas'
-              ? `Listas para entrega: ${readyMadeCount} uds`
-              : `En blanco: ${totalUnits} uds`}
+              ? `Estampadas: ${readyMadeCount} uds`
+              : `Stock: ${totalUnits} uds`}
           </div>
         </div>
 
-        {/* Barra de acciones de gestión directa en Inventario y Matriz */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-2.5">
-          <div className="text-xs font-bold text-slate-600">
-            🎨 Gestión rápida de colores, marcas y existencias:
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+        {/* Barra de acciones limpia */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              className="btn-soft px-3 py-2 text-xs font-extrabold text-slate-900"
+              className="btn-soft px-3 py-1.5 text-xs font-semibold text-slate-900"
               onClick={() =>
                 printInventoryReport(state, {
                   brandFilter,
                   colorFilter
                 })
               }
-              title="Imprimir o guardar en PDF el inventario y matriz de tallas"
             >
-              🖨️ Imprimir Inventario
+              🖨️ Imprimir
             </button>
             <button
               type="button"
-              className="btn-primary px-3 py-2 text-xs"
+              className="btn-primary px-3 py-1.5 text-xs"
               onClick={() => {
                 setNewColorBrandId(brandFilter !== 'all' ? brandFilter : brands[0]?.id);
                 setShowNewColor(true);
               }}
             >
-              + Nuevo Color
+              + Color
             </button>
             <button
               type="button"
-              className="btn-ghost px-3 py-2 text-xs"
+              className="btn-ghost px-3 py-1.5 text-xs"
               onClick={() => setShowNewBrand(true)}
             >
-              + Nueva Marca
+              + Marca
             </button>
             <button
               type="button"
-              className="btn-ghost px-3 py-2 text-xs text-emerald-700 hover:bg-emerald-50"
+              className="btn-ghost px-3 py-1.5 text-xs text-slate-600"
               onClick={() => {
                 const res = purgeGarbageData();
-                const total = res.removedBrands + res.removedColors + res.removedDesigns + res.compactedMovements;
+                const total =
+                  res.removedBrands +
+                  res.removedColors +
+                  res.removedDesigns +
+                  res.compactedMovements;
                 if (total > 0) {
-                  toast(`🧹 Se eliminaron ${total} registros basura/redundantes`, 'ok');
+                  toast(`Se optimizaron ${total} registros`, 'ok');
                 } else {
-                  toast('✨ El inventario ya está limpio y sin datos redundantes', 'ok');
+                  toast('Inventario optimizado', 'ok');
                 }
               }}
-              title="Eliminar marcas vacías, diseños rotos y compactar movimientos redundantes"
             >
-              🧹 Limpiar Basura
+              Optimizar
             </button>
             {selectedBrandObj && (
               <button
                 type="button"
-                className="btn-ghost px-3 py-2 text-xs"
+                className="btn-ghost px-3 py-1.5 text-xs"
                 onClick={() => openEditBrandModal(selectedBrandObj)}
               >
-                ✏️ Editar {selectedBrandObj.name}
+                Editar {selectedBrandObj.name}
               </button>
             )}
             {view === 'estampadas' && (
               <button
                 type="button"
-                className="btn-amber px-3 py-2 text-xs"
+                className="btn-amber px-3 py-1.5 text-xs"
                 onClick={openNewReadyModal}
               >
-                + Agregar Prenda Estampada
+                + Estampada
               </button>
             )}
           </div>
         </div>
 
-        {/* Banner de Alerta de Colores por Agotarse (1 a 10 unidades, excluyendo los que están en 0) */}
+        {/* Alerta compacta de Colores por Agotarse (1 a 10 uds) */}
         {lowColors.length > 0 && (
-          <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/90 p-3 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500 text-sm text-white shadow-sm">
-                  ⚠️
-                </span>
-                <div>
-                  <div className="text-xs font-black uppercase tracking-wide text-amber-950">
-                    Alerta de Colores por Agotarse (1 a {lowThreshold} unidades) · {lowColors.length} color{lowColors.length === 1 ? '' : 'es'}
-                  </div>
-                  <div className="text-[11px] font-medium text-amber-800">
-                    Solo se notifican colores con existencias reales entre 1 y {lowThreshold} uds (los que están en 0 no se notifican).
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  printInventoryReport(state, {
-                    brandFilter,
-                    colorFilter
-                  })
-                }
-                className="rounded-xl border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-extrabold text-amber-900 hover:bg-amber-100"
-              >
-                🖨️ Imprimir Alerta + Inventario
-              </button>
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-2.5">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-amber-900">
+                ⚠️ Stock bajo (1–{lowThreshold} uds): {lowColors.length} color
+                {lowColors.length === 1 ? '' : 'es'}
+              </span>
             </div>
-            <div className="mt-2.5 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {lowColors.map((item) => {
                 const activeSizes = item.sizesBreakdown
                   .map((s) => `${s.size}:${s.qty}`)
@@ -395,26 +470,15 @@ export default function Inventory() {
                       setColorFilter(item.color.name);
                       setView('matriz');
                     }}
-                    className="flex items-center gap-2 rounded-xl border border-amber-300 bg-white px-2.5 py-1.5 text-left text-xs shadow-sm transition hover:border-amber-500 hover:bg-amber-50"
-                    title="Clic para filtrar este color en la matriz"
+                    className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-white px-2.5 py-1 text-left text-xs transition hover:border-amber-400"
                   >
                     <span
-                      className="h-4 w-4 shrink-0 rounded-full border border-black/20"
+                      className="h-3 w-3 shrink-0 rounded-full border border-black/20"
                       style={{ backgroundColor: item.color.hex }}
                     />
-                    <div>
-                      <div className="font-extrabold text-slate-900">
-                        {item.brand.name} · {item.color.name}{' '}
-                        <span className="ml-1 rounded-md bg-amber-100 px-1.5 py-0.5 font-black text-amber-900">
-                          Quedan {item.totalStock} uds
-                        </span>
-                      </div>
-                      {activeSizes && (
-                        <div className="text-[10px] font-semibold text-slate-500">
-                          Tallas: {activeSizes}
-                        </div>
-                      )}
-                    </div>
+                    <span className="font-semibold text-slate-900">{item.color.name}</span>
+                    <span className="font-bold text-amber-800">({item.totalStock})</span>
+                    {activeSizes && <span className="text-[11px] text-slate-500">{activeSizes}</span>}
                   </button>
                 );
               })}
@@ -422,14 +486,14 @@ export default function Inventory() {
           </div>
         )}
 
-        <input
-          className="input"
-          placeholder="Buscar por marca, color o SKU..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+          <input
+            className="input"
+            placeholder="Buscar color o SKU..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
 
-        <div className="grid grid-cols-3 gap-2">
           <select
             className="input px-2"
             value={brandFilter}
@@ -474,24 +538,411 @@ export default function Inventory() {
         </div>
       </div>
 
-      {view === 'estampadas' ? (
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs text-indigo-950">
-            <div className="max-w-2xl">
-              <p className="font-extrabold">👕 Stock de Prendas Ya Estampadas (Disponibles para Entrega Inmediata)</p>
-              <p className="mt-1 text-slate-600">
-                Estas camisas ya tienen un diseño impreso (devoluciones contra entrega o prendas listas para vitrina). Puedes agregar nuevas, editar su precio/talla/cantidad o descontarlas al venderlas.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={openNewReadyModal}
-              className="btn-primary px-3.5 py-2 text-xs"
-            >
-              + Agregar Prenda Estampada
-            </button>
-          </div>
+      {view === 'ingresos' ? (
+        <div className="space-y-4">
+          {/* Sub-barra de Ingresos y Cuadre */}
+          <div className="card space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex rounded-full bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setIngresoTab('nuevo')}
+                  className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${
+                    ingresoTab === 'nuevo'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  + Registrar Ingreso
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIngresoTab('cuadre')}
+                  className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${
+                    ingresoTab === 'cuadre'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Comparar y Cuadrar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIngresoTab('historial')}
+                  className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${
+                    ingresoTab === 'historial'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Historial ({activeEntries.length})
+                </button>
+              </div>
 
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="date"
+                  className="input w-auto py-1.5 text-xs"
+                  value={entryDay}
+                  onChange={(e) => setEntryDay(e.target.value || dayKey())}
+                />
+                {ingresoTab !== 'historial' && (
+                  <input
+                    className="input w-48 py-1.5 text-xs sm:w-64"
+                    placeholder="Nota (ej. Lote proveedor)"
+                    value={entryNote}
+                    onChange={(e) => setEntryNote(e.target.value)}
+                  />
+                )}
+              </div>
+            </div>
+
+            {ingresoTab === 'nuevo' && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3.5 py-2.5">
+                  <div className="text-xs font-semibold text-slate-700">
+                    Escribe solo las unidades que entraron hoy. El sistema guarda el lote aparte con lo que había antes y lo que quedó.
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {draftTotalUnits > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setEntryDraft({})}
+                        className="btn-ghost px-3 py-1.5 text-xs"
+                      >
+                        Limpiar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleSaveStockEntry}
+                      disabled={draftTotalUnits === 0}
+                      className="btn-primary px-4 py-2 text-xs disabled:opacity-40"
+                    >
+                      Guardar Ingreso ({draftTotalUnits > 0 ? `+${draftTotalUnits} uds` : '0 uds'})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-600">
+                        <th className="sticky left-0 z-10 bg-slate-50 px-3 py-2.5">Color</th>
+                        {visibleSizes.map((sz) => (
+                          <th key={sz} className="px-2 py-2.5 text-center">
+                            {sz}
+                          </th>
+                        ))}
+                        <th className="px-3 py-2.5 text-right">+ Ingreso Hoy</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rows.map(({ brand, color }) => {
+                        const rowAdded = visibleSizes.reduce(
+                          (s, sz) => s + (entryDraft[vkey(brand.id, color.id, sz)] || 0),
+                          0
+                        );
+                        return (
+                          <tr key={`ing-${brand.id}-${color.id}`} className="hover:bg-slate-50/70">
+                            <td className="sticky left-0 z-10 bg-white px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="h-4 w-4 shrink-0 rounded-full border border-black/20"
+                                  style={{ backgroundColor: color.hex }}
+                                />
+                                <div>
+                                  <div className="font-bold text-slate-900">{color.name}</div>
+                                  <div className="text-[11px] text-slate-400">{brand.name}</div>
+                                </div>
+                              </div>
+                            </td>
+                            {visibleSizes.map((sz) => {
+                              const k = vkey(brand.id, color.id, sz);
+                              const currentVal = stock.get(k) || 0;
+                              const addVal = entryDraft[k] || 0;
+                              return (
+                                <td key={sz} className="px-1.5 py-2 text-center">
+                                  <div className="inline-flex flex-col items-center">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      inputMode="numeric"
+                                      placeholder="+0"
+                                      value={addVal > 0 ? String(addVal) : ''}
+                                      onChange={(e) => {
+                                        const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                                        setEntryDraft((prev) => {
+                                          const next = { ...prev };
+                                          if (n > 0) next[k] = n;
+                                          else delete next[k];
+                                          return next;
+                                        });
+                                      }}
+                                      className={`h-9 w-16 rounded-xl border text-center text-sm font-bold outline-none transition ${
+                                        addVal > 0
+                                          ? 'border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20'
+                                          : 'border-slate-200 bg-white text-slate-900 focus:border-slate-900'
+                                      }`}
+                                    />
+                                    <span className="mt-0.5 text-[10px] font-medium text-slate-400">
+                                      Había: {currentVal}
+                                      {addVal > 0 ? (
+                                        <strong className="text-emerald-700"> → {currentVal + addVal}</strong>
+                                      ) : null}
+                                    </span>
+                                  </div>
+                                </td>
+                              );
+                            })}
+                            <td className="px-3 py-2 text-right font-extrabold">
+                              {rowAdded > 0 ? (
+                                <span className="rounded-lg bg-emerald-100 px-2 py-1 text-xs text-emerald-900">
+                                  +{rowAdded}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-slate-300">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {ingresoTab === 'cuadre' && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3.5 py-2.5">
+                  <div className="text-xs font-semibold text-slate-700">
+                    Comparación del día <strong>{entryDay}</strong>: verifica lo que había antes, lo que ingresó ese día, ventas y que cuadre con tu conteo físico.
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => printInventoryReport(state, { brandFilter, colorFilter })}
+                      className="btn-soft px-3 py-1.5 text-xs font-semibold"
+                    >
+                      🖨️ Imprimir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSavePhysicalCount}
+                      className="btn-primary px-4 py-1.5 text-xs"
+                    >
+                      Aplicar Cuadre Físico
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-600">
+                        <th className="px-3 py-2.5">Color</th>
+                        <th className="px-2 py-2.5 text-center">Talla</th>
+                        <th className="px-3 py-2.5 text-right">Había (Antes)</th>
+                        <th className="px-3 py-2.5 text-right">+ Ingresó ({entryDay})</th>
+                        <th className="px-3 py-2.5 text-right">− Salidas</th>
+                        <th className="px-3 py-2.5 text-right">= Hay en Sistema</th>
+                        <th className="px-3 py-2.5 text-center">Conteo Físico</th>
+                        <th className="px-3 py-2.5 text-center">Cuadre</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rows.flatMap(({ brand, color }) =>
+                        visibleSizes.map((sz) => {
+                          const k = vkey(brand.id, color.id, sz);
+                          const currentVal = stock.get(k) || 0;
+                          const inToday = dailyComparison.inByKey.get(k) || 0;
+                          const outToday = dailyComparison.outByKey.get(k) || 0;
+                          const adjToday = dailyComparison.adjByKey.get(k) || 0;
+                          const hadBefore = Math.max(0, currentVal - inToday + outToday - adjToday);
+
+                          const rawCount = countDraft[k];
+                          const countedVal =
+                            rawCount !== undefined && rawCount.trim() !== ''
+                              ? Math.max(0, Math.floor(Number(rawCount) || 0))
+                              : currentVal;
+                          const diff = countedVal - currentVal;
+
+                          return (
+                            <tr key={`cua-${k}`} className="hover:bg-slate-50/70">
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/20"
+                                    style={{ backgroundColor: color.hex }}
+                                  />
+                                  <span className="font-semibold text-slate-900">{color.name}</span>
+                                </div>
+                              </td>
+                              <td className="px-2 py-2 text-center">
+                                <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-bold text-white">
+                                  {sz}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium text-slate-600">
+                                {hadBefore}
+                              </td>
+                              <td className="px-3 py-2 text-right font-bold text-emerald-700">
+                                {inToday > 0 ? `+${inToday}` : '0'}
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium text-rose-600">
+                                {outToday > 0 ? `−${outToday}` : '0'}
+                              </td>
+                              <td className="px-3 py-2 text-right font-extrabold text-slate-900">
+                                {currentVal}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  inputMode="numeric"
+                                  placeholder={String(currentVal)}
+                                  value={rawCount !== undefined ? rawCount : ''}
+                                  onChange={(e) =>
+                                    setCountDraft((prev) => ({
+                                      ...prev,
+                                      [k]: e.target.value
+                                    }))
+                                  }
+                                  className="h-8 w-20 rounded-xl border border-slate-200 bg-white text-center text-sm font-bold text-slate-900 outline-none focus:border-slate-900"
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                {diff === 0 ? (
+                                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
+                                    ✓ Cuadra
+                                  </span>
+                                ) : (
+                                  <span
+                                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                                      diff > 0
+                                        ? 'bg-sky-100 text-sky-900'
+                                        : 'bg-rose-100 text-rose-900'
+                                    }`}
+                                  >
+                                    {diff > 0 ? `+${diff} sobrante` : `${diff} faltante`}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {ingresoTab === 'historial' && (
+              <div className="space-y-3">
+                {activeEntries.length === 0 ? (
+                  <Empty icon="📥" text="Aún no hay lotes de ingreso ni cuadres registrados" />
+                ) : (
+                  <div className="space-y-2.5">
+                    {activeEntries.map((entry) => {
+                      const code = entry.folio;
+                      const entryDayLabel = dayKey(entry.createdAt);
+                      const entryUnits = entry.lines.reduce((s, l) => s + l.qty, 0);
+                      return (
+                        <div
+                          key={entry.id}
+                          className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`rounded-lg px-2.5 py-1 font-mono text-xs font-bold ${
+                                  entry.kind === 'cuadre'
+                                    ? 'bg-amber-100 text-amber-900'
+                                    : 'bg-emerald-100 text-emerald-900'
+                                }`}
+                              >
+                                {code}
+                              </span>
+                              <div>
+                                <div className="text-sm font-bold text-slate-900">
+                                  {entry.note || 'Ingreso de inventario'}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  Día: {entryDayLabel} · Registrado: {fmtDateTime(entry.createdAt)}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-800">
+                                {entryUnits > 0 ? `+${entryUnits}` : entryUnits} uds
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => printStockEntryReport(state, entry)}
+                                className="btn-soft px-3 py-1.5 text-xs font-semibold"
+                              >
+                                🖨️ Imprimir
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      `¿Anular el registro ${code}? Se revertirán sus unidades en el inventario.`
+                                    )
+                                  ) {
+                                    voidStockEntry(entry.id);
+                                    toast(`Registro ${code} anulado`, 'ok');
+                                  }
+                                }}
+                                className="rounded-xl bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-100"
+                              >
+                                Anular
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
+                            {entry.lines.map((ln) => {
+                              const { colorId, size } = parseVKey(ln.key);
+                              const color = state.colors.find((c) => c.id === colorId);
+                              return (
+                                <span
+                                  key={`${entry.id}-${ln.key}`}
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs"
+                                >
+                                  <span
+                                    className="h-2.5 w-2.5 rounded-full border border-black/20"
+                                    style={{ backgroundColor: color?.hex || '#111' }}
+                                  />
+                                  <strong className="text-slate-900">
+                                    {color?.name || colorId} · {size}
+                                  </strong>
+                                  <span className="text-slate-500">
+                                    Había {ln.before}{' '}
+                                    <strong className="text-emerald-700">
+                                      {ln.qty >= 0 ? `+${ln.qty}` : ln.qty}
+                                    </strong>{' '}
+                                    → Quedó <strong>{ln.after}</strong>
+                                  </span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : view === 'estampadas' ? (
+        <div className="space-y-3">
           {readyMadeList.length === 0 ? (
             <Empty icon="👕" text="No hay prendas ya estampadas en stock" />
           ) : (
@@ -509,14 +960,14 @@ export default function Inventory() {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="rounded-lg bg-slate-900 px-2 py-0.5 text-xs font-black text-white">
-                            TALLA {r.size}
+                            {r.size}
                           </span>
                           <span className="text-sm font-black text-slate-900">
                             {r.brandName} · {r.colorName}
                           </span>
                         </div>
-                        <div className="mt-1 text-xs font-bold text-indigo-700">
-                          Diseño: {r.designName}
+                        <div className="mt-1 text-xs font-bold text-slate-700">
+                          {r.designName}
                         </div>
                         {r.notes && (
                           <div className="mt-0.5 text-[11px] text-slate-400">
@@ -528,7 +979,7 @@ export default function Inventory() {
                     <div className="text-right">
                       <div className="text-base font-black text-slate-900">{money(r.price)}</div>
                       <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-extrabold text-emerald-800">
-                        {r.qty} ud{r.qty > 1 ? 's' : ''} disponible
+                        {r.qty} ud{r.qty > 1 ? 's' : ''}
                       </span>
                     </div>
                   </div>
@@ -540,7 +991,7 @@ export default function Inventory() {
                         onClick={() => openEditReadyModal(r)}
                         className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
                       >
-                        ✏️ Editar
+                        Editar
                       </button>
                       <button
                         type="button"
@@ -551,7 +1002,7 @@ export default function Inventory() {
                         className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
                         title="Eliminar del inventario"
                       >
-                        🗑️ Borrar
+                        Borrar
                       </button>
                     </div>
                     <button
@@ -582,7 +1033,7 @@ export default function Inventory() {
                 setShowNewColor(true);
               }}
             >
-              + Agregar Color Ahora
+              + Color
             </button>
           </div>
         </div>
@@ -591,7 +1042,7 @@ export default function Inventory() {
           <table className="w-full border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-600">
-                <th className="sticky left-0 z-10 bg-slate-50 px-3 py-3">Marca · Color (Editable)</th>
+                <th className="sticky left-0 z-10 bg-slate-50 px-3 py-3">Color</th>
                 {visibleSizes.map((sz) => (
                   <th key={sz} className="px-2 py-3 text-center">
                     {sz}

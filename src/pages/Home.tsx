@@ -50,65 +50,42 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
         </button>
       </div>
 
-      {/* Accesos directos de Impresión de Pedidos del Día e Inventario */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {/* Accesos directos de Impresión y Catálogo */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <button
           type="button"
-          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-brand-400 hover:bg-brand-50/40"
+          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300"
           onClick={() => {
             if (todaysOrders.length === 0) {
-              return toast('Aún no hay pedidos registrados el día de hoy para imprimir', 'info');
+              return toast('Sin pedidos hoy para imprimir', 'info');
             }
             printDailyOrdersReport(todaysOrders, state.settings, `Pedidos de Hoy (${today})`);
           }}
         >
-          <div className="flex items-center gap-2.5">
-            <span className="text-xl">🖨️</span>
-            <div>
-              <div className="text-xs font-extrabold text-slate-900">
-                Imprimir Pedidos de Hoy ({todaysOrders.length})
-              </div>
-              <div className="text-[11px] text-slate-500">
-                Por talla, diseño, color, cliente, dirección y estado de pago
-              </div>
-            </div>
-          </div>
-          <span className="text-xs font-black text-brand-700">PDF / Imprimir →</span>
+          <span className="text-xs font-bold text-slate-900">
+            🖨️ Pedidos de Hoy ({todaysOrders.length})
+          </span>
+          <span className="text-xs font-bold text-slate-500">PDF →</span>
         </button>
 
         <button
           type="button"
-          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-brand-400 hover:bg-brand-50/40"
+          className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300"
           onClick={() => printInventoryReport(state)}
         >
-          <div className="flex items-center gap-2.5">
-            <span className="text-xl">📊</span>
-            <div>
-              <div className="text-xs font-extrabold text-slate-900">
-                Imprimir Inventario y Matriz
-              </div>
-              <div className="text-[11px] text-slate-500">
-                Existencias por marca, color, talla y alertas de stock (1–{lowThreshold} uds)
-              </div>
-            </div>
-          </div>
-          <span className="text-xs font-black text-brand-700">PDF / Imprimir →</span>
+          <span className="text-xs font-bold text-slate-900">🖨️ Imprimir Inventario</span>
+          <span className="text-xs font-bold text-slate-500">PDF →</span>
+        </button>
+
+        <button
+          type="button"
+          className="flex items-center justify-between rounded-2xl bg-slate-900 px-4 py-3 text-left text-white shadow-sm transition hover:bg-slate-800"
+          onClick={() => navigate('catalogo')}
+        >
+          <span className="text-xs font-bold">✨ Catálogo 3D</span>
+          <span className="text-xs font-bold text-slate-300">Abrir →</span>
         </button>
       </div>
-
-      <button
-        className="flex min-h-[54px] w-full items-center justify-between rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-900 to-slate-800 px-4 py-3 text-left text-white shadow-sm transition active:scale-[0.99]"
-        onClick={() => navigate('catalogo')}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">✨</span>
-          <div>
-            <div className="text-sm font-extrabold">Catálogo 3D Interactivo y Probador de Diseño</div>
-            <div className="text-xs text-sky-200">Elige colores permitidos, prueba logos en 3D y compártelo por WhatsApp</div>
-          </div>
-        </div>
-        <span className="text-lg font-bold">→</span>
-      </button>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Kpi label="Vendido Hoy" value={money(kpi.sold)} tone="text-emerald-700" />
@@ -148,14 +125,14 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
         <section>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="section-title mb-0">
-              ⚠️ Colores por Agotarse (1 a {lowThreshold} unidades · excluye en 0)
+              ⚠️ Stock Bajo (1–{lowThreshold} uds)
             </h2>
             <button
               type="button"
               onClick={() => printInventoryReport(state)}
               className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-extrabold text-amber-900 hover:bg-amber-100"
             >
-              🖨️ Imprimir Inventario
+              🖨️ Imprimir
             </button>
           </div>
           <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-amber-300 bg-white">

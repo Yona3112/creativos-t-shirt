@@ -2,6 +2,11 @@ import type { AppState, Brand, CartLine, Cents, Color, Order, Settings } from '.
 
 export const vkey = (brandId: string, colorId: string, size: string) => `${brandId}|${colorId}|${size}`;
 
+export const parseVKey = (key: string): { brandId: string; colorId: string; size: string } => {
+  const [brandId = '', colorId = '', size = ''] = key.split('|');
+  return { brandId, colorId, size };
+};
+
 export interface StockInfo {
   stock: Map<string, number>;
   /** variantes que alguna vez recibieron stock (compra / ajuste positivo) */

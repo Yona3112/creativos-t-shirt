@@ -106,8 +106,29 @@ export interface Movement {
   delta: number;
   reason: MovementReason;
   orderId?: string;
+  /** Ingreso o cuadre de inventario al que pertenece (no se compacta) */
+  entryId?: string;
   note?: string;
   at: number;
+}
+
+export interface StockEntryLine {
+  key: string;
+  /** Unidades que entraron (ingreso) o diferencia aplicada (cuadre) */
+  qty: number;
+  /** Existencia en sistema justo antes */
+  before: number;
+  /** Existencia que quedó después */
+  after: number;
+}
+
+/** Ingreso de mercadería o cuadre (conteo físico) registrado como lote aparte. */
+export interface StockEntry extends Entity {
+  folio: string;
+  kind: 'ingreso' | 'cuadre';
+  createdAt: number;
+  note: string;
+  lines: StockEntryLine[];
 }
 
 export interface Settings {
@@ -182,6 +203,7 @@ export interface AppState {
   movements: Movement[];
   catalogDesigns?: CatalogDesign[];
   readyMadeStock?: ReadyMadeShirt[];
+  stockEntries?: StockEntry[];
   /** dispositivo que hizo la última escritura y cuándo */
   _by?: string;
   _at?: number;

@@ -77,27 +77,26 @@ export default function Orders() {
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
-        {/* Barra de Impresión de Pedidos del Día (Talla, Diseño, Color, Cliente, Dirección, Estado de Pago) */}
+        {/* Barra de Impresión de Pedidos */}
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 p-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-extrabold text-slate-700">🖨️ Pedidos del Día:</span>
             <input
               type="date"
               className="input h-9 w-auto px-2.5 py-1 text-xs font-bold"
               value={printDate}
               onChange={(e) => setPrintDate(e.target.value || today)}
-              aria-label="Fecha para imprimir pedidos"
+              aria-label="Fecha"
             />
             <button
               type="button"
               onClick={() => setOnlySelectedDay((v) => !v)}
               className={`rounded-xl border px-2.5 py-1.5 text-xs font-bold transition ${
                 onlySelectedDay
-                  ? 'border-brand-700 bg-brand-700 text-white'
+                  ? 'border-slate-900 bg-slate-900 text-white'
                   : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
               }`}
             >
-              {onlySelectedDay ? `📅 Mostrando solo ${printDate}` : '📅 Filtrar pantalla por este día'}
+              {onlySelectedDay ? `Solo ${printDate}` : 'Filtrar por fecha'}
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -106,7 +105,7 @@ export default function Orders() {
               className="btn-primary px-3 py-2 text-xs"
               onClick={() => {
                 if (dayOrders.length === 0) {
-                  return toast(`No hay pedidos registrados el día ${printDate}`, 'info');
+                  return toast(`Sin pedidos el ${printDate}`, 'info');
                 }
                 printDailyOrdersReport(
                   dayOrders,
@@ -115,7 +114,7 @@ export default function Orders() {
                 );
               }}
             >
-              🖨️ Imprimir Pedidos del Día ({dayOrders.length})
+              🖨️ Imprimir Día ({dayOrders.length})
             </button>
             <button
               type="button"
@@ -125,11 +124,11 @@ export default function Orders() {
                 printDailyOrdersReport(
                   orders,
                   settings,
-                  `Listado de Pedidos Filtrados (${orders.length} pedidos)`
+                  `Pedidos (${orders.length})`
                 )
               }
             >
-              🖨️ Imprimir Lista Visible ({orders.length})
+              🖨️ Imprimir Lista ({orders.length})
             </button>
           </div>
         </div>

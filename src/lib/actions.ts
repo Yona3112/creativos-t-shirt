@@ -1,4 +1,4 @@
-import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer, Movement, MovementReason, Order, OrderStatus, ReadyMadeShirt, Settings, ShipTo } from './types';
+import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer, Movement, MovementReason, Order, OrderStatus, ReadyMadeShirt, Settings, ShipTo, StockEntry } from './types';
 import { getState, update } from './store';
 import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
@@ -22,7 +22,7 @@ export function setStockAbsolute(key: string, target: number, reason: MovementRe
     for (const m of s.movements) {
       if (m.key !== key) {
         otherMovements.push(m);
-      } else if (m.orderId) {
+      } else if (m.orderId || m.entryId) {
         orderSum += m.delta;
         otherMovements.push(m);
       }
@@ -39,6 +39,108 @@ export function setStockAbsolute(key: string, target: number, reason: MovementRe
     }
     return { ...s, movements: otherMovements };
   });
+}
+
+/* ------------------------- Ingresos y Cuadres -------------------------- */
+
+function nextEntryFolio(s: AppState, kind: StockEntry['kind']): string {
+  const prefix = kind === 'ingreso' ? 'ING' : 'CUA';
+  const n = (s.stockEntries || []).filter((e) => e.kind === kind).length + 1;
+  return `${prefix}-${String(n).padStart(4, '0')}`;
+}
+
+/**
+ * Registra un ingreso de mercadería como lote aparte (folio ING-0001).
+ * Guarda cuánto había antes de cada variante y cuánto quedó, para poder comparar y cuadrar.
+ */
+export function createStockEntry(lines: { key: string; qty: number }[], note = ''): StockEntry | null {
+  const clean = lines.filter((l) => l.key && Math.floor(l.qty) > 0).map((l) => ({ key: l.key, qty: Math.floor(l.qty) }));
+  if (!clean.length) return null;
+  let created: StockEntry | null = null;
+  update((s) => {
+    const { stock } = computeStock(s);
+    const t = now();
+    const id = uid();
+    const entry: StockEntry = {
+      id,
+      folio: nextEntryFolio(s, 'ingreso'),
+      kind: 'ingreso',
+      createdAt: t,
+      updatedAt: t,
+      note: note.trim(),
+      lines: clean.map((l) => {
+        const before = stock.get(l.key) || 0;
+        return { key: l.key, qty: l.qty, before, after: before + l.qty };
+      })
+    };
+    const movs: Movement[] = clean.map((l) => ({
+      id: `ent-${id}-${l.key}`,
+      key: l.key,
+      delta: l.qty,
+      reason: 'compra',
+      entryId: id,
+      note: entry.folio,
+      at: t
+    }));
+    created = entry;
+    return { ...s, movements: [...s.movements, ...movs], stockEntries: [...(s.stockEntries || []), entry] };
+  });
+  return created;
+}
+
+/**
+ * Cuadre de inventario: se ingresa lo contado físicamente y el sistema ajusta las diferencias.
+ * Queda guardado como lote CUA-0001 con lo que decía el sistema vs lo contado.
+ */
+export function createStockCount(counts: { key: string; counted: number }[], note = ''): StockEntry | null {
+  const clean = counts.filter((c) => c.key && Number.isFinite(c.counted) && c.counted >= 0);
+  if (!clean.length) return null;
+  let created: StockEntry | null = null;
+  update((s) => {
+    const { stock } = computeStock(s);
+    const t = now();
+    const id = uid();
+    const lines = clean.map((c) => {
+      const before = stock.get(c.key) || 0;
+      const after = Math.floor(c.counted);
+      return { key: c.key, qty: after - before, before, after };
+    });
+    const entry: StockEntry = {
+      id,
+      folio: nextEntryFolio(s, 'cuadre'),
+      kind: 'cuadre',
+      createdAt: t,
+      updatedAt: t,
+      note: note.trim(),
+      lines
+    };
+    const movs: Movement[] = lines
+      .filter((l) => l.qty !== 0)
+      .map((l) => ({
+        id: `ent-${id}-${l.key}`,
+        key: l.key,
+        delta: l.qty,
+        reason: 'ajuste',
+        entryId: id,
+        note: entry.folio,
+        at: t
+      }));
+    created = entry;
+    return { ...s, movements: [...s.movements, ...movs], stockEntries: [...(s.stockEntries || []), entry] };
+  });
+  return created;
+}
+
+/** Anula un ingreso/cuadre: sus unidades dejan de contar (se sincroniza a todos los dispositivos). */
+export function voidStockEntry(id: string): void {
+  const t = now();
+  update((s) => ({
+    ...s,
+    movements: s.movements.filter((m) => m.entryId !== id),
+    stockEntries: (s.stockEntries || []).map((e) =>
+      e.id === id ? { ...e, deleted: true, updatedAt: Math.max(t, e.updatedAt + 1) } : e
+    )
+  }));
 }
 
 export function addStock(key: string, delta: number): void {
