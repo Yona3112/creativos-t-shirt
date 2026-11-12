@@ -60,6 +60,13 @@ export interface OrderItem {
   colorName: string;
   colorHex: string;
   sku: string;
+  /** Diseño individual de este ítem (para pedidos con múltiples diseños) */
+  designId?: string | null;
+  designName?: string | null;
+  designCode?: string | null;
+  photoId?: string | null;
+  photoUrl?: string | null;
+  placement?: 'center' | 'pocket' | 'full' | 'back' | null;
 }
 
 export interface ShipTo {
@@ -225,6 +232,18 @@ export interface CartLine {
   qty: number;
   unitPrice: Cents;
   manualPrice: boolean;
+  /** Diseño individual para esta prenda */
+  designId?: string | null;
+  designName?: string | null;
+  designCode?: string | null;
+  photo?: string | null;
+  rawPhoto?: string | null;
+  photoId?: string | null;
+  placement?: 'center' | 'pocket' | 'full' | 'back' | null;
+  scale?: number;
+  offsetX?: number;
+  offsetY?: number;
+  workType?: string;
 }
 
 export type SyncStatus = 'local' | 'connecting' | 'live' | 'syncing' | 'offline' | 'error';

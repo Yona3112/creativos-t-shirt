@@ -537,30 +537,7 @@ function OrderCard({
         )}
         <ul className="flex-1 divide-y divide-slate-100 rounded-xl border border-slate-200">
           {order.items.map((it) => (
-            <li key={it.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <ColorDot hex={it.colorHex} size={18} />
-                <span className="font-semibold">
-                  {it.brandName} · {it.colorName} · {it.size}
-                </span>
-                {order.status !== 'cancelado' && (
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                      it.fromStock >= it.qty
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-amber-50 text-amber-700'
-                    }`}
-                  >
-                    {it.fromStock >= it.qty
-                      ? `✓ Stock descontado (${it.fromStock})`
-                      : `Stock: ${it.fromStock}/${it.qty} · Bajo pedido: ${it.qty - it.fromStock}`}
-                  </span>
-                )}
-              </div>
-              <span className="font-bold">
-                {it.qty} × {money(it.unitPrice)}
-              </span>
-            </li>
+            <OrderItemRow key={it.id} item={it} orderStatus={order.status} onZoom={onZoom} />
           ))}
         </ul>
       </div>
@@ -948,5 +925,62 @@ function EditOrderModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+function OrderItemRow({
+  item,
+  orderStatus,
+  onZoom
+}: {
+  item: Order['items'][number];
+  orderStatus: Order['status'];
+  onZoom: (src: string) => void;
+}) {
+  const photo = usePhoto(item.photoId);
+  const side = item.placement === 'back' ? 'Espalda' : item.placement ? 'Frente' : null;
+
+  return (
+    <li className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        {photo ? (
+          <button
+            type="button"
+            onClick={() => onZoom(photo)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded border border-black/10 bg-white p-0.5"
+            title="Ver diseño"
+          >
+            <img src={photo} alt={item.designName || 'Diseño'} className="h-full w-full object-contain" />
+          </button>
+        ) : (
+          <ColorDot hex={item.colorHex} size={18} />
+        )}
+        <span className="font-semibold text-slate-900">
+          {item.brandName} · {item.colorName} · {item.size}
+        </span>
+        {item.designName && (
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-700">
+            {item.designCode ? `[${item.designCode}] ` : ''}{item.designName}
+            {side && ` · ${side}`}
+          </span>
+        )}
+        {orderStatus !== 'cancelado' && (
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+              item.fromStock >= item.qty
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-amber-50 text-amber-700'
+            }`}
+          >
+            {item.fromStock >= item.qty
+              ? `✓ Stock (${item.fromStock})`
+              : `Stock: ${item.fromStock}/${item.qty} · Bajo pedido: ${item.qty - item.fromStock}`}
+          </span>
+        )}
+      </div>
+      <span className="font-bold text-slate-900">
+        {item.qty} × {money(item.unitPrice)}
+      </span>
+    </li>
   );
 }

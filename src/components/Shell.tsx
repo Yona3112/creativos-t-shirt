@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import type { Section, SyncStatus } from '../lib/types';
 import { useSyncStatus } from '../lib/store';
 import { chime, requestNotificationPermission } from '../lib/soundNotification';
@@ -109,109 +110,117 @@ export function Drawer({
   }, [open]);
 
   return (
-    <>
-      <div
-        className={`fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-[2px] transition-opacity duration-200 ${
-          open ? 'opacity-100' : 'pointer-events-none opacity-0'
-        }`}
-        onClick={onClose}
-      />
-      <nav
-        className={`fixed inset-y-0 left-0 z-50 flex w-[86%] max-w-[320px] flex-col bg-[#F5F5F7] shadow-2xl transition-transform duration-200 ease-out ${
-          open ? 'translate-x-0' : '-translate-x-full'
-        }`}
-        aria-label="Menú principal"
-      >
-        {/* Cabecera limpia estilo iOS / macOS */}
-        <div className="safe-top border-b border-slate-200/80 bg-white px-4 py-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-base font-bold text-white shadow-sm">
-                CG
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-bold tracking-tight text-slate-900">
-                  Creativos Gift Shop
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-[2px]"
+            onClick={onClose}
+          />
+          <motion.nav
+            initial={{ x: '-100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '-100%' }}
+            transition={{ type: 'spring', stiffness: 400, damping: 36 }}
+            className="fixed inset-y-0 left-0 z-50 flex w-[86%] max-w-[320px] flex-col bg-[#F5F5F7] shadow-2xl"
+            aria-label="Menú principal"
+          >
+            {/* Cabecera limpia estilo iOS / macOS */}
+            <div className="safe-top border-b border-slate-200/80 bg-white px-4 py-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-base font-bold text-white shadow-sm">
+                    CG
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold tracking-tight text-slate-900">
+                      Creativos Gift Shop
+                    </div>
+                    <div className="truncate text-[11px] font-medium text-slate-500">
+                      Panel de Control
+                    </div>
+                  </div>
                 </div>
-                <div className="truncate text-[11px] font-medium text-slate-500">
-                  Panel de Control
-                </div>
+                <button
+                  type="button"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-sm font-bold text-slate-600 transition hover:bg-slate-200"
+                  onClick={onClose}
+                  aria-label="Cerrar menú"
+                >
+                  ✕
+                </button>
               </div>
             </div>
-            <button
-              type="button"
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-sm font-bold text-slate-600 transition hover:bg-slate-200"
-              onClick={onClose}
-              aria-label="Cerrar menú"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
 
-        {/* Lista agrupada en tarjetas estilo Apple Settings */}
-        <div className="safe-bottom flex-1 space-y-4 overflow-y-auto px-3 py-4">
-          {GROUPS.map((g) => {
-            const items = SECTIONS.filter((s) => s.group === g.key);
-            return (
-              <div key={g.key} className="space-y-1.5">
-                <div className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  {g.title}
-                </div>
-                <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm divide-y divide-slate-100">
-                  {items.map((s) => {
-                    const active = section === s.id;
-                    const badge = badges[s.id];
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => onNavigate(s.id)}
-                        className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition ${
-                          active
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-white text-slate-800 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span
-                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-base ${
-                            active ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {s.icon}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-semibold leading-snug">
-                            {s.label}
-                          </div>
-                          <div
-                            className={`truncate text-[11px] ${
-                              active ? 'text-white/70' : 'text-slate-400'
-                            }`}
-                          >
-                            {s.subtitle}
-                          </div>
-                        </div>
-                        {!!badge && (
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+            {/* Lista agrupada en tarjetas estilo Apple Settings */}
+            <div className="safe-bottom flex-1 space-y-4 overflow-y-auto px-3 py-4">
+              {GROUPS.map((g) => {
+                const items = SECTIONS.filter((s) => s.group === g.key);
+                return (
+                  <div key={g.key} className="space-y-1.5">
+                    <div className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                      {g.title}
+                    </div>
+                    <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm divide-y divide-slate-100">
+                      {items.map((s) => {
+                        const active = section === s.id;
+                        const badge = badges[s.id];
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => onNavigate(s.id)}
+                            className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition ${
                               active
-                                ? 'bg-white text-slate-900'
-                                : 'bg-rose-500 text-white'
+                                ? 'bg-slate-900 text-white'
+                                : 'bg-white text-slate-800 hover:bg-slate-50'
                             }`}
                           >
-                            {badge}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </nav>
-    </>
+                            <span
+                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-base ${
+                                active ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-700'
+                              }`}
+                            >
+                              {s.icon}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-semibold leading-snug">
+                                {s.label}
+                              </div>
+                              <div
+                                className={`truncate text-[11px] ${
+                                  active ? 'text-white/70' : 'text-slate-400'
+                                }`}
+                              >
+                                {s.subtitle}
+                              </div>
+                            </div>
+                            {!!badge && (
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                                  active
+                                    ? 'bg-white text-slate-900'
+                                    : 'bg-rose-500 text-white'
+                                }`}
+                              >
+                                {badge}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.nav>
+        </>
+      )}
+    </AnimatePresence>
   );
 }

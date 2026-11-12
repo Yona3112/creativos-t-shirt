@@ -418,6 +418,12 @@ export function createOrder(input: NewOrderInput): Order {
       if (fromStock > 0) {
         movements.push({ id: `venta-${orderId}-${itemId}`, key, delta: -fromStock, reason: 'venta', orderId, at: t });
       }
+      const itemDesignId = l.designId || (l.photo ? input.designId : null) || null;
+      const itemDesignName = l.designName || (l.photo ? input.designName : null) || null;
+      const itemDesignCode = l.designCode || (l.photo ? input.designCode : null) || null;
+      const itemPhotoId = l.photoId || (l.photo ? input.photoId : null) || null;
+      const itemPlacement = l.placement || (l.photo ? input.placement : null) || null;
+
       return {
         id: itemId,
         brandId: l.brandId,
@@ -430,7 +436,13 @@ export function createOrder(input: NewOrderInput): Order {
         brandName: brand?.name || '',
         colorName: color?.name || '',
         colorHex: color?.hex || '#999999',
-        sku: skuOf(brand, color, l.size)
+        sku: skuOf(brand, color, l.size),
+        designId: itemDesignId,
+        designName: itemDesignName,
+        designCode: itemDesignCode,
+        photoId: itemPhotoId,
+        photoUrl: l.photo || null,
+        placement: itemPlacement
       };
     });
     const subtotal = items.reduce((sum, i) => sum + i.qty * i.unitPrice, 0);
@@ -442,6 +454,24 @@ export function createOrder(input: NewOrderInput): Order {
       phone: input.customer?.phone || '',
       address: addressText(addr ? { ...addr, recipient: '' } : undefined).replace(/^\n+/, '')
     };
+
+    const uniqueDesignNames = Array.from(
+      new Set(items.map((i) => i.designName?.trim()).filter((x): x is string => Boolean(x)))
+    );
+    const resolvedDesignName =
+      uniqueDesignNames.length > 0
+        ? uniqueDesignNames.join(' + ')
+        : input.photoId
+        ? input.designName?.trim() || 'Diseño personalizado'
+        : null;
+
+    const firstItemWithPhoto = items.find((i) => i.photoId);
+    const resolvedPhotoId = firstItemWithPhoto?.photoId || input.photoId || null;
+    const firstItemWithDesignId = items.find((i) => i.designId);
+    const resolvedDesignId = firstItemWithDesignId?.designId || input.designId || null;
+    const firstItemWithPlacement = items.find((i) => i.placement);
+    const resolvedPlacement = firstItemWithPlacement?.placement || input.placement || (input.photoId ? 'back' : null);
+
     created = {
       id: orderId,
       folio: nextFolio(s),
@@ -450,7 +480,7 @@ export function createOrder(input: NewOrderInput): Order {
       addressId: input.addressId,
       shipTo,
       workType: input.workType,
-      photoId: input.photoId,
+      photoId: resolvedPhotoId,
       items,
       subtotal,
       shipping: input.shipping,
@@ -466,10 +496,10 @@ export function createOrder(input: NewOrderInput): Order {
       createdAt: t,
       updatedAt: t,
       history: [{ status: input.status, at: t }],
-      designId: input.designId || null,
-      designName: input.photoId ? input.designName?.trim() || 'Diseño personalizado' : null,
-      designCode: input.photoId ? input.designCode?.trim() || null : null,
-      placement: input.photoId ? input.placement || 'back' : null,
+      designId: resolvedDesignId,
+      designName: resolvedDesignName,
+      designCode: input.designCode?.trim() || null,
+      placement: resolvedPlacement,
       guidePhotoId: null
     };
     return { ...s, orders: [...s.orders, created], movements: [...s.movements, ...movements] };

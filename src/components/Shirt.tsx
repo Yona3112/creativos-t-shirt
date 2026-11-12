@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { contrastText } from '../lib/inventory';
 import { WesternDesignModal } from './WesternDesignModal';
 
@@ -936,69 +937,77 @@ export function InteractiveShirt3D({
                 </div>
               </div>
 
-              {showPositionSliders && onDesignChange && (
-                <div className="mx-auto max-w-sm rounded-2xl bg-white/95 p-3 text-slate-900 shadow-md backdrop-blur-md">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-slate-700">
-                      Desliza para mover o ajustar el diseño
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onDesignChange({ offsetX: 0, offsetY: 0, scale: 2.0 })}
-                      className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
-                    >
-                      Centrar A3
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                    <div>
-                      <div className="flex justify-between text-[10px] font-medium text-slate-500">
-                        <span>↕ Altura</span>
-                        <span>{Math.round(designOffsetY)}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="-20"
-                        max="22"
-                        step="1"
-                        value={designOffsetY}
-                        onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
-                        className="w-full accent-slate-900"
-                      />
+              <AnimatePresence>
+                {showPositionSliders && onDesignChange && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, y: -6 }}
+                    animate={{ opacity: 1, height: 'auto', y: 0 }}
+                    exit={{ opacity: 0, height: 0, y: -6 }}
+                    transition={{ type: 'spring', stiffness: 420, damping: 30 }}
+                    className="mx-auto max-w-sm overflow-hidden rounded-2xl bg-white/95 p-3 text-slate-900 shadow-md backdrop-blur-md"
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-700">
+                        Desliza para mover o ajustar el diseño
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onDesignChange({ offsetX: 0, offsetY: 0, scale: 2.0 })}
+                        className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
+                      >
+                        Centrar A3
+                      </button>
                     </div>
-                    <div>
-                      <div className="flex justify-between text-[10px] font-medium text-slate-500">
-                        <span>↔ Lado</span>
-                        <span>{Math.round(designOffsetX)}</span>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <div>
+                        <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                          <span>↕ Altura</span>
+                          <span>{Math.round(designOffsetY)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="-20"
+                          max="22"
+                          step="1"
+                          value={designOffsetY}
+                          onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
+                          className="w-full accent-slate-900"
+                        />
                       </div>
-                      <input
-                        type="range"
-                        min="-20"
-                        max="20"
-                        step="1"
-                        value={designOffsetX}
-                        onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
-                        className="w-full accent-slate-900"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-[10px] font-medium text-slate-500">
-                        <span>⤢ Tamaño</span>
-                        <span>{Math.round(designScale * 100)}%</span>
+                      <div>
+                        <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                          <span>↔ Lado</span>
+                          <span>{Math.round(designOffsetX)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="-20"
+                          max="20"
+                          step="1"
+                          value={designOffsetX}
+                          onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
+                          className="w-full accent-slate-900"
+                        />
                       </div>
-                      <input
-                        type="range"
-                        min="1.0"
-                        max="2.2"
-                        step="0.05"
-                        value={designScale}
-                        onChange={(e) => onDesignChange({ scale: Number(e.target.value) })}
-                        className="w-full accent-slate-900"
-                      />
+                      <div>
+                        <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                          <span>⤢ Tamaño</span>
+                          <span>{Math.round(designScale * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1.0"
+                          max="2.2"
+                          step="0.05"
+                          value={designScale}
+                          onChange={(e) => onDesignChange({ scale: Number(e.target.value) })}
+                          className="w-full accent-slate-900"
+                        />
+                      </div>
                     </div>
-                  </div>
-                </div>
-              )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           )}
 
@@ -1171,9 +1180,12 @@ export function InteractiveShirt3D({
                 (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                 (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
               return (
-                <button
+                <motion.button
                   key={d.id}
                   type="button"
+                  whileHover={{ scale: 1.04, y: -2 }}
+                  whileTap={{ scale: 0.96 }}
+                  transition={{ type: 'spring', stiffness: 420, damping: 25 }}
                   onClick={() => {
                     setShowcaseActive(false);
                     if (isSelected && onClearDesign) {
@@ -1216,7 +1228,7 @@ export function InteractiveShirt3D({
                   >
                     {d.name}
                   </div>
-                </button>
+                </motion.button>
               );
             })}
           </div>
@@ -2308,6 +2320,8 @@ function WebGLShirtCanvas({
     baseRy: 0,
     smoothZoom: zoom,
     smoothScale: designScale,
+    smoothOffsetX: designOffsetX,
+    smoothOffsetY: designOffsetY,
     decalPop: 1,
     decalPopVel: 0,
     smoothR: initialRgb[0],
@@ -2315,7 +2329,8 @@ function WebGLShirtCanvas({
     smoothB: initialRgb[2],
     dragging: false,
     lastX: 0,
-    lastY: 0
+    lastY: 0,
+    lastTime: performance.now()
   });
 
   useEffect(() => {
@@ -2506,37 +2521,47 @@ function WebGLShirtCanvas({
       const st = stateRef.current;
       const r = rotRef.current;
 
-      // Interpolación suave de Zoom, Escala y resorte elástico del diseño (Spring Pop-in)
-      r.smoothZoom += (st.zoom - r.smoothZoom) * 0.14;
-      r.smoothScale += (st.designScale - r.smoothScale) * 0.18;
+      const dt = Math.min(0.05, Math.max(0.001, (now - r.lastTime) / 1000));
+      r.lastTime = now;
+      const damp = (cur: number, target: number, lambda: number) =>
+        cur + (target - cur) * (1 - Math.exp(-lambda * dt));
+
+      // Interpolación suave e independiente de FPS de Zoom, Escala y Posición del diseño
+      r.smoothZoom = damp(r.smoothZoom, st.zoom, 14);
+      r.smoothScale = damp(r.smoothScale, st.designScale, 18);
+      r.smoothOffsetX = damp(r.smoothOffsetX, st.designOffsetX, 22);
+      r.smoothOffsetY = damp(r.smoothOffsetY, st.designOffsetY, 22);
+
+      // Resorte elástico del diseño (Spring Pop-in tipo Apple)
       const springForce = (1.0 - r.decalPop) * 0.22;
       r.decalPopVel = (r.decalPopVel + springForce) * 0.76;
       r.decalPop = clamp(r.decalPop + r.decalPopVel, 0.35, 1.18);
 
       // Transición suave de color RGB sobre las fibras de algodón
       const [targetR, targetG, targetB] = hexToRgbNorm(st.hex);
-      r.smoothR += (targetR - r.smoothR) * 0.14;
-      r.smoothG += (targetG - r.smoothG) * 0.14;
-      r.smoothB += (targetB - r.smoothB) * 0.14;
+      r.smoothR = damp(r.smoothR, targetR, 12);
+      r.smoothG = damp(r.smoothG, targetG, 12);
+      r.smoothB = damp(r.smoothB, targetB, 12);
 
       if (!r.dragging) {
         if (st.autoMotion) {
           if (st.mode === 'orbit') {
             r.ry = (r.ry + 0.55) % 360;
           } else if (st.mode === 'walk') {
-            const target = r.baseRy + Math.sin(elapsed * 3.0) * 16;
-            r.ry += (target - r.ry) * 0.10 + r.vy;
-            r.rx += (4 + Math.abs(Math.cos(elapsed * 3.0)) * 4 - r.rx) * 0.10 + r.vx;
+            const target = r.baseRy + Math.sin(elapsed * 2.2) * 10;
+            r.ry = damp(r.ry, target, 10) + r.vy;
+            r.rx = damp(r.rx, 4 + Math.abs(Math.cos(elapsed * 2.2)) * 3, 10) + r.vx;
           } else {
-            const target = r.baseRy + Math.sin(elapsed * 1.1) * 19;
-            r.ry += (target - r.ry) * 0.09 + r.vy;
-            r.rx += (5 + Math.cos(elapsed * 0.8) * 3 - r.rx) * 0.09 + r.vx;
+            // Balanceo sutil y refinado estilo vitrina Apple
+            const target = r.baseRy + Math.sin(elapsed * 0.75) * 6.5;
+            r.ry = damp(r.ry, target, 9) + r.vy;
+            r.rx = damp(r.rx, 4.5 + Math.cos(elapsed * 0.6) * 2.2, 9) + r.vx;
           }
           r.vx *= 0.85;
           r.vy *= 0.85;
         } else {
           // Incluso con autoMotion en pausa, girar suavemente hacia Frente/Perfil/Espalda
-          r.ry += (r.baseRy - r.ry) * 0.12 + r.vy;
+          r.ry = damp(r.ry, r.baseRy, 14) + r.vy;
           r.rx = clamp(r.rx + r.vx, -28, 32);
           r.vx *= 0.88;
           r.vy *= 0.88;
@@ -2567,9 +2592,9 @@ function WebGLShirtCanvas({
         const zoomFocusY = r.smoothZoom > 1.05 ? -(r.smoothZoom - 1.0) * 0.14 : 0;
         const bounceY =
           st.autoMotion && st.mode === 'walk'
-            ? Math.abs(Math.sin(elapsed * 3.0)) * 0.03 - 0.015
+            ? Math.abs(Math.sin(elapsed * 2.2)) * 0.02 - 0.01
             : st.autoMotion
-            ? Math.sin(elapsed * 1.6) * 0.015
+            ? Math.sin(elapsed * 1.2) * 0.01
             : 0;
 
         const view = createMat4ModelView(r.rx, r.ry, camZ, bounceY + zoomFocusY);
@@ -2591,8 +2616,8 @@ function WebGLShirtCanvas({
         const rect = computeDecalRect3D(
           st.placement,
           effectiveScale,
-          st.designOffsetX,
-          st.designOffsetY,
+          r.smoothOffsetX,
+          r.smoothOffsetY,
           st.decalAspect
         );
         gl.uniform4f(uDecalRect, rect[0], rect[1], rect[2], rect[3]);

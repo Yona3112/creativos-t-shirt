@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { centsToInput, toCents } from '../lib/money';
 import { getPhoto } from '../lib/db';
 import { usePhotoVersion } from '../lib/store';
@@ -30,16 +31,22 @@ export function Toasts() {
   );
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[80] flex flex-col items-center gap-2 px-4">
-      {list.map((t) => (
-        <div
-          key={t.id}
-          className={`pointer-events-auto max-w-md rounded-xl px-4 py-3 text-center text-sm font-semibold text-white shadow-lg ${
-            t.kind === 'error' ? 'bg-red-600' : t.kind === 'info' ? 'bg-slate-800' : 'bg-emerald-600'
-          }`}
-        >
-          {t.text}
-        </div>
-      ))}
+      <AnimatePresence>
+        {list.map((t) => (
+          <motion.div
+            key={t.id}
+            initial={{ opacity: 0, y: 16, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+            className={`pointer-events-auto max-w-md rounded-2xl px-4 py-3 text-center text-sm font-semibold text-white shadow-xl backdrop-blur-md ${
+              t.kind === 'error' ? 'bg-red-600/95' : t.kind === 'info' ? 'bg-slate-900/95' : 'bg-emerald-600/95'
+            }`}
+          >
+            {t.text}
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }
@@ -69,23 +76,38 @@ export function Modal({
       document.body.style.overflow = '';
     };
   }, [open, onClose]);
-  if (!open) return null;
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 sm:items-center" onClick={onClose}>
-      <div
-        className="flex max-h-[92vh] w-full max-w-lg flex-col rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2">
-          <h2 className="text-lg font-bold">{title}</h2>
-          <button className="btn-icon text-slate-500" onClick={onClose} aria-label="Cerrar">
-            ✕
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4">{children}</div>
-        {footer && <div className="safe-bottom border-t border-slate-100 px-4 pt-3">{footer}</div>}
-      </div>
-    </div>
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 16 }}
+            transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+            className="flex max-h-[92vh] w-full max-w-lg flex-col rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl"
+            onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2">
+              <h2 className="text-lg font-bold">{title}</h2>
+              <button className="btn-icon text-slate-500" onClick={onClose} aria-label="Cerrar">
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">{children}</div>
+            {footer && <div className="safe-bottom border-t border-slate-100 px-4 pt-3">{footer}</div>}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

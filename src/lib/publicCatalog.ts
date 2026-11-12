@@ -53,6 +53,25 @@ export interface SharedCatalogPayload {
   publishedAt?: number;
 }
 
+export interface CustomerWebOrderItem {
+  id: string;
+  brandId?: string;
+  brandName: string;
+  colorId?: string;
+  colorName: string;
+  colorHex: string;
+  size: string;
+  qty: number;
+  unitPrice: number;
+  designId?: string | null;
+  designName?: string | null;
+  designCode?: string | null;
+  photoId?: string | null;
+  designThumb?: string | null;
+  placement?: DecalPlacement;
+  scale?: number;
+}
+
 export interface CustomerWebOrderPayload {
   id: string;
   createdAt: number;
@@ -76,6 +95,8 @@ export interface CustomerWebOrderPayload {
   campaign?: string | null;
   placement: DecalPlacement;
   scale: number;
+  /** Múltiples prendas con sus respectivos diseños cuando el cliente pide más de 1 */
+  items?: CustomerWebOrderItem[];
 }
 
 export const LIVE_CATALOG_KEY = 'cat_live';
@@ -187,6 +208,37 @@ export function sanitizeWebOrder(raw: unknown): CustomerWebOrderPayload | null {
   const rawThumb = typeof o.designThumb === 'string' && o.designThumb.startsWith('data:image/')
     ? o.designThumb.slice(0, 350_000)
     : null;
+  const rawItems = Array.isArray(o.items)
+    ? o.items.map((it: unknown) => {
+        if (!it || typeof it !== 'object') return null;
+        const i = it as Record<string, unknown>;
+        const iPlacement = (['center', 'pocket', 'full', 'back'] as const).includes(i.placement as DecalPlacement)
+          ? (i.placement as DecalPlacement)
+          : placement;
+        const iThumb = typeof i.designThumb === 'string' && i.designThumb.startsWith('data:image/')
+          ? i.designThumb.slice(0, 350_000)
+          : null;
+        return {
+          id: str(i.id, 40) || String(Math.random()),
+          brandId: str(i.brandId, 60) || undefined,
+          brandName: str(i.brandName, 60),
+          colorId: str(i.colorId, 80) || undefined,
+          colorName: str(i.colorName, 60),
+          colorHex: /^#[0-9A-Fa-f]{6}$/.test(str(i.colorHex, 7)) ? str(i.colorHex, 7) : '#999999',
+          size: str(i.size, 8) || 'M',
+          qty: Math.round(num(i.qty, 1, 500, 1)),
+          unitPrice: Math.round(num(i.unitPrice, 0, 10_000_000, 0)),
+          designId: str(i.designId, 60) || null,
+          designName: str(i.designName, 60) || null,
+          designCode: str(i.designCode, 20) || null,
+          photoId: str(i.photoId, 60) || null,
+          designThumb: iThumb,
+          placement: iPlacement,
+          scale: num(i.scale, 0.3, 4, 2.0)
+        } as CustomerWebOrderItem;
+      }).filter((x): x is CustomerWebOrderItem => Boolean(x))
+    : undefined;
+
   return {
     id,
     createdAt: num(o.createdAt, 0, Date.now() + 86400000, Date.now()),
@@ -208,6 +260,7 @@ export function sanitizeWebOrder(raw: unknown): CustomerWebOrderPayload | null {
     designThumb: rawThumb,
     campaign: str(o.campaign, 40) || null,
     placement,
-    scale: num(o.scale, 0.3, 4, 2.0)
+    scale: num(o.scale, 0.3, 4, 2.0),
+    items: rawItems && rawItems.length > 0 ? rawItems : undefined
   };
 }

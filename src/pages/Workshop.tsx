@@ -149,19 +149,12 @@ function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) =
 
       <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/60">
         {order.items.map((it) => (
-          <li key={it.id} className="flex items-center justify-between gap-2 px-3 py-2.5">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <ColorDot hex={it.colorHex} size={24} />
-              <div className="min-w-0">
-                <div className="truncate font-bold text-slate-900">
-                  {it.brandName} · {it.colorName}
-                </div>
-              </div>
-            </div>
-            <span className="shrink-0 rounded-lg bg-white px-3 py-1 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
-              {it.size} × {it.qty}
-            </span>
-          </li>
+          <WorkshopItemRow
+            key={it.id}
+            item={it}
+            fallbackPhotoId={order.items.length === 1 ? order.photoId : null}
+            onZoom={onZoom}
+          />
         ))}
       </ul>
 
@@ -169,5 +162,62 @@ function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) =
         ✅ Terminado en Taller → Pasar a Envío
       </button>
     </article>
+  );
+}
+
+function WorkshopItemRow({
+  item,
+  fallbackPhotoId,
+  onZoom
+}: {
+  item: Order['items'][number];
+  fallbackPhotoId: string | null;
+  onZoom: (src: string) => void;
+}) {
+  const photo = usePhoto(item.photoId || fallbackPhotoId);
+  const side = item.placement === 'back' ? 'Espalda' : item.placement ? 'Frente' : null;
+
+  return (
+    <li className="flex items-center justify-between gap-2.5 px-3 py-2.5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        {photo ? (
+          <button
+            type="button"
+            onClick={() => onZoom(photo)}
+            className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/15 bg-white p-0.5 shadow-sm"
+            title="Ver diseño"
+          >
+            <img src={photo} alt={item.designName || 'Diseño'} className="h-full w-full object-contain" />
+          </button>
+        ) : (
+          <ColorDot hex={item.colorHex} size={24} />
+        )}
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <ColorDot hex={item.colorHex} size={14} />
+            <span className="truncate font-bold text-slate-900">
+              {item.brandName} · {item.colorName}
+            </span>
+          </div>
+          {item.designName ? (
+            <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs">
+              <span className="font-semibold text-slate-700">
+                {item.designCode ? `[${item.designCode}] ` : ''}{item.designName}
+              </span>
+              {side && (
+                <span className="rounded bg-slate-200/80 px-1.5 py-0.2 text-[10px] font-bold text-slate-700">
+                  📍 {side}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="text-[11px] font-medium text-slate-500">👕 Lisa</div>
+          )}
+        </div>
+      </div>
+      <span className="shrink-0 rounded-lg bg-white px-3 py-1 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
+        {item.size} × {item.qty}
+      </span>
+    </li>
   );
 }

@@ -151,22 +151,66 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     if (!brand || !color) return toast('Elige marca y color', 'error');
     if (qty < 1) return;
     const isManual = manualPrice !== null;
+    const curDesignId = draft.photo ? draft.designId || null : null;
+    const curDesignName = draft.photo ? draft.designName || 'Diseño personalizado' : null;
+    const curDesignCode = draft.photo ? draft.designCode || null : null;
+    const curPlacement = draft.photo ? draft.placement || 'back' : null;
+    const curPhoto = draft.photo || null;
+    const curRawPhoto = draft.rawPhoto || null;
+    const curScale = draft.designScale || 2.0;
+    const curOffsetX = draft.designOffsetX || 0;
+    const curOffsetY = draft.designOffsetY || 0;
+
     setDraft((d) => {
+      // Para saber si ya existe esta misma línea en el carrito:
+      // Debe coincidir prenda (marca, color, talla, precio) Y el diseño (designId, designName y ubicación)
       const idx = d.lines.findIndex(
         (l) =>
           l.brandId === brand.id &&
           l.colorId === color.id &&
           l.size === size &&
           l.manualPrice === isManual &&
-          (!isManual || l.unitPrice === unitPrice)
+          (!isManual || l.unitPrice === unitPrice) &&
+          (l.designId || null) === curDesignId &&
+          (l.designName || null) === curDesignName &&
+          (l.placement || null) === curPlacement
       );
       const next = [...d.lines];
-      if (idx >= 0) next[idx] = { ...next[idx], qty: next[idx].qty + qty };
-      else next.push({ id: uid(), brandId: brand.id, colorId: color.id, size, qty, unitPrice, manualPrice: isManual });
+      if (idx >= 0) {
+        // Mismo diseño y misma prenda: sumamos unidades a esa línea existente
+        next[idx] = { ...next[idx], qty: next[idx].qty + qty };
+      } else {
+        // Diseño diferente o prenda diferente: se agrega como línea individual
+        next.push({
+          id: uid(),
+          brandId: brand.id,
+          colorId: color.id,
+          size,
+          qty,
+          unitPrice,
+          manualPrice: isManual,
+          designId: curDesignId,
+          designName: curDesignName,
+          designCode: curDesignCode,
+          photo: curPhoto,
+          rawPhoto: curRawPhoto,
+          placement: curPlacement,
+          scale: curScale,
+          offsetX: curOffsetX,
+          offsetY: curOffsetY,
+          workType: draft.workType
+        });
+      }
       return { ...d, lines: next };
     });
     const st = stock.get(vkey(brand.id, color.id, size)) || 0;
-    toast(st >= qty ? `+${qty} ${brand.code} ${color.name} ${size}` : `+${qty} ${color.name} ${size} · bajo pedido`, st >= qty ? 'ok' : 'info');
+    const designLabel = curDesignName ? ` · ${curDesignName}` : ' · Lisa';
+    toast(
+      st >= qty
+        ? `+${qty} ${brand.code} ${color.name} ${size}${designLabel}`
+        : `+${qty} ${color.name} ${size}${designLabel} (Bajo pedido)`,
+      st >= qty ? 'ok' : 'info'
+    );
     setQty(1);
     setManualPrice(null);
   };
@@ -270,38 +314,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     async (webOrder: CustomerWebOrderPayload) => {
       setImportingWebOrder(true);
       try {
-        const matchedBrand =
-          state.brands.find((b) => !b.deleted && b.id === webOrder.brandId) ||
-          state.brands.find((b) => !b.deleted && b.name.toLowerCase() === (webOrder.brandName || '').toLowerCase()) ||
-          brands[0];
-
-        const brandCols = matchedBrand ? brandColors(state, matchedBrand.id) : colors;
-        const matchedColor =
-          brandCols.find((c) => c.id === webOrder.colorId) ||
-          brandCols.find((c) => c.name.toLowerCase() === (webOrder.colorName || '').toLowerCase()) ||
-          brandCols[0];
-
-        if (matchedBrand) setBrandId(matchedBrand.id);
-        if (matchedColor) setColorId(matchedColor.id);
-        if (webOrder.size) setSize(webOrder.size);
-
-        let loadedPhoto: string | null = null;
-        if (webOrder.photoId) {
-          loadedPhoto = await fetchSharedPhoto(webOrder.photoId);
-        }
-        if (!loadedPhoto && webOrder.designThumb) {
-          loadedPhoto = webOrder.designThumb;
-        }
-
-        const isBack = (webOrder.placement || 'back') === 'back';
-        const sideExplicit = isBack
-          ? 'ESPALDA (Parte de Atrás de la Camisa)'
-          : 'FRENTE (Pecho Delantero de la Camisa)';
-        const matchedWorkType =
-          settings.workTypes.find((w) =>
-            isBack ? w.toLowerCase().includes('espalda') : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
-          ) || settings.workTypes[0] || 'DTF Frontal';
-
         const cleanPhone = (webOrder.customerPhone || '').replace(/\D/g, '');
         const existingCustomer = cleanPhone
           ? state.customers.find((c) => !c.deleted && c.phone.replace(/\D/g, '').endsWith(cleanPhone.slice(-8)))
@@ -324,43 +336,122 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           });
         }
 
-        const newLine: CartLine | null =
-          matchedBrand && matchedColor
-            ? {
+        const rawItems = webOrder.items && webOrder.items.length > 0
+          ? webOrder.items
+          : [
+              {
                 id: uid(),
-                brandId: matchedBrand.id,
-                colorId: matchedColor.id,
-                size: webOrder.size || 'M',
-                qty: Math.max(1, webOrder.qty || 1),
-                unitPrice: webOrder.unitPrice || tierPrice(settings, matchedBrand, webOrder.qty || 1),
-                manualPrice: false
+                brandId: webOrder.brandId,
+                brandName: webOrder.brandName,
+                colorId: webOrder.colorId,
+                colorName: webOrder.colorName,
+                colorHex: webOrder.colorHex,
+                size: webOrder.size,
+                qty: webOrder.qty,
+                unitPrice: webOrder.unitPrice,
+                designId: webOrder.designId,
+                designName: webOrder.designName,
+                designCode: webOrder.designCode,
+                photoId: webOrder.photoId,
+                designThumb: webOrder.designThumb,
+                placement: webOrder.placement,
+                scale: webOrder.scale
               }
-            : null;
+            ];
 
-        const codeTag = webOrder.designCode ? `[${webOrder.designCode}] ` : '';
+        const importedLines: CartLine[] = [];
+        let firstLoadedPhoto: string | null = null;
+        let firstPlacement: DecalPlacement = webOrder.placement || 'back';
+        let firstDesignId: string | null = webOrder.designId || null;
+        let firstDesignName: string | null = webOrder.designName || null;
+        let firstDesignCode: string | null = webOrder.designCode || null;
+
+        for (const it of rawItems) {
+          const matchedB =
+            state.brands.find((b) => !b.deleted && b.id === it.brandId) ||
+            state.brands.find((b) => !b.deleted && b.name.toLowerCase() === (it.brandName || '').toLowerCase()) ||
+            brands[0];
+
+          const bCols = matchedB ? brandColors(state, matchedB.id) : colors;
+          const matchedC =
+            bCols.find((c) => c.id === it.colorId) ||
+            bCols.find((c) => c.name.toLowerCase() === (it.colorName || '').toLowerCase()) ||
+            bCols[0];
+
+          let itemPhoto: string | null = null;
+          if (it.photoId) {
+            itemPhoto = await fetchSharedPhoto(it.photoId);
+          }
+          if (!itemPhoto && it.designThumb) {
+            itemPhoto = it.designThumb;
+          }
+          if (!firstLoadedPhoto && itemPhoto) {
+            firstLoadedPhoto = itemPhoto;
+            firstPlacement = it.placement || 'back';
+            firstDesignId = it.designId || null;
+            firstDesignName = it.designName || null;
+            firstDesignCode = it.designCode || null;
+          }
+
+          if (matchedB && matchedC) {
+            importedLines.push({
+              id: uid(),
+              brandId: matchedB.id,
+              colorId: matchedC.id,
+              size: it.size || 'M',
+              qty: Math.max(1, it.qty || 1),
+              unitPrice: it.unitPrice || tierPrice(settings, matchedB, it.qty || 1),
+              manualPrice: false,
+              designId: it.designId || null,
+              designName: it.designName || null,
+              designCode: it.designCode || null,
+              photoId: it.photoId || null,
+              photo: itemPhoto,
+              rawPhoto: itemPhoto,
+              placement: it.placement || 'back',
+              scale: it.scale || 2.0,
+              offsetX: 0,
+              offsetY: 0
+            });
+          }
+        }
+
+        const isBack = firstPlacement === 'back';
+        const sideExplicit = isBack ? 'Espalda' : 'Frente';
+        const matchedWorkType =
+          settings.workTypes.find((w) =>
+            isBack
+              ? w.toLowerCase().includes('espalda')
+              : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+          ) || settings.workTypes[0] || 'DTF Frontal';
+
         const noteParts = [
-          webOrder.designName
-            ? `Diseño: ${codeTag}${webOrder.designName} · Ubicación: ${sideExplicit}`
-            : `Camisa lisa (sin diseño estampado)`,
-          webOrder.customerAddress ? `Nota/Dirección cliente: ${webOrder.customerAddress}` : ''
+          webOrder.customerAddress ? `Nota/Dirección cliente: ${webOrder.customerAddress}` : '',
+          importedLines.length > 1
+            ? `Pedido de ${importedLines.length} prendas con diseños variados desde la Tienda 3D`
+            : firstDesignName
+            ? `Diseño: ${firstDesignCode ? `[${firstDesignCode}] ` : ''}${firstDesignName} (${sideExplicit})`
+            : 'Camisa lisa'
         ].filter(Boolean);
 
         setDraft((prev) => ({
           ...prev,
-          lines: newLine ? [newLine] : prev.lines,
-          photo: loadedPhoto,
-          rawPhoto: loadedPhoto,
+          lines: importedLines.length > 0 ? importedLines : prev.lines,
+          photo: firstLoadedPhoto,
+          rawPhoto: firstLoadedPhoto,
           removeBg: false,
-          placement: webOrder.placement || 'back',
-          designScale: webOrder.scale || 2.0,
+          placement: firstPlacement,
+          designScale: 2.0,
           designOffsetX: 0,
           designOffsetY: 0,
-          designId: webOrder.designId || null,
-          designName: webOrder.designName || null,
-          designCode: webOrder.designCode || null,
+          designId: firstDesignId,
+          designName: firstDesignName,
+          designCode: firstDesignCode,
           workType: matchedWorkType,
           customerId: existingCustomer ? existingCustomer.id : null,
-          addressId: existingCustomer ? (existingCustomer.addresses.find((a) => a.isDefault) || existingCustomer.addresses[0])?.id || null : null,
+          addressId: existingCustomer
+            ? (existingCustomer.addresses.find((a) => a.isDefault) || existingCustomer.addresses[0])?.id || null
+            : null,
           notes: noteParts.join(' | ')
         }));
 
@@ -370,7 +461,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           /* ignorar */
         }
         setLatestWebOrder(null);
-        toast(`✅ Pedido de ${webOrder.customerName || 'Cliente'} (${sideExplicit}) cargado automáticamente`);
+        toast(`✅ Pedido de ${webOrder.customerName || 'Cliente'} (${importedLines.length} prendas) cargado`);
       } catch (e) {
         toast((e as Error).message || 'No se pudo cargar el pedido web', 'error');
       } finally {
@@ -441,18 +532,41 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       addressId = cust.addresses[0]?.id || null;
     }
     if (cust && !addressId) addressId = cust.addresses.find((a) => a.isDefault)?.id || cust.addresses[0]?.id || null;
-    let photoId: string | null = null;
+
+    let mainPhotoId: string | null = null;
     if (draft.photo) {
-      photoId = uid();
-      await savePhoto(photoId, draft.photo, 0);
-      notifyPhotos();
+      mainPhotoId = uid();
+      await savePhoto(mainPhotoId, draft.photo, 0);
     }
-    const sideNote = draft.photo
-      ? `[UBICACIÓN DISEÑO: ${(draft.placement || 'back') === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}]`
-      : '';
-    const finalNotes = [sideNote, draft.notes.trim()].filter(Boolean).join(' · ');
+
+    // Persistir las fotos de cada línea individual si el pedido contiene múltiples diseños
+    const linesWithPhotos: CartLine[] = [];
+    for (const l of lines) {
+      let lPhotoId = l.photoId || null;
+      if (l.photo && !lPhotoId) {
+        lPhotoId = uid();
+        await savePhoto(lPhotoId, l.photo, 0);
+      }
+      linesWithPhotos.push({
+        ...l,
+        photoId: lPhotoId || (l.photo ? mainPhotoId : null)
+      });
+    }
+    notifyPhotos();
+
+    const orderDesignNames = Array.from(
+      new Set(linesWithPhotos.map((l) => l.designName?.trim()).filter((x): x is string => Boolean(x)))
+    );
+    const designSummary =
+      orderDesignNames.length > 0
+        ? `[DISEÑOS: ${orderDesignNames.join(' + ')}]`
+        : draft.photo
+        ? `[DISEÑO: ${draft.designName || 'Personalizado'}]`
+        : '';
+    const finalNotes = [designSummary, draft.notes.trim()].filter(Boolean).join(' · ');
+
     const order = createOrder({
-      lines,
+      lines: linesWithPhotos,
       customer: cust,
       addressId,
       shipping,
@@ -460,12 +574,12 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       paymentMethod: draft.paymentMethod,
       workType: draft.workType,
       notes: finalNotes,
-      photoId,
+      photoId: linesWithPhotos.find((l) => l.photoId)?.photoId || mainPhotoId,
       status,
-      designId: draft.photo ? draft.designId || null : null,
-      designName: draft.photo ? draft.designName || 'Diseño personalizado' : null,
-      designCode: draft.photo ? draft.designCode || 'CUSTOM' : null,
-      placement: draft.photo ? draft.placement || 'back' : null
+      designId: linesWithPhotos.find((l) => l.designId)?.designId || draft.designId || null,
+      designName: orderDesignNames.length > 0 ? orderDesignNames.join(' + ') : draft.designName || null,
+      designCode: draft.designCode || null,
+      placement: linesWithPhotos.find((l) => l.placement)?.placement || draft.placement || 'back'
     });
     const keep = { paymentMethod: draft.paymentMethod, workType: draft.workType };
     setDraft({ ...emptyDraft(), ...keep });
@@ -872,26 +986,81 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         {lines.length === 0 ? (
           <p className="py-4 text-center text-slate-400">🛒 Vacío</p>
         ) : (
-          <ul className="space-y-2">
+          <ul className="space-y-2.5">
             {lines.map((l) => {
               const b = state.brands.find((x) => x.id === l.brandId);
               const c = state.colors.find((x) => x.id === l.colorId);
               const st = stock.get(vkey(l.brandId, l.colorId, l.size)) || 0;
+              const hasLineDesign = Boolean(l.photo || l.designName);
+              const sideLabel = l.placement === 'back' ? 'Espalda' : 'Frente';
+
               return (
-                <li key={l.id} className="rounded-xl border border-slate-200 p-3">
-                  <div className="flex items-center gap-2">
-                    <ColorDot hex={c?.hex || '#999'} size={22} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-bold">
-                        {b?.name} · {c?.name} · {l.size}
+                <li key={l.id} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                  <div className="flex items-start gap-2.5">
+                    {/* Miniatura del diseño de esta prenda */}
+                    {l.photo ? (
+                      <button
+                        type="button"
+                        onClick={() => l.photo && setViewer(l.photo)}
+                        title="Ver diseño completo"
+                        className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-black/10 p-1 shadow-sm"
+                        style={{ backgroundColor: c?.hex || '#111827' }}
+                      >
+                        <img src={l.photo} alt={l.designName || 'Diseño'} className="h-full w-full object-contain" />
+                        <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[8px] font-bold text-white text-center">
+                          {sideLabel}
+                        </span>
+                      </button>
+                    ) : (
+                      <div
+                        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-black/10 text-xs font-bold text-slate-700 shadow-sm"
+                        style={{ backgroundColor: c?.hex || '#F1F5F9' }}
+                      >
+                        <span className="drop-shadow-sm">👕</span>
                       </div>
-                      {st < l.qty && <div className="text-xs font-semibold text-amber-600">Bajo pedido: {l.qty - Math.min(st, l.qty)}</div>}
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <ColorDot hex={c?.hex || '#999'} size={14} />
+                        <span className="truncate font-extrabold text-slate-900">
+                          {b?.name} · {c?.name} · Talla {l.size}
+                        </span>
+                      </div>
+
+                      {hasLineDesign ? (
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs">
+                          <span className="font-semibold text-slate-800">
+                            {l.designCode ? `[${l.designCode}] ` : ''}{l.designName || 'Diseño estampado'}
+                          </span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-bold text-slate-600">
+                            📍 {sideLabel}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="mt-0.5 text-xs font-medium text-slate-500">
+                          👕 Camisa Lisa (Sin diseño)
+                        </div>
+                      )}
+
+                      {st < l.qty && (
+                        <div className="mt-0.5 text-[11px] font-semibold text-amber-600">
+                          Bajo pedido: {l.qty - Math.min(st, l.qty)}
+                        </div>
+                      )}
                     </div>
-                    <button className="btn-icon h-10 w-10 text-lg text-red-500" onClick={() => removeLine(l.id)} aria-label="Quitar">
+
+                    <button
+                      className="btn-icon h-9 w-9 text-base text-rose-500 hover:bg-rose-50 rounded-xl"
+                      onClick={() => removeLine(l.id)}
+                      aria-label="Quitar prenda"
+                      title="Quitar prenda"
+                    >
                       🗑
                     </button>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
+
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
                     <Stepper size="sm" value={l.qty} min={1} onCommit={(n) => updateLine(l.id, { qty: n })} ariaLabel="Cantidad" />
                     <div className="flex min-w-[130px] flex-1 items-center gap-1">
                       <MoneyInput
@@ -901,13 +1070,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                         onChange={(cents) => cents !== null && updateLine(l.id, { unitPrice: cents, manualPrice: true })}
                       />
                       {l.manualPrice && (
-                        <button className="btn-icon h-12 w-10 text-base text-slate-500" onClick={() => updateLine(l.id, { manualPrice: false })} title="Precio automático">
+                        <button className="btn-icon h-10 w-9 text-base text-slate-500" onClick={() => updateLine(l.id, { manualPrice: false })} title="Precio automático">
                           ↺
                         </button>
                       )}
                     </div>
+                    <div className="text-right text-sm font-extrabold text-slate-900">{money(l.qty * l.unitPrice)}</div>
                   </div>
-                  <div className="mt-1 text-right text-sm font-bold">{money(l.qty * l.unitPrice)}</div>
                 </li>
               );
             })}
