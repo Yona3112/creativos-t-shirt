@@ -646,8 +646,8 @@ export function InteractiveShirt3D({
   activeCatalogDesignId?: string | null;
   onSelectCatalogDesign?: (design: CatalogQuickDesign) => void;
   isStoreOwner?: boolean;
-  onSaveCurrentToCatalog?: () => void;
-  onUploadCatalogFiles?: (files: FileList) => void;
+  onSaveCurrentToCatalog?: (chosenCampaign?: string) => void;
+  onUploadCatalogFiles?: (files: FileList | File[], chosenCampaign?: string) => void;
   onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
   onDeleteCatalogDesign?: (designId: string) => void;
   onRenameCatalogDesign?: (designId: string, name: string, code: string) => void;
@@ -670,6 +670,18 @@ export function InteractiveShirt3D({
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
   const [isWesternModalOpen, setIsWesternModalOpen] = useState(false);
+  const [uploadModalState, setUploadModalState] = useState<
+    { mode: 'files'; files: File[] } | { mode: 'current' } | null
+  >(null);
+  const [uploadTargetCampaign, setUploadTargetCampaign] = useState<string>(
+    activeCampaign && activeCampaign !== 'all' ? activeCampaign : 'Ranchero'
+  );
+
+  useEffect(() => {
+    if (activeCampaign && activeCampaign !== 'all') {
+      setUploadTargetCampaign(activeCampaign);
+    }
+  }, [activeCampaign]);
 
   const handleApplyWesternDesign = (dataUrl: string, name: string, targetPlacement: 'back' | 'center') => {
     onSelectCatalogDesign?.({
@@ -723,6 +735,19 @@ export function InteractiveShirt3D({
     const isBackSide = placement === 'back';
     return (
       <div className="relative select-none space-y-4">
+        {onUploadFile && (
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/png,image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onUploadFile(f);
+              e.target.value = '';
+            }}
+          />
+        )}
         {/* ESCENARIO 3D ESTILO APPLE STUDIO */}
         <div
           className={`relative overflow-hidden rounded-[28px] p-4 shadow-xl transition-colors duration-500 sm:p-6 ${themeStyle.stageClass}`}
@@ -874,8 +899,7 @@ export function InteractiveShirt3D({
         </div>
 
         {/* GALERÍA DE DISEÑOS MINIMALISTA */}
-        {catalogDesigns && catalogDesigns.length > 0 && (
-          <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+        <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-1.5">
                 <h3 className="text-sm font-semibold tracking-tight text-slate-900">Diseño</h3>
@@ -909,7 +933,16 @@ export function InteractiveShirt3D({
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {onUploadFile && (
+                  <button
+                    type="button"
+                    onClick={() => uploadInputRef.current?.click()}
+                    className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
+                  >
+                    + Subir archivo A3
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setIsWesternModalOpen(true)}
@@ -980,7 +1013,6 @@ export function InteractiveShirt3D({
               })}
             </div>
           </div>
-        )}
 
         <WesternDesignModal
           isOpen={isWesternModalOpen}
@@ -1002,7 +1034,15 @@ export function InteractiveShirt3D({
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) onUploadFile(f);
+            if (f) {
+              onUploadFile(f);
+              if (onUploadCatalogFiles && campaigns && campaigns.length > 0) {
+                setUploadTargetCampaign(
+                  activeCampaign && activeCampaign !== 'all' ? activeCampaign : campaigns[0]
+                );
+                setUploadModalState({ mode: 'files', files: [f] });
+              }
+            }
             e.target.value = '';
           }}
         />
@@ -1460,7 +1500,15 @@ export function InteractiveShirt3D({
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  onUploadCatalogFiles(e.target.files);
+                  const filesArr = Array.from(e.target.files);
+                  if (campaigns && campaigns.length > 0) {
+                    setUploadTargetCampaign(
+                      activeCampaign && activeCampaign !== 'all' ? activeCampaign : campaigns[0]
+                    );
+                    setUploadModalState({ mode: 'files', files: filesArr });
+                  } else {
+                    onUploadCatalogFiles(filesArr);
+                  }
                 }
                 e.target.value = '';
               }}
@@ -1517,7 +1565,16 @@ export function InteractiveShirt3D({
                 {designUrl && onSaveCurrentToCatalog && (
                   <button
                     type="button"
-                    onClick={onSaveCurrentToCatalog}
+                    onClick={() => {
+                      if (campaigns && campaigns.length > 0) {
+                        setUploadTargetCampaign(
+                          activeCampaign && activeCampaign !== 'all' ? activeCampaign : campaigns[0]
+                        );
+                        setUploadModalState({ mode: 'current' });
+                      } else {
+                        onSaveCurrentToCatalog();
+                      }
+                    }}
                     className="rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
                   >
                     + Guardar actual
@@ -1671,6 +1728,114 @@ export function InteractiveShirt3D({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {uploadModalState && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          onClick={() => setUploadModalState(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-[28px] border border-slate-200 bg-white p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold tracking-tight text-slate-900">
+                  Elegir Campaña del Diseño
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {uploadModalState.mode === 'files'
+                    ? `${uploadModalState.files.length} archivo(s) seleccionado(s) · Visible al cliente de inmediato`
+                    : 'Guardar diseño actual en el catálogo y hacerlo visible al cliente'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUploadModalState(null)}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600 hover:bg-slate-200"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-slate-700">
+                ¿En qué campaña quieres publicar este diseño?
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(campaigns || ['Ranchero', 'Turístico', 'Cristiana']).map((camp) => {
+                  const sel = uploadTargetCampaign.toLowerCase() === camp.toLowerCase();
+                  return (
+                    <button
+                      key={camp}
+                      type="button"
+                      onClick={() => setUploadTargetCampaign(camp)}
+                      className={`rounded-full px-3.5 py-2 text-xs font-semibold transition ${
+                        sel
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      {camp}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setUploadTargetCampaign('all')}
+                  className={`rounded-full px-3.5 py-2 text-xs font-semibold transition ${
+                    uploadTargetCampaign === 'all'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  Todas (General)
+                </button>
+                {onAddCampaign && (
+                  <button
+                    type="button"
+                    onClick={onAddCampaign}
+                    className="rounded-full border border-dashed border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 hover:border-slate-500 hover:text-slate-900"
+                  >
+                    + Nueva campaña
+                  </button>
+                )}
+              </div>
+
+              <div className="rounded-2xl bg-emerald-50/80 px-3.5 py-2.5 text-xs font-medium text-emerald-900">
+                ✓ El diseño se publicará como <b>Visible al cliente</b> en la campaña{' '}
+                <b>{uploadTargetCampaign === 'all' ? 'General (Todas)' : uploadTargetCampaign}</b>.
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setUploadModalState(null)}
+                  className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const camp = uploadTargetCampaign;
+                    const st = uploadModalState;
+                    setUploadModalState(null);
+                    if (st.mode === 'files') {
+                      onUploadCatalogFiles?.(st.files, camp);
+                    } else {
+                      onSaveCurrentToCatalog?.(camp);
+                    }
+                  }}
+                  className="rounded-full bg-slate-900 px-5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                >
+                  Subir y Hacer Visible
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

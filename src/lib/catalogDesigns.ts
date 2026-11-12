@@ -136,8 +136,10 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     name?: string;
     code?: string;
     campaign?: string;
+    clientVisible?: boolean;
     placement?: DecalPlacement;
     existingPhotoId?: string | null;
+    skipPrompt?: boolean;
   }) => {
     const pId = opts.existingPhotoId || uid();
     MEM_PHOTO_CACHE.set(pId, opts.dataUrl);
@@ -148,23 +150,34 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     const count = (state.catalogDesigns || []).filter((x) => !x.deleted).length + 1;
     const defaultName = opts.name?.trim() || `Diseño #${count}`;
     const defaultCode = opts.code?.trim().toUpperCase() || `D-${String(count).padStart(3, '0')}`;
-    const promptedName = window.prompt('Nombre del diseño (para identificar en pedidos y reportes):', defaultName);
-    const finalName = promptedName !== null && promptedName.trim() ? promptedName.trim() : defaultName;
-    const promptedCode = window.prompt('Código del diseño (ej. D-001, TORO-01):', defaultCode);
-    const finalCode = promptedCode !== null && promptedCode.trim() ? promptedCode.trim().toUpperCase() : defaultCode;
+    let finalName = defaultName;
+    let finalCode = defaultCode;
+    if (!opts.skipPrompt && !opts.name) {
+      const promptedName = window.prompt('Nombre del diseño (para identificar en pedidos y reportes):', defaultName);
+      if (promptedName !== null && promptedName.trim()) finalName = promptedName.trim();
+      const promptedCode = window.prompt('Código del diseño (ej. D-001, TORO-01):', defaultCode);
+      if (promptedCode !== null && promptedCode.trim()) finalCode = promptedCode.trim().toUpperCase();
+    }
     return addCatalogDesign({
       name: finalName,
       code: finalCode,
       campaign: opts.campaign && opts.campaign !== 'all' ? opts.campaign : undefined,
       photoId: pId,
-      clientVisible: true,
+      clientVisible: opts.clientVisible ?? true,
       placement: opts.placement || 'back'
     });
   };
 
   const uploadFilesToCatalog = async (
     files: FileList | File[],
-    opts?: { removeBg?: boolean; tolerance?: number; placement?: DecalPlacement; campaign?: string }
+    opts?: {
+      removeBg?: boolean;
+      tolerance?: number;
+      placement?: DecalPlacement;
+      campaign?: string;
+      clientVisible?: boolean;
+      customName?: string;
+    }
   ): Promise<number> => {
     const list = Array.from(files);
     if (!list.length) return 0;
@@ -184,11 +197,17 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
 
       const cleanFileName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
       const count = (state.catalogDesigns || []).filter((x) => !x.deleted).length + added + 1;
+      const itemName =
+        list.length === 1 && opts?.customName?.trim()
+          ? opts.customName.trim()
+          : cleanFileName
+          ? cleanFileName.slice(0, 28)
+          : `Diseño #${count}`;
       addCatalogDesign({
-        name: cleanFileName ? cleanFileName.slice(0, 24) : `Diseño #${count}`,
+        name: itemName,
         campaign: opts?.campaign && opts.campaign !== 'all' ? opts.campaign : undefined,
         photoId: pId,
-        clientVisible: true,
+        clientVisible: opts?.clientVisible ?? true,
         placement: opts?.placement || 'back'
       });
       added++;

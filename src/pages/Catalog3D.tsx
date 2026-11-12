@@ -568,28 +568,43 @@ export default function Catalog3D() {
             renameDesign(id, name, code);
             toast('Nombre y código del diseño actualizados');
           }}
-          onSaveCurrentToCatalog={() => {
+          onSaveCurrentToCatalog={(chosenCampaign) => {
             if (!designUrl) return;
+            const targetCamp = chosenCampaign || activeCampaign;
             void saveCurrentToCatalog({
               dataUrl: designUrl,
               placement,
-              campaign: activeCampaign,
+              campaign: targetCamp,
               existingPhotoId: photoId
             }).then((saved) => {
               setActiveCatalogDesignId(saved.id);
-              toast(`"${saved.name}" guardado en el catálogo`);
+              toast(
+                `Diseño "${saved.name}" publicado en ${
+                  targetCamp === 'all' ? 'Todas las campañas' : targetCamp
+                } y visible al cliente`
+              );
+              setTimeout(() => void syncLiveCatalogSnapshot(), 150);
             });
           }}
-          onUploadCatalogFiles={(files) => {
+          onUploadCatalogFiles={(files, chosenCampaign) => {
+            const targetCamp = chosenCampaign || activeCampaign;
             setProcessingMsg('Procesando diseños (JPG → PNG transparente)...');
             void uploadFilesToCatalog(files, {
               removeBg,
               tolerance: bgTolerance,
               placement,
-              campaign: activeCampaign
+              campaign: targetCamp,
+              clientVisible: true
             })
               .then((n) => {
-                if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
+                if (n > 0) {
+                  toast(
+                    `${n} diseño(s) publicado(s) en ${
+                      targetCamp === 'all' ? 'Todas las campañas' : targetCamp
+                    } y visible(s) al cliente`
+                  );
+                  setTimeout(() => void syncLiveCatalogSnapshot(), 150);
+                }
               })
               .finally(() => setProcessingMsg(null));
           }}
@@ -600,6 +615,7 @@ export default function Catalog3D() {
                 ? 'Diseño habilitado para que el cliente lo vea'
                 : 'Diseño oculto para el cliente'
             );
+            setTimeout(() => void syncLiveCatalogSnapshot(), 150);
           }}
           onDeleteCatalogDesign={(id) => {
             deleteDesign(id);
@@ -1261,6 +1277,28 @@ export function CustomerCatalogView({
             setSelectedDesignName(null);
             setSelectedDesignCode(null);
             setSelectedDesignPhotoId(null);
+          }}
+          onUploadFile={async (file) => {
+            try {
+              const autoJpg = isJpgFile(file);
+              const raw = await compressImage(file, 1400, 0.92, false);
+              const processed = autoJpg ? await applyBackgroundRemoval(raw, true, 34) : raw;
+              const customPid = `photo_client_${uid()}`;
+              const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
+              setPriceTier('350');
+              setDesignUrl(processed);
+              setActiveCatalogDesignId(null);
+              setSelectedDesignName(cleanName ? `Archivo A3: ${cleanName.slice(0, 24)}` : 'Archivo personalizado A3');
+              setSelectedDesignCode('CLIENTE-A3');
+              setSelectedDesignPhotoId(customPid);
+              setPlacement('back');
+              setScale(2.0);
+              setOffsetX(0);
+              setOffsetY(0);
+              toast('Tu diseño personalizado A3 se aplicó a la camisa');
+            } catch (e) {
+              toast((e as Error).message, 'error');
+            }
           }}
           boutiqueTheme={boutiqueTheme}
           colorOptions={payload.colors.map((c) => {

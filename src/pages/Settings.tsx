@@ -2,159 +2,47 @@ import { useRef, useState } from 'react';
 import type { AppState } from '../lib/types';
 import { firebaseEngine, getState, replaceState, useAppState, useStock } from '../lib/store';
 import { purgeGarbageData, updateSettings } from '../lib/actions';
-import { firebasePairingLink } from '../lib/sync';
-import { getFirebaseConfig, saveFirebaseConfig, type FirebaseConfig } from '../lib/firebaseSync';
 import { activeBrands, brandColors, skuOf, vkey } from '../lib/inventory';
-import { copyText, downloadText, toCSV } from '../lib/csv';
-import { authenticateBoxful, getBoxfulConfig, saveBoxfulConfig, type BoxfulConfig } from '../lib/boxful';
+import { downloadText, toCSV } from '../lib/csv';
 import { dayKey } from '../lib/time';
 import { MoneyInput, toast } from '../components/ui';
+
+const DEFAULT_CAMPAIGNS = ['Ranchero', 'Turístico', 'Cristiana'];
 
 export default function SettingsPage() {
   const state = useAppState();
   const { stock } = useStock();
   const { settings } = state;
 
-  // Firebase Cloud State
-  const initialFb = getFirebaseConfig();
-  const [fbApiKey, setFbApiKey] = useState(initialFb?.apiKey || '');
-  const [fbAuthDomain, setFbAuthDomain] = useState(initialFb?.authDomain || '');
-  const [fbProjectId, setFbProjectId] = useState(initialFb?.projectId || '');
-  const [fbStorageBucket, setFbStorageBucket] = useState(initialFb?.storageBucket || '');
-  const [fbMessagingSenderId, setFbMessagingSenderId] = useState(initialFb?.messagingSenderId || '');
-  const [fbAppId, setFbAppId] = useState(initialFb?.appId || '');
-  const [fbJsonInput, setFbJsonInput] = useState('');
-  const [testingFb, setTestingFb] = useState(false);
+  const campaigns =
+    settings.campaigns && settings.campaigns.length > 0
+      ? settings.campaigns
+      : DEFAULT_CAMPAIGNS;
 
-  const parseFirebaseSnippet = (text: string) => {
-    try {
-      // Intentar JSON directo
-      const parsed = JSON.parse(text);
-      if (parsed.projectId || parsed.apiKey) {
-        if (parsed.apiKey) setFbApiKey(parsed.apiKey);
-        if (parsed.authDomain) setFbAuthDomain(parsed.authDomain);
-        if (parsed.projectId) setFbProjectId(parsed.projectId);
-        if (parsed.storageBucket) setFbStorageBucket(parsed.storageBucket);
-        if (parsed.messagingSenderId) setFbMessagingSenderId(parsed.messagingSenderId);
-        if (parsed.appId) setFbAppId(parsed.appId);
-        toast('Configuración de Firebase detectada');
-        return;
-      }
-    } catch {
-      // Parsear formato JS (const firebaseConfig = { apiKey: "..." })
-    }
-
-    const extract = (key: string) => {
-      const match = text.match(new RegExp(`${key}["']?\\s*:\\s*["']([^"']+)["']`));
-      return match ? match[1] : '';
-    };
-
-    const kApiKey = extract('apiKey');
-    const kAuthDomain = extract('authDomain');
-    const kProjectId = extract('projectId');
-    const kStorageBucket = extract('storageBucket');
-    const kSenderId = extract('messagingSenderId');
-    const kAppId = extract('appId');
-
-    if (kApiKey || kProjectId) {
-      if (kApiKey) setFbApiKey(kApiKey);
-      if (kAuthDomain) setFbAuthDomain(kAuthDomain);
-      if (kProjectId) setFbProjectId(kProjectId);
-      if (kStorageBucket) setFbStorageBucket(kStorageBucket);
-      if (kSenderId) setFbMessagingSenderId(kSenderId);
-      if (kAppId) setFbAppId(kAppId);
-      toast('Configuración de Firebase extraída');
-    } else {
-      toast('No se reconocieron las claves de Firebase en el texto pegado', 'error');
-    }
-  };
-
-  const connectFirebase = async () => {
-    const cfg: FirebaseConfig = {
-      apiKey: fbApiKey.trim(),
-      authDomain: fbAuthDomain.trim(),
-      projectId: fbProjectId.trim(),
-      storageBucket: fbStorageBucket.trim(),
-      messagingSenderId: fbMessagingSenderId.trim(),
-      appId: fbAppId.trim(),
-    };
-    if (!cfg.apiKey || !cfg.projectId) {
-      return toast('Ingresa al menos apiKey y projectId de Firebase', 'error');
-    }
-    setTestingFb(true);
-    const err = await firebaseEngine.testConnection(cfg);
-    setTestingFb(false);
-    if (err) return toast(`Error Firebase: ${err}`, 'error');
-
-    saveFirebaseConfig(cfg);
-    await firebaseEngine.start(cfg);
-    toast('🔥 Conectado en vivo a Google Firebase Firestore');
-  };
-
-  const disconnectFirebase = async () => {
-    saveFirebaseConfig(null);
-    await firebaseEngine.stop();
-    toast('Firebase desconectado. Modo local activado', 'info');
-  };
-
-  const copyFirebasePairing = async () => {
-    const cfg: FirebaseConfig = {
-      apiKey: fbApiKey.trim(),
-      authDomain: fbAuthDomain.trim(),
-      projectId: fbProjectId.trim(),
-      storageBucket: fbStorageBucket.trim(),
-      messagingSenderId: fbMessagingSenderId.trim(),
-      appId: fbAppId.trim(),
-    };
-    if (!cfg.apiKey || !cfg.projectId) return toast('Guarda primero la conexión a Firebase', 'error');
-    const link = firebasePairingLink(cfg);
-    await copyText(link);
-    toast('Enlace copiado para conectar el Taller vía Firebase');
-  };
-
-  const initialBoxful = getBoxfulConfig();
-  const [bxEnv, setBxEnv] = useState<'prod' | 'dev'>(initialBoxful?.env || 'prod');
-  const [bxEmail, setBxEmail] = useState(initialBoxful?.email || '');
-  const [bxPass, setBxPass] = useState('');
-  const [bxToken, setBxToken] = useState(initialBoxful?.accessToken || '');
-  const [bxCourier, setBxCourier] = useState(initialBoxful?.courierId || '');
-  const [testingBoxful, setTestingBoxful] = useState(false);
-
+  const [newCampaign, setNewCampaign] = useState('');
   const [newSize, setNewSize] = useState('');
   const [newCarrier, setNewCarrier] = useState('');
   const [newPaymentMethod, setNewPaymentMethod] = useState('');
-  const [newWorkType, setNewWorkType] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleSaveBoxful = async () => {
-    const cfg: BoxfulConfig = {
-      env: bxEnv,
-      email: bxEmail.trim(),
-      password: bxPass.trim() || undefined,
-      accessToken: bxToken.trim() || undefined,
-      courierId: bxCourier.trim() || undefined
-    };
-    if (!cfg.email && !cfg.accessToken) {
-      saveBoxfulConfig(null);
-      return toast('Credenciales de Boxful eliminadas de este dispositivo', 'info');
+  const addCampaign = () => {
+    const clean = newCampaign.trim();
+    if (!clean) return;
+    if (campaigns.some((c) => c.toLowerCase() === clean.toLowerCase())) {
+      return toast('Esa campaña ya existe', 'error');
     }
-    setTestingBoxful(true);
-    try {
-      if (cfg.email && cfg.password) {
-        const token = await authenticateBoxful(cfg);
-        setBxToken(token);
-        setBxPass('');
-        toast('📦 Conectado a Boxful API correctamente (Token guardado localmente)');
-      } else {
-        saveBoxfulConfig(cfg);
-        toast('📦 Configuración de Boxful guardada en este dispositivo');
-      }
-    } catch (e) {
-      saveBoxfulConfig(cfg);
-      toast((e as Error).message, 'error');
-    } finally {
-      setTestingBoxful(false);
-    }
+    updateSettings({ campaigns: [...campaigns, clean] });
+    setNewCampaign('');
+    toast(`Campaña "${clean}" agregada`);
+  };
+
+  const removeCampaign = (camp: string) => {
+    if (campaigns.length <= 1) return;
+    const next = campaigns.filter((c) => c !== camp);
+    updateSettings({
+      campaigns: next,
+      ...(settings.activeCampaign === camp ? { activeCampaign: 'all' } : {})
+    });
   };
 
   const addSize = () => {
@@ -177,11 +65,21 @@ export default function SettingsPage() {
     if (settings.carriers.includes(c)) return toast('Ese transportista ya existe', 'error');
     updateSettings({ carriers: [...settings.carriers, c] });
     setNewCarrier('');
+    toast(`Transportista "${c}" agregado`);
+  };
+
+  const addPaymentMethod = () => {
+    const v = newPaymentMethod.trim();
+    if (!v) return;
+    if (settings.paymentMethods.includes(v)) return toast('Ya existe ese método de pago', 'error');
+    updateSettings({ paymentMethods: [...settings.paymentMethods, v] });
+    setNewPaymentMethod('');
+    toast(`Método "${v}" agregado`);
   };
 
   const exportJson = () => {
     const json = JSON.stringify(getState(), null, 2);
-    downloadText(`respaldo-camisas-gift-${dayKey()}.json`, json, 'application/json');
+    downloadText(`respaldo-creativos-gift-${dayKey()}.json`, json, 'application/json');
     toast('Respaldo JSON descargado');
   };
 
@@ -220,156 +118,37 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="space-y-4 pb-6">
-      {/* Conexión en Vivo a Google Firebase */}
-      <section className="card space-y-3 border-2 border-amber-300 bg-gradient-to-b from-amber-50/50 to-white">
+    <div className="space-y-4 pb-8">
+      {/* 1. Datos de la Tienda y Precios */}
+      <section className="space-y-4 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">🔥</span>
-            <div>
-              <h2 className="section-title mb-0">Google Firebase (Recomendado)</h2>
-              <p className="text-xs text-slate-500">Sincronización en tiempo real sin límites de cobro ni banners de Netlify</p>
-            </div>
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900">Tienda y Precios</h2>
+            <p className="text-xs text-slate-500">
+              Información principal visible en el catálogo y recibos
+            </p>
           </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-extrabold ${firebaseEngine.connected ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
-            {firebaseEngine.connected ? 'CONECTADO A FIREBASE' : 'NO CONECTADO'}
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+              firebaseEngine.connected
+                ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                firebaseEngine.connected ? 'bg-emerald-500' : 'bg-slate-400'
+              }`}
+            />
+            {firebaseEngine.connected ? 'Nube en vivo' : 'Modo local'}
           </span>
         </div>
 
-        {/* Pegado Rápido */}
-        <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-3">
-          <label className="text-xs font-bold text-amber-900 block mb-1">
-            ⚡ Pegado Rápido (Copia el bloque 'firebaseConfig' desde Firebase Console)
-          </label>
-          <div className="flex gap-2">
-            <textarea
-              className="input font-mono text-xs flex-1 h-14 resize-none"
-              placeholder={`const firebaseConfig = {\n  apiKey: "AIzaSy...",\n  projectId: "tu-proyecto",\n  ...\n};`}
-              value={fbJsonInput}
-              onChange={(e) => setFbJsonInput(e.target.value)}
-            />
-            <button
-              type="button"
-              className="btn-soft shrink-0 self-center text-xs py-2 px-3 font-bold"
-              onClick={() => {
-                if (!fbJsonInput.trim()) return toast('Pega primero el código en el recuadro', 'error');
-                parseFirebaseSnippet(fbJsonInput);
-              }}
-            >
-              Autocompletar
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <div>
-            <label className="label text-xs">Project ID</label>
-            <input
-              className="input font-mono text-xs"
-              placeholder="mi-tienda-firebase"
-              value={fbProjectId}
-              onChange={(e) => setFbProjectId(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label text-xs">API Key</label>
-            <input
-              className="input font-mono text-xs"
-              placeholder="AIzaSy..."
-              value={fbApiKey}
-              onChange={(e) => setFbApiKey(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label text-xs">Auth Domain (opcional)</label>
-            <input
-              className="input font-mono text-xs"
-              placeholder="mi-tienda.firebaseapp.com"
-              value={fbAuthDomain}
-              onChange={(e) => setFbAuthDomain(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label text-xs">Storage Bucket (opcional)</label>
-            <input
-              className="input font-mono text-xs"
-              placeholder="mi-tienda.appspot.com"
-              value={fbStorageBucket}
-              onChange={(e) => setFbStorageBucket(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 pt-1">
-          <button className="btn-primary bg-amber-600 hover:bg-amber-700" onClick={connectFirebase} disabled={testingFb}>
-            {testingFb ? 'Probando Firebase...' : '🔥 Conectar y Sincronizar'}
-          </button>
-          <button className="btn-soft" onClick={copyFirebasePairing}>
-            🔗 Copiar Enlace Taller (Firebase)
-          </button>
-        </div>
-
-        {firebaseEngine.connected && (
-          <button className="btn-ghost w-full text-xs text-rose-600 font-semibold" onClick={disconnectFirebase}>
-            Desconectar de Firebase
-          </button>
-        )}
-      </section>
-
-      {/* Limpieza y Optimización de Datos Basura y Redundantes */}
-      <section className="card space-y-3 border border-emerald-200 bg-gradient-to-b from-emerald-50/40 to-white">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="section-title mb-0 text-emerald-950">🧹 Optimización y Limpieza de Datos</h2>
-            <p className="text-xs text-slate-600">
-              Elimina diseños huérfanos sin foto, marcas vacías, registros borrados y compacta el historial de movimientos (+1/-1) conservando intacto el stock actual.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn-primary bg-emerald-700 hover:bg-emerald-800 px-4 py-2 text-xs font-extrabold"
-            onClick={() => {
-              const res = purgeGarbageData();
-              const totalRemoved = res.removedBrands + res.removedColors + res.removedDesigns + res.compactedMovements;
-              if (totalRemoved > 0) {
-                toast(
-                  `🧹 Limpieza completada: ${res.removedDesigns} diseños basura, ${res.removedBrands} marcas vacías, ${res.removedColors} colores y ${res.compactedMovements} movimientos redundantes eliminados`,
-                  'ok'
-                );
-              } else {
-                toast('✨ La base de datos ya está limpia y optimizada', 'ok');
-              }
-            }}
-          >
-            🧹 Depurar Datos Basura Ahora
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-            <div className="text-[11px] font-bold uppercase text-slate-400">Marcas Activas</div>
-            <div className="text-base font-black text-slate-900">{state.brands.filter((b) => !b.deleted).length}</div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-            <div className="text-[11px] font-bold uppercase text-slate-400">Colores Activos</div>
-            <div className="text-base font-black text-slate-900">{state.colors.filter((c) => !c.deleted).length}</div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-            <div className="text-[11px] font-bold uppercase text-slate-400">Diseños Catálogo</div>
-            <div className="text-base font-black text-slate-900">{(state.catalogDesigns || []).filter((d) => !d.deleted).length}</div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-            <div className="text-[11px] font-bold uppercase text-slate-400">Movimientos Stock</div>
-            <div className="text-base font-black text-slate-900">{state.movements.length}</div>
-          </div>
-        </div>
-      </section>
-
-      {/* Tienda y Precios */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">Tienda</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
-            <label className="label">Nombre de la tienda</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Nombre de la tienda
+            </label>
             <input
               className="input"
               value={settings.storeName}
@@ -377,7 +156,9 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="label">Teléfono</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Teléfono / WhatsApp
+            </label>
             <input
               className="input"
               value={settings.storePhone}
@@ -386,7 +167,7 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="label">Dirección</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Dirección</label>
             <input
               className="input"
               value={settings.storeAddress}
@@ -394,7 +175,9 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="label">Ciudad / Departamento</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Ciudad / Departamento
+            </label>
             <input
               className="input"
               value={settings.storeCity}
@@ -403,33 +186,39 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-4">
           <div>
-            <label className="label">Precio Camisa Lisa (L)</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Precio Base (L)
+            </label>
             <MoneyInput
               value={settings.priceNormal}
               onChange={(c) => c !== null && updateSettings({ priceNormal: c })}
             />
-            <p className="mt-1 text-[11px] text-slate-500">Camisa sin estampado (ej. L 300)</p>
+            <p className="mt-1 text-[11px] text-slate-400">Sin diseño (ej. L 300.00)</p>
           </div>
           <div>
-            <label className="label">Precio Personalizada A3 (L)</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Precio con Diseño (L)
+            </label>
             <MoneyInput
               value={settings.priceCustom || 35000}
               onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
             />
-            <p className="mt-1 text-[11px] text-slate-500">Con diseño en Pecho o Espalda (ej. L 350)</p>
+            <p className="mt-1 text-[11px] text-slate-400">Con diseño A3/A4 (ej. L 350.00)</p>
           </div>
           <div>
-            <label className="label">Envío (L)</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Envío (L)</label>
             <MoneyInput
               value={settings.shipping}
               onChange={(c) => c !== null && updateSettings({ shipping: c })}
             />
-            <p className="mt-1 text-[11px] text-slate-500">Tarifa estándar de entrega</p>
+            <p className="mt-1 text-[11px] text-slate-400">Tarifa estándar</p>
           </div>
           <div>
-            <label className="label">Alerta Stock Bajo (Uds)</label>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Alerta Stock Bajo
+            </label>
             <input
               type="number"
               min={1}
@@ -441,106 +230,124 @@ export default function SettingsPage() {
                 updateSettings({ lowStock: n });
               }}
             />
-            <p className="mt-1 text-[11px] text-slate-500">
-              Notifica de 1 a {settings.lowStock || 10} uds (los que están en 0 no)
+            <p className="mt-1 text-[11px] text-slate-400">
+              De 1 a {settings.lowStock || 10} uds (0 no notifica)
             </p>
           </div>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
-          ℹ️ Precios unificados a nivel general: <strong>L 300 lisa</strong> y <strong>L 350 personalizada</strong>. El descuento automático por volumen (+12 uds) está desactivado.
-        </div>
       </section>
 
-      {/* Tallas */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">Tallas Activas</h2>
-        <div className="flex flex-wrap gap-2">
-          {settings.sizes.map((sz) => (
-            <span
-              key={sz}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 font-extrabold"
-            >
-              {sz}
-              {settings.sizes.length > 1 && (
-                <button
-                  type="button"
-                  className="text-slate-400 hover:text-red-600"
-                  onClick={() => removeSize(sz)}
-                  aria-label={`Quitar ${sz}`}
-                >
-                  ✕
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-        <div className="flex gap-2">
-          <input
-            className="input flex-1"
-            placeholder="Nueva talla (ej. 3XL, 4XL, Niño M)"
-            value={newSize}
-            onChange={(e) => setNewSize(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addSize()}
-          />
-          <button className="btn-primary" onClick={addSize}>
-            + Agregar
-          </button>
-        </div>
-      </section>
-
-      {/* Transportistas */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">Transportistas</h2>
-        <div className="flex flex-wrap gap-2">
-          {settings.carriers.map((c) => (
-            <span
-              key={c}
-              className="inline-flex min-h-[40px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold"
-            >
-              {c}
-              {settings.carriers.length > 1 && (
-                <button
-                  type="button"
-                  className="text-slate-400 hover:text-red-600"
-                  onClick={() =>
-                    updateSettings({ carriers: settings.carriers.filter((x) => x !== c) })
-                  }
-                >
-                  ✕
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-        <div className="flex gap-2">
-          <input
-            className="input flex-1"
-            placeholder="Nuevo transportista"
-            value={newCarrier}
-            onChange={(e) => setNewCarrier(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addCarrier()}
-          />
-          <button className="btn-soft" onClick={addCarrier}>
-            + Agregar
-          </button>
-        </div>
-      </section>
-
-      {/* Métodos de Pago y Tipos de Trabajo */}
+      {/* 2. Campañas y Tallas */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <section className="card space-y-3">
-          <h2 className="section-title mb-0">💳 Métodos de Pago</h2>
+        <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900">
+              Campañas del Catálogo
+            </h2>
+            <p className="text-xs text-slate-500">
+              Colecciones para clasificar diseños y compartir por WhatsApp
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {campaigns.map((camp) => (
+              <span
+                key={camp}
+                className="inline-flex min-h-[36px] items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-800"
+              >
+                {camp}
+                {campaigns.length > 1 && (
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-rose-600"
+                    onClick={() => removeCampaign(camp)}
+                    aria-label={`Quitar ${camp}`}
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              placeholder="Ej. Ranchero, Turístico, Cristiana..."
+              value={newCampaign}
+              onChange={(e) => setNewCampaign(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCampaign()}
+            />
+            <button
+              type="button"
+              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+              onClick={addCampaign}
+            >
+              + Agregar
+            </button>
+          </div>
+        </section>
+
+        <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900">Tallas Activas</h2>
+            <p className="text-xs text-slate-500">Tallas disponibles en inventario y tienda</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {settings.sizes.map((sz) => (
+              <span
+                key={sz}
+                className="inline-flex min-h-[36px] items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 text-xs font-bold text-slate-800"
+              >
+                {sz}
+                {settings.sizes.length > 1 && (
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-rose-600"
+                    onClick={() => removeSize(sz)}
+                    aria-label={`Quitar ${sz}`}
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              placeholder="Nueva talla (ej. 3XL, Niño M)"
+              value={newSize}
+              onChange={(e) => setNewSize(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addSize()}
+            />
+            <button
+              type="button"
+              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+              onClick={addSize}
+            >
+              + Agregar
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {/* 3. Métodos de Pago y Transportistas */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900">Métodos de Pago</h2>
+            <p className="text-xs text-slate-500">Opciones al registrar un pedido</p>
+          </div>
           <div className="flex flex-wrap gap-2">
             {settings.paymentMethods.map((m) => (
               <span
                 key={m}
-                className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold"
+                className="inline-flex min-h-[36px] items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-800"
               >
                 {m}
                 {settings.paymentMethods.length > 1 && (
                   <button
                     type="button"
-                    className="text-slate-400 hover:text-red-600"
+                    className="text-slate-400 hover:text-rose-600"
                     onClick={() =>
                       updateSettings({
                         paymentMethods: settings.paymentMethods.filter((x) => x !== m)
@@ -556,52 +363,39 @@ export default function SettingsPage() {
           <div className="flex gap-2">
             <input
               className="input flex-1"
-              placeholder="Ej. Contra entrega, BAC, Tigo Money..."
+              placeholder="Ej. Efectivo, Transferencia, BAC..."
               value={newPaymentMethod}
               onChange={(e) => setNewPaymentMethod(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newPaymentMethod.trim()) {
-                  if (!settings.paymentMethods.includes(newPaymentMethod.trim())) {
-                    updateSettings({ paymentMethods: [...settings.paymentMethods, newPaymentMethod.trim()] });
-                    setNewPaymentMethod('');
-                  }
-                }
-              }}
+              onKeyDown={(e) => e.key === 'Enter' && addPaymentMethod()}
             />
             <button
               type="button"
-              className="btn-soft"
-              onClick={() => {
-                const v = newPaymentMethod.trim();
-                if (!v) return;
-                if (settings.paymentMethods.includes(v)) return toast('Ya existe ese método de pago', 'error');
-                updateSettings({ paymentMethods: [...settings.paymentMethods, v] });
-                setNewPaymentMethod('');
-                toast(`Método "${v}" agregado`);
-              }}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+              onClick={addPaymentMethod}
             >
               + Agregar
             </button>
           </div>
         </section>
 
-        <section className="card space-y-3">
-          <h2 className="section-title mb-0">🎨 Tipos de Trabajo</h2>
+        <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900">Transportistas</h2>
+            <p className="text-xs text-slate-500">Empresas de envío para guías</p>
+          </div>
           <div className="flex flex-wrap gap-2">
-            {settings.workTypes.map((w) => (
+            {settings.carriers.map((c) => (
               <span
-                key={w}
-                className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold"
+                key={c}
+                className="inline-flex min-h-[36px] items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-800"
               >
-                {w}
-                {settings.workTypes.length > 1 && (
+                {c}
+                {settings.carriers.length > 1 && (
                   <button
                     type="button"
-                    className="text-slate-400 hover:text-red-600"
+                    className="text-slate-400 hover:text-rose-600"
                     onClick={() =>
-                      updateSettings({
-                        workTypes: settings.workTypes.filter((x) => x !== w)
-                      })
+                      updateSettings({ carriers: settings.carriers.filter((x) => x !== c) })
                     }
                   >
                     ✕
@@ -613,29 +407,15 @@ export default function SettingsPage() {
           <div className="flex gap-2">
             <input
               className="input flex-1"
-              placeholder="Ej. DTF Espalda, Vinil Textil, Bordado..."
-              value={newWorkType}
-              onChange={(e) => setNewWorkType(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newWorkType.trim()) {
-                  if (!settings.workTypes.includes(newWorkType.trim())) {
-                    updateSettings({ workTypes: [...settings.workTypes, newWorkType.trim()] });
-                    setNewWorkType('');
-                  }
-                }
-              }}
+              placeholder="Ej. Cargo Expreso, Forza, Rápido Cargo..."
+              value={newCarrier}
+              onChange={(e) => setNewCarrier(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCarrier()}
             />
             <button
               type="button"
-              className="btn-soft"
-              onClick={() => {
-                const v = newWorkType.trim();
-                if (!v) return;
-                if (settings.workTypes.includes(v)) return toast('Ya existe ese tipo de trabajo', 'error');
-                updateSettings({ workTypes: [...settings.workTypes, v] });
-                setNewWorkType('');
-                toast(`Tipo "${v}" agregado`);
-              }}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+              onClick={addCarrier}
             >
               + Agregar
             </button>
@@ -643,159 +423,104 @@ export default function SettingsPage() {
         </section>
       </div>
 
-      {/* Integración Boxful API (Honduras / El Salvador) */}
-      <section className="card space-y-3 border-2 border-indigo-200">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="section-title mb-0">📦 Integración Boxful API (Guías Automáticas)</h2>
-            <p className="text-xs text-slate-500">
-              Conecta tu cuenta de Boxful (`api.goboxful.com`) para generar guías en 1 clic desde Pedidos. Las credenciales se guardan solo en este dispositivo.
-            </p>
-          </div>
-          <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-extrabold text-indigo-900">
-            {bxToken || bxEmail ? 'CONFIGURADO' : 'OPCIONAL'}
-          </span>
+      {/* 4. Mensajes de WhatsApp */}
+      <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+        <div>
+          <h2 className="text-base font-bold tracking-tight text-slate-900">
+            Mensajes Automáticos de WhatsApp
+          </h2>
+          <p className="text-xs text-slate-500">
+            Plantillas para notificar al cliente desde Pedidos
+          </p>
         </div>
-
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
-            <label className="label">Entorno Boxful</label>
-            <select
-              className="input"
-              value={bxEnv}
-              onChange={(e) => setBxEnv(e.target.value as 'prod' | 'dev')}
-            >
-              <option value="prod">Producción (api.goboxful.com)</option>
-              <option value="dev">Sandbox / Pruebas (devapi.goboxful.com)</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">ID de Paquetería (Opcional)</label>
-            <input
-              className="input"
-              placeholder="Automático (mejor tarifa)"
-              value={bxCourier}
-              onChange={(e) => setBxCourier(e.target.value)}
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Pedido enviado con guía
+            </label>
+            <textarea
+              className="input min-h-[96px] py-2 text-xs"
+              value={settings.waShipped}
+              onChange={(e) => updateSettings({ waShipped: e.target.value })}
             />
           </div>
           <div>
-            <label className="label">Correo de cuenta Boxful</label>
-            <input
-              type="email"
-              className="input"
-              placeholder="tucorreo@negocio.com"
-              value={bxEmail}
-              onChange={(e) => setBxEmail(e.target.value)}
-              autoComplete="off"
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Pedido listo para entrega
+            </label>
+            <textarea
+              className="input min-h-[96px] py-2 text-xs"
+              value={settings.waReady}
+              onChange={(e) => updateSettings({ waReady: e.target.value })}
             />
           </div>
+        </div>
+      </section>
+
+      {/* 5. Mantenimiento y Respaldo */}
+      <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <label className="label">Contraseña Boxful (para obtener Token)</label>
-            <input
-              type="password"
-              className="input"
-              placeholder="••••••••"
-              value={bxPass}
-              onChange={(e) => setBxPass(e.target.value)}
-              autoComplete="new-password"
-            />
+            <h2 className="text-base font-bold tracking-tight text-slate-900">
+              Mantenimiento y Respaldo
+            </h2>
+            <p className="text-xs text-slate-500">
+              Limpieza de registros obsoletos y copia de seguridad del sistema
+            </p>
           </div>
         </div>
 
-        <div>
-          <label className="label">O pega directamente tu Bearer Access Token de Boxful</label>
-          <input
-            className="input font-mono text-xs"
-            placeholder="eyJhbGciOi..."
-            value={bxToken}
-            onChange={(e) => setBxToken(e.target.value)}
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-primary bg-indigo-600 hover:bg-indigo-700"
-            disabled={testingBoxful}
-            onClick={() => void handleSaveBoxful()}
-          >
-            {testingBoxful ? 'Autenticando con Boxful...' : '📦 Guardar / Conectar Boxful'}
-          </button>
-          {(bxEmail || bxToken) && (
-            <button
-              type="button"
-              className="btn-ghost text-xs text-red-600"
-              onClick={() => {
-                setBxEmail('');
-                setBxPass('');
-                setBxToken('');
-                setBxCourier('');
-                saveBoxfulConfig(null);
-                toast('Conexión Boxful desconectada');
-              }}
-            >
-              Desconectar Boxful
-            </button>
-          )}
-        </div>
-      </section>
-
-      {/* Auditoría de Seguridad y Privacidad */}
-      <section className="card space-y-2 border border-emerald-200 bg-emerald-50/40">
-        <div className="flex items-center justify-between">
-          <h2 className="section-title mb-0 text-emerald-950">🛡️ Blindaje de Seguridad y Privacidad Activo</h2>
-          <span className="rounded-full bg-emerald-600 px-2.5 py-0.5 text-[11px] font-extrabold text-white">
-            PROTEGIDO
-          </span>
-        </div>
-        <ul className="space-y-1 text-xs font-medium text-slate-700">
-          <li>• <strong>Aislamiento de Tienda Pública (`#tienda`):</strong> Los clientes que abren el catálogo 3D nunca descargan la base de datos de pedidos, teléfonos, direcciones ni costos (`app_state_sync`); solo reciben la vitrina pública (`cat_live`).</li>
-          <li>• <strong>Fondo Boutique bloqueado para clientes:</strong> Solo el administrador puede cambiar el ambiente (`🤠 Ranchero`, `🪵 Establo`, `✨ Nocturno`, `☀️ Rodeo Arena`).</li>
-          <li>• <strong>Credenciales locales:</strong> Las llaves de Boxful y emparejamiento se guardan únicamente en este dispositivo y jamás se exponen en enlaces públicos.</li>
-        </ul>
-      </section>
-
-      {/* Plantillas de WhatsApp */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">Plantillas de WhatsApp</h2>
-        <div>
-          <label className="label">Pedido enviado con guía</label>
-          <textarea
-            className="input min-h-[110px] py-2"
-            value={settings.waShipped}
-            onChange={(e) => updateSettings({ waShipped: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Pedido listo</label>
-          <textarea
-            className="input min-h-[90px] py-2"
-            value={settings.waReady}
-            onChange={(e) => updateSettings({ waReady: e.target.value })}
-          />
-        </div>
-      </section>
-
-      {/* Respaldo JSON y CSV */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">Respaldo y Exportación</h2>
         <input
           ref={fileRef}
           type="file"
           accept="application/json,.json"
           className="hidden"
-          onChange={(e) => importJson(e.target.files?.[0])}
+          onChange={(e) => void importJson(e.target.files?.[0])}
         />
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <button className="btn-primary" onClick={exportJson}>
-            💾 Exportar JSON
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+          <button
+            type="button"
+            className="rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800"
+            onClick={exportJson}
+          >
+            💾 Descargar Respaldo
           </button>
-          <button className="btn-soft" onClick={() => fileRef.current?.click()}>
-            📂 Restaurar JSON
+          <button
+            type="button"
+            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-800 transition hover:bg-slate-100"
+            onClick={() => fileRef.current?.click()}
+          >
+            📂 Restaurar Respaldo
           </button>
-          <button className="btn-ghost" onClick={exportStockCsv}>
+          <button
+            type="button"
+            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-800 transition hover:bg-slate-100"
+            onClick={exportStockCsv}
+          >
             📊 Exportar Stock CSV
+          </button>
+          <button
+            type="button"
+            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+            onClick={() => {
+              const res = purgeGarbageData();
+              const totalRemoved =
+                res.removedBrands +
+                res.removedColors +
+                res.removedDesigns +
+                res.compactedMovements;
+              if (totalRemoved > 0) {
+                toast(
+                  `Optimización lista: ${totalRemoved} registros redundantes limpiados`,
+                  'ok'
+                );
+              } else {
+                toast('El sistema ya está limpio y optimizado', 'ok');
+              }
+            }}
+          >
+            🧹 Optimizar Base de Datos
           </button>
         </div>
       </section>
