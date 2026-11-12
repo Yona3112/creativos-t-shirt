@@ -188,16 +188,30 @@ export default function App() {
         <div className="sticky top-14 z-40 mx-auto max-w-4xl px-3 pt-2">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-emerald-500 bg-emerald-50/95 p-3.5 shadow-xl backdrop-blur-md">
             <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-xl text-white shadow">
-                🔔
-              </span>
+              {incomingOrder.designThumb ? (
+                <div
+                  className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-black/15 p-1 shadow"
+                  style={{ backgroundColor: incomingOrder.colorHex || '#111827' }}
+                  title={incomingOrder.designName || 'Diseño del pedido'}
+                >
+                  <img
+                    src={incomingOrder.designThumb}
+                    alt={incomingOrder.designName || 'Diseño'}
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+              ) : (
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-xl text-white shadow">
+                  🔔
+                </span>
+              )}
               <div>
                 <div className="text-xs font-black uppercase tracking-wider text-emerald-900">
-                  ¡Nuevo Pedido Entrante de la Tienda Web!
+                  ¡Nuevo Pedido Entrante del Catálogo!
                 </div>
                 <div className="text-sm font-extrabold text-slate-900">
                   {incomingOrder.customerName} · {incomingOrder.qty}x Camisa {incomingOrder.colorName} ({incomingOrder.size})
-                  {incomingOrder.designName ? ` · Estampado: ${incomingOrder.designName}` : ' · Camisa Lisa'}
+                  {incomingOrder.designName ? ` · Diseño: ${incomingOrder.designName}` : ''}
                 </div>
               </div>
             </div>

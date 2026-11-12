@@ -1,17 +1,55 @@
 /**
  * Procesamiento profesional de imágenes para estampado 3D y DTF:
- * 1. Recorte de fondo por Contorno Exterior Inteligente (Flood-Fill + Barrera de Bordes Sobel)
- *    que SOLO elimina el fondo conectado al borde exterior y PROTEGE 100% los colores y letras internas del diseño.
- * 2. Integración con IA Neuronal (@imgly/background-removal ISNet) en el navegador para fotos complejas.
+ * 1. Conversión automática JPG/JPEG -> PNG de 32 bits con extracción de canal Alpha (Un-Matting),
+ *    supresión de artefactos de compresión JPEG y vaciado inteligente de huecos internos de letras (A, B, D, O, P, R).
+ * 2. Integración con IA Neuronal (@imgly/background-removal ISNet, open-source en GitHub) en el navegador.
  * 3. Escalado Super-Resolución a 4K (Unsharp Mask + Interpolación Progresiva de Alta Definición).
+ * 4. Generador de miniaturas ligeras (thumbnails) para fichas de pedidos y vista en Taller.
  */
+
+export function isJpgFile(file: File): boolean {
+  const type = (file.type || '').toLowerCase();
+  const name = (file.name || '').toLowerCase();
+  return (
+    type === 'image/jpeg' ||
+    type === 'image/jpg' ||
+    name.endsWith('.jpg') ||
+    name.endsWith('.jpeg')
+  );
+}
+
+/**
+ * Crea una miniatura ligera en formato DataURL (PNG con transparencia) para adjuntar a pedidos web
+ * y mostrar la fotito diminuta del diseño en el Taller y en WhatsApp sin saturar la base de datos.
+ */
+export async function createDesignThumbnail(
+  sourceDataUrl: string,
+  maxSide = 240
+): Promise<string> {
+  const img = await loadImageFromUrl(sourceDataUrl);
+  const srcW = img.naturalWidth || img.width || 1;
+  const srcH = img.naturalHeight || img.height || 1;
+  const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return sourceDataUrl;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL('image/png');
+}
 
 export async function compressImage(
   file: File,
   maxSide = 1400,
   quality = 0.92,
   removeBg = false,
-  tolerance = 32
+  tolerance = 34
 ): Promise<string> {
   const url = URL.createObjectURL(file);
   try {
@@ -299,10 +337,26 @@ function floodFillExteriorBackground(
     tryPush(cx, cy - 1);
   }
 
-  // Paso B: Eliminar ÚNICAMENTE el fondo exterior conectado (visited === 1)
-  // y suavizar únicamente los píxeles del borde que tocan directamente al fondo exterior,
-  // respetando al 100% toda la tinta negra, sombras y colores internos del diseño original.
-  const edgeRange = tol * 1.45 + 14;
+  // Paso B: Detectar y vaciar huecos internos del color de fondo encerrados dentro de letras (A, B, D, O, P, R)
+  // o entre elementos de un archivo JPG, protegiendo colores e ilustraciones internas.
+  const innerTol = tol * 0.78;
+  for (let i = 0; i < totalPixels; i++) {
+    if (visited[i] !== 0) continue;
+    const p4 = i * 4;
+    if (d[p4 + 3] < 35) {
+      visited[i] = 1;
+      continue;
+    }
+    const dist = colorDist(d[p4], d[p4 + 1], d[p4 + 2]);
+    if (dist <= innerTol) {
+      // Marcar como fondo interno si es del color exacto del fondo (ej. negro puro o blanco puro en un JPG)
+      visited[i] = 1;
+    }
+  }
+
+  // Paso C: Eliminar el fondo detectado y aplicar Color Un-Matting (descontaminación de halo JPEG)
+  // en todos los bordes adyacentes al fondo eliminado para obtener un PNG transparente limpio.
+  const edgeRange = tol * 1.55 + 16;
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -316,14 +370,14 @@ function floodFillExteriorBackground(
         continue;
       }
 
-      // Solo desmanchar si este píxel toca directamente el fondo exterior eliminado
-      const touchesExterior =
+      // Desmanchar píxeles de borde que tocan el fondo eliminado (elimina el halo gris/negro/blanco de los JPG)
+      const touchesBackground =
         (x > 0 && visited[i - 1] === 1) ||
         (x + 1 < w && visited[i + 1] === 1) ||
         (y > 0 && visited[i - w] === 1) ||
         (y + 1 < h && visited[i + w] === 1);
 
-      if (!touchesExterior) continue;
+      if (!touchesBackground) continue;
 
       const r = d[p4];
       const g = d[p4 + 1];
@@ -331,15 +385,20 @@ function floodFillExteriorBackground(
       const dist = colorDist(r, g, b);
 
       if (dist < edgeRange) {
-        const cleanAlpha = Math.max(0.15, Math.min(1, dist / Math.max(1, edgeRange)));
-        const newA = Math.round(a * cleanAlpha);
-        const cleanR = Math.round(Math.max(0, Math.min(255, (r - (1 - cleanAlpha) * bgR) / cleanAlpha)));
-        const cleanG = Math.round(Math.max(0, Math.min(255, (g - (1 - cleanAlpha) * bgG) / cleanAlpha)));
-        const cleanB = Math.round(Math.max(0, Math.min(255, (b - (1 - cleanAlpha) * bgB) / cleanAlpha)));
-        d[p4] = cleanR;
-        d[p4 + 1] = cleanG;
-        d[p4 + 2] = cleanB;
-        d[p4 + 3] = newA;
+        const t = Math.max(0, Math.min(1, (dist - innerTol * 0.5) / Math.max(1, edgeRange - innerTol * 0.5)));
+        const cleanAlpha = t * t * (3 - 2 * t); // smoothstep para bordes sedosos sin dientes de sierra
+        if (cleanAlpha < 0.08) {
+          d[p4 + 3] = 0;
+        } else {
+          const newA = Math.round(a * cleanAlpha);
+          const cleanR = Math.round(Math.max(0, Math.min(255, (r - (1 - cleanAlpha) * bgR) / cleanAlpha)));
+          const cleanG = Math.round(Math.max(0, Math.min(255, (g - (1 - cleanAlpha) * bgG) / cleanAlpha)));
+          const cleanB = Math.round(Math.max(0, Math.min(255, (b - (1 - cleanAlpha) * bgB) / cleanAlpha)));
+          d[p4] = cleanR;
+          d[p4 + 1] = cleanG;
+          d[p4 + 2] = cleanB;
+          d[p4 + 3] = newA;
+        }
       }
     }
   }

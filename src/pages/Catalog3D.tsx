@@ -4,11 +4,19 @@ import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
 import { updateSettings, deleteColor, updateColor } from '../lib/actions';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
-import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
+import {
+  compressImage,
+  applyBackgroundRemoval,
+  removeBackgroundWithAI,
+  upscaleImageTo4K,
+  isJpgFile,
+  createDesignThumbnail
+} from '../lib/image';
 import { db, savePhoto } from '../lib/db';
 import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
 import { subscribeLiveCatalogFirebase } from '../lib/firebaseSync';
-import { copyText } from '../lib/csv';
+import { copyText, downloadBlob } from '../lib/csv';
+import { buildCatalogOrderPdfFile, renderCatalogOrderCardCanvas } from '../lib/pdf';
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -58,9 +66,14 @@ function decodeCatalog(token: string): SharedCatalogPayload | null {
 export function readSharedCatalogHash(): SharedCatalogPayload | null {
   const h = location.hash.replace(/^#\/?/, '').trim();
   if (!h) return null;
-  // Enlace corto de Tienda Oficial (#tienda o #catalogo)
-  if (h === 'tienda' || h === 'catalogo' || h.startsWith('c=')) {
-    return buildDefaultLivePayload();
+  // Enlace corto de Tienda Oficial (#tienda, #tienda?camp=Ranchero, #catalogo)
+  if (h === 'tienda' || h.startsWith('tienda?') || h === 'catalogo' || h.startsWith('c=')) {
+    const base = buildDefaultLivePayload();
+    const campMatch = h.match(/[?&]camp=([^&]+)/);
+    if (campMatch && campMatch[1]) {
+      base.activeCampaign = decodeURIComponent(campMatch[1]);
+    }
+    return base;
   }
   // Compatibilidad con enlaces anteriores (#catalogo=eyJ...)
   const m = location.hash.match(/catalogo=([A-Za-z0-9_-]+)/);
@@ -68,11 +81,20 @@ export function readSharedCatalogHash(): SharedCatalogPayload | null {
   return decodeCatalog(m[1]) || buildDefaultLivePayload();
 }
 
+const DEFAULT_CAMPAIGNS = ['Ranchero', 'Turístico', 'Cristiana'];
+
 export default function Catalog3D() {
   const state = useAppState();
   const { stock } = useStock();
   const { settings } = state;
   const brands = activeBrands(state);
+
+  const campaigns = useMemo(() => {
+    const list = settings.campaigns && settings.campaigns.length > 0 ? settings.campaigns : DEFAULT_CAMPAIGNS;
+    return Array.from(new Set(list));
+  }, [settings.campaigns]);
+
+  const [activeCampaign, setActiveCampaign] = useState<string>(settings.activeCampaign || 'all');
 
   const [brandId, setBrandId] = useState(brands[0]?.id || '');
   const brand = brands.find((b) => b.id === brandId) || brands[0];
@@ -107,8 +129,19 @@ export default function Catalog3D() {
     uploadFilesToCatalog,
     toggleVisible,
     renameDesign,
+    setDesignCampaign,
     deleteDesign
   } = useCatalogDesigns();
+
+  const handleAddCampaign = () => {
+    const name = window.prompt('Nombre de la nueva campaña (ej. Ranchero, Turístico, Cristiana, Deportiva):');
+    if (!name || !name.trim()) return;
+    const clean = name.trim();
+    const next = Array.from(new Set([...campaigns, clean]));
+    updateSettings({ campaigns: next, activeCampaign: clean });
+    setActiveCampaign(clean);
+    toast(`Campaña "${clean}" creada`, 'ok');
+  };
 
   useEffect(() => {
     const ids = colors.map((c) => c.id);
@@ -145,8 +178,9 @@ export default function Catalog3D() {
   const onUploadDesign = async (file: File | undefined) => {
     if (!file) return;
     try {
+      const autoRemove = removeBg || isJpgFile(file);
       const raw = await compressImage(file, 1400, 0.92, false);
-      const processed = removeBg ? await applyBackgroundRemoval(raw, true, bgTolerance) : raw;
+      const processed = autoRemove ? await applyBackgroundRemoval(raw, true, bgTolerance) : raw;
       const id = uid();
       await savePhoto(id, processed, 0);
       void uploadPhotoNow(id, processed);
@@ -154,11 +188,14 @@ export default function Catalog3D() {
       setActiveCatalogDesignId(null);
       setRawDesignUrl(raw);
       setDesignUrl(processed);
+      setRemoveBg(autoRemove);
       setScale(2.0);
       setOffsetX(0);
       setOffsetY(0);
       toast(
-        removeBg
+        isJpgFile(file)
+          ? 'JPG convertido automáticamente a PNG sin fondo (Tamaño A3)'
+          : autoRemove
           ? 'Diseño sin fondo aplicado en Tamaño A3 (200%)'
           : 'Diseño aplicado a la camisa 3D en Tamaño A3 (200%)'
       );
@@ -261,10 +298,12 @@ export default function Catalog3D() {
       offsetX,
       offsetY,
       boutiqueTheme,
+      activeCampaign,
       designs: clientDesigns.map((d) => ({
         id: d.id,
         name: d.name,
         code: d.code,
+        campaign: d.campaign,
         photoId: d.photoId,
         placement: d.placement
       })),
@@ -273,8 +312,12 @@ export default function Catalog3D() {
     };
   };
 
-  const buildShareUrl = (): string => {
-    return `${location.origin}${location.pathname}#tienda`;
+  const buildShareUrl = (camp = activeCampaign): string => {
+    const base = `${location.origin}${location.pathname}#tienda`;
+    if (camp && camp !== 'all') {
+      return `${base}?camp=${encodeURIComponent(camp)}`;
+    }
+    return base;
   };
 
   const syncLiveCatalogSnapshot = async () => {
@@ -305,12 +348,13 @@ export default function Catalog3D() {
 
   const handleShareLink = async () => {
     void syncLiveCatalogSnapshot();
-    const url = buildShareUrl();
+    const url = buildShareUrl(activeCampaign);
+    const campLabel = activeCampaign !== 'all' ? ` · Campaña ${activeCampaign}` : '';
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `${settings.storeName} · Tienda 3D`,
-          text: `Personaliza tu camisa en 3D y mira colores y tallas en vivo (${brand?.name || ''}):`,
+          title: `${settings.storeName}${campLabel}`,
+          text: `Mira nuestro catálogo 3D${campLabel}:`,
           url
         });
         return;
@@ -319,13 +363,19 @@ export default function Catalog3D() {
       }
     }
     await copyText(url);
-    toast('Enlace corto (#tienda) copiado');
+    toast(
+      activeCampaign !== 'all'
+        ? `Enlace de campaña "${activeCampaign}" copiado`
+        : 'Enlace corto (#tienda) copiado'
+    );
   };
 
   const handleShareWhatsApp = async () => {
     void syncLiveCatalogSnapshot();
-    const url = buildShareUrl();
-    const text = `¡Hola! 👋 Entra a nuestra *Tienda 3D Interactiva* de *${settings.storeName}*:\n👉 ${url}\n\nAhí puedes girar la camisa en 3D, tocar los diseños disponibles, elegir color y talla en vivo y enviarnos tu pedido.`;
+    const url = buildShareUrl(activeCampaign);
+    const campLine =
+      activeCampaign !== 'all' ? `\n✨ *Colección / Campaña: ${activeCampaign}*` : '';
+    const text = `¡Hola! 👋 Entra a nuestro *Catálogo 3D* de *${settings.storeName}*:${campLine}\n👉 ${url}\n\nElige tu diseño, color y talla en vivo y envíanos tu pedido.`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
   };
 
@@ -366,6 +416,32 @@ export default function Catalog3D() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
+            {/* Selector de Campaña para enviar por WhatsApp */}
+            <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
+              <span className="text-[11px] font-semibold text-slate-500">Campaña:</span>
+              <select
+                value={activeCampaign}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '__new__') {
+                    handleAddCampaign();
+                    return;
+                  }
+                  setActiveCampaign(val);
+                  updateSettings({ activeCampaign: val });
+                }}
+                className="bg-transparent text-xs font-bold text-slate-900 outline-none"
+              >
+                <option value="all">Todas</option>
+                {campaigns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+                <option value="__new__">+ Nueva campaña...</option>
+              </select>
+            </div>
+
             <button
               type="button"
               className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
@@ -388,7 +464,7 @@ export default function Catalog3D() {
               className="rounded-full bg-[#25D366] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#1ebe5b]"
               onClick={handleShareWhatsApp}
             >
-              WhatsApp
+              {activeCampaign !== 'all' ? `WhatsApp · ${activeCampaign}` : 'WhatsApp'}
             </button>
             <button
               type="button"
@@ -459,6 +535,18 @@ export default function Catalog3D() {
           isStoreOwner
           catalogDesigns={allDesigns}
           activeCatalogDesignId={activeCatalogDesignId}
+          campaigns={campaigns}
+          activeCampaign={activeCampaign}
+          onChangeActiveCampaign={(camp) => {
+            setActiveCampaign(camp);
+            updateSettings({ activeCampaign: camp });
+          }}
+          onAddCampaign={handleAddCampaign}
+          onChangeDesignCampaign={(id, camp) => {
+            setDesignCampaign(id, camp);
+            toast(camp === 'all' ? 'Diseño asignado a Todas' : `Diseño asignado a "${camp}"`);
+            void syncLiveCatalogSnapshot();
+          }}
           onSelectCatalogDesign={(d) => {
             if (!d.imageUrl) return;
             setDesignUrl(d.imageUrl);
@@ -485,18 +573,20 @@ export default function Catalog3D() {
             void saveCurrentToCatalog({
               dataUrl: designUrl,
               placement,
+              campaign: activeCampaign,
               existingPhotoId: photoId
             }).then((saved) => {
               setActiveCatalogDesignId(saved.id);
-              toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
+              toast(`"${saved.name}" guardado en el catálogo`);
             });
           }}
           onUploadCatalogFiles={(files) => {
-            setProcessingMsg('Agregando diseños al catálogo...');
+            setProcessingMsg('Procesando diseños (JPG → PNG transparente)...');
             void uploadFilesToCatalog(files, {
               removeBg,
               tolerance: bgTolerance,
-              placement
+              placement,
+              campaign: activeCampaign
             })
               .then((n) => {
                 if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
@@ -799,17 +889,22 @@ export function CustomerCatalogView({
       sizes: state.settings.sizes.length > 0 ? state.settings.sizes : base.sizes,
       priceNormal: matchedBrand ? normalPrice(state.settings, matchedBrand) : base.priceNormal,
       priceWholesale: state.settings.priceWholesale || base.priceWholesale,
-      wholesaleMin: state.settings.wholesaleMin || base.wholesaleMin
+      wholesaleMin: state.settings.wholesaleMin || base.wholesaleMin,
+      activeCampaign: initialPayload.activeCampaign || base.activeCampaign
     };
   }, [cloudPayload, initialPayload, onExitPreview, state]);
 
   const [selectedColor, setSelectedColor] = useState<SharedCatalogColor>(payload.colors[0]);
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
+  const [priceTier, setPriceTier] = useState<'300' | '350'>(initialDesignUrl ? '350' : '300');
+  const [clientCampaign, setClientCampaign] = useState<string>(
+    initialPayload.activeCampaign || payload.activeCampaign || 'all'
+  );
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
   const [selectedDesignName, setSelectedDesignName] = useState<string | null>(null);
   const [selectedDesignCode, setSelectedDesignCode] = useState<string | null>(null);
   const [selectedDesignPhotoId, setSelectedDesignPhotoId] = useState<string | null>(
-    payload.photoId || null
+    initialDesignUrl ? payload.photoId || null : null
   );
   const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'back');
   const [scale, setScale] = useState(payload.scale || 2.0);
@@ -822,7 +917,30 @@ export function CustomerCatalogView({
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
 
+  const [orderSheetModal, setOrderSheetModal] = useState<{
+    orderId: string;
+    previewUrl: string;
+    pdfFile: File;
+    whatsappHref: string;
+  } | null>(null);
+
   const { clientDesigns } = useCatalogDesigns(payload.designs);
+
+  const availableCampaigns = useMemo(() => {
+    const fromDesigns = clientDesigns
+      .map((d) => d.campaign?.trim())
+      .filter((c): c is string => Boolean(c) && c !== 'all');
+    const fromState = state.settings.campaigns || [];
+    return Array.from(new Set([...DEFAULT_CAMPAIGNS, ...fromState, ...fromDesigns]));
+  }, [clientDesigns, state.settings.campaigns]);
+
+  useEffect(() => {
+    if (initialPayload.activeCampaign) {
+      setClientCampaign(initialPayload.activeCampaign);
+    } else if (payload.activeCampaign && clientCampaign === 'all') {
+      setClientCampaign(payload.activeCampaign);
+    }
+  }, [initialPayload.activeCampaign, payload.activeCampaign]);
 
   useEffect(() => {
     if (!payload.colors.some((c) => c.name === selectedColor?.name)) {
@@ -830,18 +948,7 @@ export function CustomerCatalogView({
     }
   }, [payload.colors, selectedColor]);
 
-  useEffect(() => {
-    if (!designUrl && payload.photoId) {
-      void fetchSharedPhoto(payload.photoId).then((d) => {
-        if (d) {
-          setDesignUrl(d);
-          setSelectedDesignPhotoId(payload.photoId);
-        }
-      });
-    }
-  }, [payload.photoId, designUrl]);
-
-  // La tienda del cliente arranca de forma limpia en Camisa Lisa (L 300) sin auto-cargar estampados forzados
+  // La tienda del cliente permite escoger libremente entre L 300.00 y L 350.00 sin bloquearse
 
   const liveBrand = useMemo(
     () =>
@@ -904,15 +1011,16 @@ export function CustomerCatalogView({
     );
   }, [state.readyMadeStock, hasDesign, selectedColor, size, selectedDesignName]);
 
-  const unitPrice = hasDesign ? (payload.priceCustom || 35000) : (payload.priceNormal || 30000);
+  const unitPrice =
+    priceTier === '350' ? (payload.priceCustom || 35000) : (payload.priceNormal || 30000);
   const total = qty * unitPrice;
 
   const isBackSide = placement === 'back';
   const sideLabelExplicit = !designUrl
-    ? 'SIN ESTAMPADO (L 300)'
+    ? `${money(unitPrice)}`
     : isBackSide
-    ? 'ESPALDA (Personalizada - L 350)'
-    : 'FRENTE (Personalizada - L 350)';
+    ? `ESPALDA (${money(unitPrice)})`
+    : `FRENTE (${money(unitPrice)})`;
 
   const stockNote =
     selectedSizeStock >= qty
@@ -926,6 +1034,24 @@ export function CustomerCatalogView({
     const cleanName = customerName.trim().slice(0, 80) || 'Cliente Tienda 3D';
     const cleanPhone = customerPhone.trim().slice(0, 24);
     const cleanAddr = customerAddress.trim().slice(0, 300);
+
+    let thumbDataUrl: string | null = null;
+    let resolvedPhotoId = designUrl ? selectedDesignPhotoId : null;
+
+    if (designUrl) {
+      try {
+        thumbDataUrl = await createDesignThumbnail(designUrl, 240);
+      } catch {
+        thumbDataUrl = null;
+      }
+      if (!resolvedPhotoId) {
+        resolvedPhotoId = `photo_${orderId}`;
+      }
+      // Si es un diseño creado al vuelo o nuevo, subir también la foto para que Taller la tenga completa
+      void savePhoto(resolvedPhotoId, designUrl, 0);
+      void uploadPhotoNow(resolvedPhotoId, designUrl);
+    }
+
     const webOrder: CustomerWebOrderPayload = {
       id: orderId,
       createdAt: Date.now(),
@@ -941,9 +1067,11 @@ export function CustomerCatalogView({
       qty,
       unitPrice,
       designId: activeCatalogDesignId,
-      designName: designUrl ? selectedDesignName || 'Diseño personalizado' : null,
+      designName: designUrl ? selectedDesignName || 'Diseño seleccionado' : null,
       designCode: designUrl ? selectedDesignCode : null,
-      photoId: designUrl ? selectedDesignPhotoId : null,
+      photoId: resolvedPhotoId,
+      designThumb: thumbDataUrl,
+      campaign: clientCampaign !== 'all' ? clientCampaign : null,
       placement,
       scale
     };
@@ -963,19 +1091,56 @@ export function CustomerCatalogView({
         : '';
 
     const codePrefix = selectedDesignCode ? `[${selectedDesignCode}] ` : '';
+    const campaignLine =
+      clientCampaign && clientCampaign !== 'all' ? `\n• Campaña: *${clientCampaign}*` : '';
     const designBlock = designUrl
-      ? `\n• Estilo: *Personalizada (${money(unitPrice)})*\n• Diseño / Texto: *${codePrefix}${selectedDesignName || 'Diseño personalizado'}* (${scale >= 1.85 ? 'Tamaño A3' : 'Tamaño A4'})\n• 📍 LADO DEL ESTAMPADO: *${sideLabelExplicit}*`
-      : `\n• Estilo: *Normal (${money(unitPrice)})*`;
+      ? `${campaignLine}\n• Precio: *${money(unitPrice)}*\n• Diseño: *${codePrefix}${selectedDesignName || 'Diseño seleccionado'}* (${scale >= 1.85 ? 'Tamaño A3' : 'Tamaño A4'})\n• 📍 LADO: *${sideLabelExplicit}*`
+      : `\n• Precio: *${money(unitPrice)}*`;
 
     const readyMadeNote = readyMadeMatch
-      ? `\n⚡ *DISPONIBILIDAD:* ¡Prenda ya estampada lista para ENTREGA INMEDIATA!`
+      ? `\n⚡ *DISPONIBILIDAD:* ¡Prenda lista para ENTREGA INMEDIATA!`
       : '';
 
-    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds (${money(unitPrice)} c/u)${designBlock}${readyMadeNote}\n• Total: *${money(total)}*\n\n📥 *Cargar este pedido en 1 clic en el sistema:*\n${importUrl}`;
+    const orderText = `¡Hola ${payload.storeName}! 👋 Quiero hacer este pedido desde la Tienda 3D:\n${clientHeader}\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${payload.brandName}\n• Color: ${selectedColor?.name}\n• Talla: ${size} (${stockNote})\n• Cantidad: ${qty} uds (${money(unitPrice)} c/u)${designBlock}${readyMadeNote}\n• Total: *${money(total)}*\n\n🖼️ *Ver pedido con foto de diseño en 1 clic (Taller):*\n${importUrl}`;
 
     const targetHref = payload.storePhone
       ? whatsappUrl(payload.storePhone, orderText)
       : `https://wa.me/?text=${encodeURIComponent(orderText)}`;
+
+    try {
+      const cardInput = {
+        storeName: payload.storeName,
+        orderId,
+        customerName: cleanName,
+        customerPhone: cleanPhone,
+        customerAddress: cleanAddr,
+        brandName: payload.brandName,
+        colorName: selectedColor?.name || 'Negro',
+        colorHex: selectedColor?.hex || '#111827',
+        size,
+        qty,
+        unitPrice,
+        total,
+        designName: designUrl ? selectedDesignName || 'Diseño seleccionado' : null,
+        designCode: designUrl ? selectedDesignCode : null,
+        designDataUrl: designUrl,
+        placement,
+        campaign: clientCampaign !== 'all' ? clientCampaign : null
+      };
+      const [canvas, pdfFile] = await Promise.all([
+        renderCatalogOrderCardCanvas(cardInput),
+        buildCatalogOrderPdfFile(cardInput)
+      ]);
+      const previewUrl = canvas.toDataURL('image/jpeg', 0.9);
+      setOrderSheetModal({
+        orderId,
+        previewUrl,
+        pdfFile,
+        whatsappHref: targetHref
+      });
+    } catch {
+      /* fallback directo a WhatsApp */
+    }
 
     window.open(targetHref, '_blank', 'noopener,noreferrer');
   };
@@ -1001,50 +1166,67 @@ export function CustomerCatalogView({
       {/* CABECERA MINIMALISTA ESTILO APPLE */}
       <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-white/85 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
-          <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">
-            {payload.storeName}
-          </h1>
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">
+              {payload.storeName}
+            </h1>
+            {clientCampaign && clientCampaign !== 'all' && (
+              <p className="truncate text-[11px] font-medium text-slate-500">
+                Colección {clientCampaign}
+              </p>
+            )}
+          </div>
 
-          {/* Selector segmentado limpio: Lisa (L 300) vs Personalizada (L 350) */}
-          <div className="inline-flex rounded-full bg-slate-100 p-1">
+          {/* Selector segmentado limpio: solo L 300.00 y L 350.00 */}
+          <div className="inline-flex shrink-0 rounded-full bg-slate-100 p-1">
             <button
               type="button"
               onClick={() => {
+                setPriceTier('300');
                 setDesignUrl(null);
                 setActiveCatalogDesignId(null);
                 setSelectedDesignName(null);
                 setSelectedDesignCode(null);
                 setSelectedDesignPhotoId(null);
               }}
-              className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
-                !hasDesign
+              className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
+                priceTier === '300'
                   ? 'bg-white text-slate-900 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Lisa · {money(payload.priceNormal || 30000)}
+              {money(payload.priceNormal || 30000)}
             </button>
             <button
               type="button"
               onClick={() => {
-                if (clientDesigns.length > 0 && clientDesigns[0].imageUrl) {
-                  const first = clientDesigns[0];
-                  setDesignUrl(first.imageUrl);
-                  setActiveCatalogDesignId(first.id);
-                  setSelectedDesignName(first.name);
-                  setSelectedDesignCode(first.code || null);
-                  setSelectedDesignPhotoId(first.photoId);
-                  setPlacement('back');
-                  setScale(2.0);
+                setPriceTier('350');
+                if (!designUrl && clientDesigns.length > 0) {
+                  const pool =
+                    clientCampaign && clientCampaign !== 'all'
+                      ? clientDesigns.filter(
+                          (d) => !d.campaign || d.campaign === 'all' || d.campaign === clientCampaign
+                        )
+                      : clientDesigns;
+                  const first = (pool.length > 0 ? pool : clientDesigns).find((d) => d.imageUrl);
+                  if (first && first.imageUrl) {
+                    setDesignUrl(first.imageUrl);
+                    setActiveCatalogDesignId(first.id);
+                    setSelectedDesignName(first.name);
+                    setSelectedDesignCode(first.code || null);
+                    setSelectedDesignPhotoId(first.photoId);
+                    setPlacement('back');
+                    setScale(2.0);
+                  }
                 }
               }}
-              className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
-                hasDesign
+              className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
+                priceTier === '350'
                   ? 'bg-slate-900 text-white shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Personalizada · {money(payload.priceCustom || 35000)}
+              {money(payload.priceCustom || 35000)}
             </button>
           </div>
         </div>
@@ -1065,8 +1247,15 @@ export function CustomerCatalogView({
             if (patch.scale !== undefined) setScale(patch.scale);
             if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
             if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
+            if (patch.designUrl !== undefined) {
+              setDesignUrl(patch.designUrl);
+              setPriceTier('350');
+            }
+            if (patch.designName !== undefined) setSelectedDesignName(patch.designName);
+            if (patch.photoId !== undefined) setSelectedDesignPhotoId(patch.photoId);
           }}
           onClearDesign={() => {
+            setPriceTier('300');
             setDesignUrl(null);
             setActiveCatalogDesignId(null);
             setSelectedDesignName(null);
@@ -1090,8 +1279,12 @@ export function CustomerCatalogView({
           }}
           catalogDesigns={clientDesigns}
           activeCatalogDesignId={activeCatalogDesignId}
+          campaigns={availableCampaigns}
+          activeCampaign={clientCampaign}
+          onChangeActiveCampaign={setClientCampaign}
           onSelectCatalogDesign={(d) => {
             if (!d.imageUrl) return;
+            setPriceTier('350');
             setDesignUrl(d.imageUrl);
             setActiveCatalogDesignId(d.id);
             setSelectedDesignName(d.name);
@@ -1207,7 +1400,7 @@ export function CustomerCatalogView({
           <div className="min-w-0">
             <div className="truncate text-xs font-medium text-slate-500">
               {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
-              {designUrl ? ` · ${selectedDesignName || 'Personalizada'}` : ' · Lisa'}
+              {designUrl && selectedDesignName ? ` · ${selectedDesignName}` : ''}
             </div>
             <div className="text-lg font-bold tracking-tight text-slate-900">{money(total)}</div>
           </div>
@@ -1220,6 +1413,65 @@ export function CustomerCatalogView({
           </button>
         </div>
       </div>
+
+      {/* MODAL DE FICHA VISUAL / PDF CON FOTITO DEL DISEÑO */}
+      <Modal
+        open={!!orderSheetModal}
+        onClose={() => setOrderSheetModal(null)}
+        title="Ficha de Pedido Lista"
+      >
+        {orderSheetModal && (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-600">
+              Tu pedido con la vista en miniatura del diseño se ha enviado al sistema del Taller.
+              También puedes compartir o descargar el <b>PDF con la fotito</b>:
+            </p>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+              <img
+                src={orderSheetModal.previewUrl}
+                alt="Ficha del pedido"
+                className="w-full object-contain"
+              />
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={async () => {
+                  const f = orderSheetModal.pdfFile;
+                  const nav = navigator as Navigator & {
+                    canShare?: (data?: ShareData) => boolean;
+                  };
+                  if (typeof nav.share === 'function' && nav.canShare?.({ files: [f] })) {
+                    try {
+                      await nav.share({
+                        title: f.name,
+                        text: `Pedido #${orderSheetModal.orderId.slice(0, 6).toUpperCase()}`,
+                        files: [f]
+                      });
+                      return;
+                    } catch {
+                      /* fallback a descarga */
+                    }
+                  }
+                  downloadBlob(f.name, f);
+                  toast('PDF con fotito descargado');
+                }}
+                className="flex-1 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
+              >
+                📄 Descargar / Compartir PDF con Fotito
+              </button>
+              <a
+                href={orderSheetModal.whatsappHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-500"
+              >
+                💬 Abrir WhatsApp
+              </a>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

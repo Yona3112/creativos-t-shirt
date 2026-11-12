@@ -19,6 +19,7 @@ export interface SharedCatalogDesignRef {
   id: string;
   name: string;
   code?: string;
+  campaign?: string;
   photoId: string;
   placement: DecalPlacement;
 }
@@ -42,6 +43,8 @@ export interface SharedCatalogPayload {
   offsetX?: number;
   offsetY: number;
   boutiqueTheme?: BoutiqueTheme;
+  /** Campaña activa enviada por WhatsApp (ej. 'Ranchero', 'Turístico', 'Cristiana' o 'all') */
+  activeCampaign?: string;
   designs?: SharedCatalogDesignRef[];
   /** Disponibilidad por `${colorId}|${talla}` (solo cantidades, sin costos). */
   stock?: Record<string, number>;
@@ -66,6 +69,9 @@ export interface CustomerWebOrderPayload {
   designName?: string | null;
   designCode?: string | null;
   photoId?: string | null;
+  /** Miniatura ligera (DataURL) del diseño para verse al instante en Taller y Pedidos */
+  designThumb?: string | null;
+  campaign?: string | null;
   placement: DecalPlacement;
   scale: number;
 }
@@ -104,6 +110,7 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
       id: d.id,
       name: d.name,
       code: d.code,
+      campaign: d.campaign,
       photoId: d.photoId,
       placement: (d.placement || 'back') as DecalPlacement
     }));
@@ -127,6 +134,7 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     offsetX: 0,
     offsetY: 0,
     boutiqueTheme: st.storeTheme || 'ranchero',
+    activeCampaign: st.activeCampaign || 'all',
     designs,
     stock: stockMap
   };
@@ -146,6 +154,9 @@ export function sanitizeWebOrder(raw: unknown): CustomerWebOrderPayload | null {
   const placement = (['center', 'pocket', 'full', 'back'] as const).includes(o.placement as DecalPlacement)
     ? (o.placement as DecalPlacement)
     : 'back';
+  const rawThumb = typeof o.designThumb === 'string' && o.designThumb.startsWith('data:image/')
+    ? o.designThumb.slice(0, 350_000)
+    : null;
   return {
     id,
     createdAt: num(o.createdAt, 0, Date.now() + 86400000, Date.now()),
@@ -164,6 +175,8 @@ export function sanitizeWebOrder(raw: unknown): CustomerWebOrderPayload | null {
     designName: str(o.designName, 60) || null,
     designCode: str(o.designCode, 20) || null,
     photoId: str(o.photoId, 60) || null,
+    designThumb: rawThumb,
+    campaign: str(o.campaign, 40) || null,
     placement,
     scale: num(o.scale, 0.3, 4, 2.0)
   };

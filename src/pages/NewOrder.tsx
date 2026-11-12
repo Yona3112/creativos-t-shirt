@@ -4,7 +4,7 @@ import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
-import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K } from '../lib/image';
+import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K, isJpgFile } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto } from '../lib/sync';
 import { addressOneLine, createOrder, deleteColor, quickCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
@@ -188,9 +188,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
     try {
-      const shouldRemoveBg = draft.removeBg ?? false;
+      const autoJpgToPng = isJpgFile(f);
+      const shouldRemoveBg = autoJpgToPng || (draft.removeBg ?? false);
       const raw = await compressImage(f, 1400, 0.92, false);
-      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 32) : raw;
+      const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 34) : raw;
       const cleanFileName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
       set({
         rawPhoto: raw,
@@ -204,7 +205,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         designOffsetY: 0
       });
       toast(
-        shouldRemoveBg
+        autoJpgToPng
+          ? 'JPG convertido automáticamente a PNG transparente en Tamaño A3'
+          : shouldRemoveBg
           ? 'Diseño sin fondo agregado en Tamaño A3'
           : 'Diseño agregado a la camisa 3D en Tamaño A3'
       );
@@ -285,6 +288,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         let loadedPhoto: string | null = null;
         if (webOrder.photoId) {
           loadedPhoto = await fetchSharedPhoto(webOrder.photoId);
+        }
+        if (!loadedPhoto && webOrder.designThumb) {
+          loadedPhoto = webOrder.designThumb;
         }
 
         const isBack = (webOrder.placement || 'back') === 'back';
@@ -477,20 +483,34 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       {latestWebOrder && (
         <section className="rounded-2xl border-2 border-amber-400 bg-gradient-to-r from-amber-950 via-stone-900 to-amber-950 p-3.5 text-white shadow-lg">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-0.5">
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider text-amber-300">
-                🤠 Nuevo Pedido desde Tienda 3D Interactiva
-              </div>
-              <div className="text-base font-black text-white">
-                {latestWebOrder.customerName || 'Cliente'} {latestWebOrder.customerPhone ? `· ${latestWebOrder.customerPhone}` : ''}
-              </div>
-              <div className="text-xs font-semibold text-amber-100/90">
-                {latestWebOrder.qty}× {latestWebOrder.brandName} · Color {latestWebOrder.colorName} · Talla {latestWebOrder.size} ·{' '}
-                <span className="rounded bg-amber-400 px-1.5 py-0.5 font-black text-stone-950">
-                  {latestWebOrder.designName
-                    ? `${latestWebOrder.designName} en ${latestWebOrder.placement === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}`
-                    : 'Camisa Lisa'}
-                </span>
+            <div className="flex items-center gap-3">
+              {latestWebOrder.designThumb && (
+                <div
+                  className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/25 p-1 shadow"
+                  style={{ backgroundColor: latestWebOrder.colorHex || '#111827' }}
+                >
+                  <img
+                    src={latestWebOrder.designThumb}
+                    alt={latestWebOrder.designName || 'Diseño'}
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+              )}
+              <div className="space-y-0.5">
+                <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-400/20 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider text-amber-300">
+                  🤠 Nuevo Pedido desde Catálogo 3D
+                </div>
+                <div className="text-base font-black text-white">
+                  {latestWebOrder.customerName || 'Cliente'} {latestWebOrder.customerPhone ? `· ${latestWebOrder.customerPhone}` : ''}
+                </div>
+                <div className="text-xs font-semibold text-amber-100/90">
+                  {latestWebOrder.qty}× {latestWebOrder.brandName} · Color {latestWebOrder.colorName} · Talla {latestWebOrder.size} ·{' '}
+                  <span className="rounded bg-amber-400 px-1.5 py-0.5 font-black text-stone-950">
+                    {latestWebOrder.designName
+                      ? `${latestWebOrder.designName} en ${latestWebOrder.placement === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}`
+                      : 'L 300.00'}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">

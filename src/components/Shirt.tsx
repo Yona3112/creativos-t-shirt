@@ -542,6 +542,8 @@ export interface CatalogQuickDesign {
   name: string;
   /** Código corto del diseño (ej. D-001) para reportes de ventas */
   code?: string;
+  /** Campaña o colección (ej. Ranchero, Turístico, Cristiana) */
+  campaign?: string;
   photoId: string;
   imageUrl: string | null;
   placement: DecalPlacement;
@@ -597,6 +599,11 @@ export function InteractiveShirt3D({
   onToggleCatalogDesignVisible,
   onDeleteCatalogDesign,
   onRenameCatalogDesign,
+  onChangeDesignCampaign,
+  campaigns,
+  activeCampaign = 'all',
+  onChangeActiveCampaign,
+  onAddCampaign,
   boutiqueTheme = 'ranchero',
   onChangeBoutiqueTheme: _onChangeBoutiqueTheme,
   autoMotion = true,
@@ -615,6 +622,9 @@ export function InteractiveShirt3D({
     offsetX?: number;
     offsetY?: number;
     placement?: DecalPlacement;
+    designUrl?: string | null;
+    designName?: string | null;
+    photoId?: string | null;
   }) => void;
   onUploadFile?: (file: File) => void;
   onClearDesign?: () => void;
@@ -641,6 +651,11 @@ export function InteractiveShirt3D({
   onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
   onDeleteCatalogDesign?: (designId: string) => void;
   onRenameCatalogDesign?: (designId: string, name: string, code: string) => void;
+  onChangeDesignCampaign?: (designId: string, campaign: string) => void;
+  campaigns?: string[];
+  activeCampaign?: string;
+  onChangeActiveCampaign?: (campaign: string) => void;
+  onAddCampaign?: () => void;
   boutiqueTheme?: BoutiqueTheme;
   onChangeBoutiqueTheme?: (theme: BoutiqueTheme) => void;
   autoMotion?: boolean;
@@ -698,6 +713,11 @@ export function InteractiveShirt3D({
     const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.30, 4.00);
     onDesignChange?.({ scale: next });
   };
+
+  const filteredCatalogDesigns = (catalogDesigns || []).filter((d) => {
+    if (!activeCampaign || activeCampaign === 'all') return true;
+    return (d.campaign || '').toLowerCase() === activeCampaign.toLowerCase();
+  });
 
   if (!isStoreOwner) {
     const isBackSide = placement === 'back';
@@ -856,8 +876,39 @@ export function InteractiveShirt3D({
         {/* GALERÍA DE DISEÑOS MINIMALISTA */}
         {catalogDesigns && catalogDesigns.length > 0 && (
           <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold tracking-tight text-slate-900">Diseño</h3>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <h3 className="text-sm font-semibold tracking-tight text-slate-900">Diseño</h3>
+                {campaigns && campaigns.length > 0 && onChangeActiveCampaign && (
+                  <div className="ml-1 flex flex-wrap items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onChangeActiveCampaign('all')}
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                        activeCampaign === 'all'
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Todos
+                    </button>
+                    {campaigns.map((camp) => (
+                      <button
+                        key={camp}
+                        type="button"
+                        onClick={() => onChangeActiveCampaign(camp)}
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                          activeCampaign.toLowerCase() === camp.toLowerCase()
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {camp}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -879,7 +930,7 @@ export function InteractiveShirt3D({
             </div>
 
             <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible">
-              {catalogDesigns.map((d) => {
+              {filteredCatalogDesigns.map((d) => {
                 const isSelected =
                   (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                   (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
@@ -1174,14 +1225,14 @@ export function InteractiveShirt3D({
         <div className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           {onUploadFile && (
             <div className="space-y-2 border-b border-slate-100 pb-3">
-              <div className="text-xs font-semibold text-slate-900">Arte / Diseño</div>
+              <div className="text-xs font-semibold text-slate-900">Arte / Diseño (PNG o JPG)</div>
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => uploadInputRef.current?.click()}
                   className="flex-1 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
                 >
-                  {designUrl ? 'Cambiar PNG' : 'Subir PNG'}
+                  {designUrl ? 'Cambiar PNG/JPG' : 'Subir PNG / JPG'}
                 </button>
                 <button
                   type="button"
@@ -1204,7 +1255,7 @@ export function InteractiveShirt3D({
 
               {onToggleRemoveBg && (
                 <div className="flex items-center justify-between pt-1">
-                  <span className="text-xs text-slate-600">Quitar fondo automático</span>
+                  <span className="text-xs text-slate-600">JPG → PNG sin fondo</span>
                   <button
                     type="button"
                     onClick={() => onToggleRemoveBg(!removeBg)}
@@ -1214,7 +1265,7 @@ export function InteractiveShirt3D({
                         : 'bg-slate-100 text-slate-600'
                     }`}
                   >
-                    {removeBg ? 'Activo' : 'Inactivo'}
+                    {removeBg ? 'Activo' : 'Activar'}
                   </button>
                 </div>
               )}
@@ -1417,9 +1468,49 @@ export function InteractiveShirt3D({
           )}
 
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-semibold tracking-tight text-slate-900">
-              Diseños ({catalogDesigns?.length || 0})
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-sm font-semibold tracking-tight text-slate-900">
+                Diseños ({filteredCatalogDesigns.length})
+              </span>
+              {campaigns && onChangeActiveCampaign && (
+                <div className="flex flex-wrap items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onChangeActiveCampaign('all')}
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                      activeCampaign === 'all'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Todas
+                  </button>
+                  {campaigns.map((camp) => (
+                    <button
+                      key={camp}
+                      type="button"
+                      onClick={() => onChangeActiveCampaign(camp)}
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                        activeCampaign.toLowerCase() === camp.toLowerCase()
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {camp}
+                    </button>
+                  ))}
+                  {isStoreOwner && onAddCampaign && (
+                    <button
+                      type="button"
+                      onClick={onAddCampaign}
+                      className="rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:border-slate-500 hover:text-slate-900"
+                    >
+                      + Campaña
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
             {isStoreOwner && (
               <div className="flex flex-wrap items-center gap-1.5">
@@ -1438,16 +1529,20 @@ export function InteractiveShirt3D({
                     onClick={() => catalogBatchInputRef.current?.click()}
                     className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800"
                   >
-                    + Subir Diseños
+                    + Subir Diseños (PNG/JPG)
                   </button>
                 )}
               </div>
             )}
           </div>
 
-          {!catalogDesigns || catalogDesigns.length === 0 ? (
+          {filteredCatalogDesigns.length === 0 ? (
             <div className="flex items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3">
-              <span className="text-xs text-slate-500">Sin diseños guardados</span>
+              <span className="text-xs text-slate-500">
+                {activeCampaign !== 'all'
+                  ? `Sin diseños en la campaña "${activeCampaign}"`
+                  : 'Sin diseños guardados'}
+              </span>
               {onUploadCatalogFiles && (
                 <button
                   type="button"
@@ -1460,7 +1555,7 @@ export function InteractiveShirt3D({
             </div>
           ) : (
             <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible">
-              {catalogDesigns.map((d) => {
+              {filteredCatalogDesigns.map((d) => {
                 const isSelected =
                   (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                   (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
@@ -1519,39 +1614,56 @@ export function InteractiveShirt3D({
                     </button>
 
                     {isStoreOwner && (
-                      <div className="mt-1.5 flex items-center gap-1">
-                        {onRenameCatalogDesign && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const nextName = window.prompt('Nombre del diseño:', d.name);
-                              if (nextName === null) return;
-                              const nextCode = window.prompt('Código del diseño:', d.code || '');
-                              if (nextCode === null) return;
-                              onRenameCatalogDesign(
-                                d.id,
-                                nextName.trim() || d.name,
-                                nextCode.trim().toUpperCase()
-                              );
-                            }}
-                            className="flex-1 rounded-lg bg-slate-100 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
+                      <div className="mt-1.5 space-y-1">
+                        {campaigns && onChangeDesignCampaign && (
+                          <select
+                            value={d.campaign || 'all'}
+                            onChange={(e) => onChangeDesignCampaign(d.id, e.target.value)}
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-1.5 py-1 text-[10px] font-semibold text-slate-700 outline-none"
+                            title="Campaña del diseño"
                           >
-                            Editar
-                          </button>
+                            <option value="all">General (Todas)</option>
+                            {campaigns.map((camp) => (
+                              <option key={camp} value={camp}>
+                                {camp}
+                              </option>
+                            ))}
+                          </select>
                         )}
-                        {onToggleCatalogDesignVisible && (
-                          <button
-                            type="button"
-                            onClick={() => onToggleCatalogDesignVisible(d.id, !d.clientVisible)}
-                            className={`flex-1 rounded-lg py-1 text-[10px] font-semibold ${
-                              d.clientVisible
-                                ? 'bg-emerald-50 text-emerald-800'
-                                : 'bg-slate-100 text-slate-500'
-                            }`}
-                          >
-                            {d.clientVisible ? 'Visible' : 'Oculto'}
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {onRenameCatalogDesign && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextName = window.prompt('Nombre del diseño:', d.name);
+                                if (nextName === null) return;
+                                const nextCode = window.prompt('Código del diseño:', d.code || '');
+                                if (nextCode === null) return;
+                                onRenameCatalogDesign(
+                                  d.id,
+                                  nextName.trim() || d.name,
+                                  nextCode.trim().toUpperCase()
+                                );
+                              }}
+                              className="flex-1 rounded-lg bg-slate-100 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
+                            >
+                              Editar
+                            </button>
+                          )}
+                          {onToggleCatalogDesignVisible && (
+                            <button
+                              type="button"
+                              onClick={() => onToggleCatalogDesignVisible(d.id, !d.clientVisible)}
+                              className={`flex-1 rounded-lg py-1 text-[10px] font-semibold ${
+                                d.clientVisible
+                                  ? 'bg-emerald-50 text-emerald-800'
+                                  : 'bg-slate-100 text-slate-500'
+                              }`}
+                            >
+                              {d.clientVisible ? 'Visible' : 'Oculto'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

@@ -3,7 +3,7 @@ import { notifyPhotos, useAppState, usePhotoVersion } from './store';
 import { addCatalogDesign, deleteCatalogDesign, updateCatalogDesign } from './actions';
 import { savePhoto } from './db';
 import { fetchSharedPhoto, uploadPhotoNow } from './sync';
-import { applyBackgroundRemoval, compressImage } from './image';
+import { applyBackgroundRemoval, compressImage, isJpgFile } from './image';
 import { uid } from './ids';
 import type { CatalogQuickDesign, DecalPlacement } from '../components/Shirt';
 import type { SharedCatalogDesignRef } from './publicCatalog';
@@ -45,6 +45,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
           id: ref.id,
           name: ref.name,
           code: ref.code,
+          campaign: ref.campaign,
           photoId: ref.photoId,
           placement: ref.placement || 'back',
           clientVisible: true,
@@ -116,6 +117,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         id: d.id,
         name: d.name,
         code: d.code,
+        campaign: d.campaign,
         photoId: d.photoId,
         imageUrl: urlMap[d.photoId] || MEM_PHOTO_CACHE.get(d.photoId) || null,
         placement: d.placement || 'back',
@@ -133,6 +135,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     dataUrl: string;
     name?: string;
     code?: string;
+    campaign?: string;
     placement?: DecalPlacement;
     existingPhotoId?: string | null;
   }) => {
@@ -152,6 +155,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     return addCatalogDesign({
       name: finalName,
       code: finalCode,
+      campaign: opts.campaign && opts.campaign !== 'all' ? opts.campaign : undefined,
       photoId: pId,
       clientVisible: true,
       placement: opts.placement || 'back'
@@ -160,17 +164,18 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
 
   const uploadFilesToCatalog = async (
     files: FileList | File[],
-    opts?: { removeBg?: boolean; tolerance?: number; placement?: DecalPlacement }
+    opts?: { removeBg?: boolean; tolerance?: number; placement?: DecalPlacement; campaign?: string }
   ): Promise<number> => {
     const list = Array.from(files);
     if (!list.length) return 0;
     const shouldRemove = opts?.removeBg ?? false;
-    const tol = opts?.tolerance ?? 32;
+    const tol = opts?.tolerance ?? 34;
     let added = 0;
 
     for (const file of list) {
+      const autoRemoveForJpg = shouldRemove || isJpgFile(file);
       const raw = await compressImage(file, 1400, 0.92, false);
-      const processed = shouldRemove ? await applyBackgroundRemoval(raw, true, tol) : raw;
+      const processed = autoRemoveForJpg ? await applyBackgroundRemoval(raw, true, tol) : raw;
       const pId = uid();
       MEM_PHOTO_CACHE.set(pId, processed);
       await savePhoto(pId, processed, 0);
@@ -181,6 +186,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       const count = (state.catalogDesigns || []).filter((x) => !x.deleted).length + added + 1;
       addCatalogDesign({
         name: cleanFileName ? cleanFileName.slice(0, 24) : `Diseño #${count}`,
+        campaign: opts?.campaign && opts.campaign !== 'all' ? opts.campaign : undefined,
         photoId: pId,
         clientVisible: true,
         placement: opts?.placement || 'back'
@@ -198,8 +204,14 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     uploadFilesToCatalog,
     toggleVisible: (id: string, nextVisible: boolean) =>
       updateCatalogDesign(id, { clientVisible: nextVisible }),
-    renameDesign: (id: string, name: string, code: string) =>
-      updateCatalogDesign(id, { name: name.trim() || 'Diseño', code: code.trim().toUpperCase() }),
+    renameDesign: (id: string, name: string, code: string, campaign?: string) =>
+      updateCatalogDesign(id, {
+        name: name.trim() || 'Diseño',
+        code: code.trim().toUpperCase(),
+        ...(campaign !== undefined ? { campaign: campaign.trim() || undefined } : {})
+      }),
+    setDesignCampaign: (id: string, campaign: string) =>
+      updateCatalogDesign(id, { campaign: campaign === 'all' ? undefined : campaign }),
     deleteDesign: (id: string) => deleteCatalogDesign(id)
   };
 }

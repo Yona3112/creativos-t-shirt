@@ -667,6 +667,7 @@ export function addCatalogDesign(input: {
   photoId: string;
   clientVisible?: boolean;
   placement?: CatalogDesign['placement'];
+  campaign?: string;
   code?: string;
 }): CatalogDesign {
   const t = now();
@@ -682,6 +683,7 @@ export function addCatalogDesign(input: {
     photoId: input.photoId,
     clientVisible: input.clientVisible ?? true,
     placement: input.placement || 'back',
+    campaign: input.campaign || 'all',
     createdAt: t,
     updatedAt: t
   };

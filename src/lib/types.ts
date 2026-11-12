@@ -158,12 +158,18 @@ export interface Settings {
   storeBrandId?: string;
   storeColorIds?: string[];
   storeSizes?: string[];
+  /** Campañas disponibles para agrupar y enviar por WhatsApp (ej. Ranchero, Turístico, Cristiana) */
+  campaigns?: string[];
+  /** Campaña activa seleccionada para publicar en #tienda */
+  activeCampaign?: string;
 }
 
 export interface CatalogDesign extends Entity {
   name: string;
   /** Código corto para reportes (ej. D-001) */
   code?: string;
+  /** Campaña o colección a la que pertenece (ej. Ranchero, Turístico, Cristiana) */
+  campaign?: string;
   photoId: string;
   /** Si es true, el cliente lo ve disponible al editar la camisa 3D */
   clientVisible: boolean;
