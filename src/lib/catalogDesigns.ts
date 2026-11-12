@@ -24,38 +24,73 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     return init;
   });
 
-  const rawList = useMemo(() => {
-    const fromState = (state.catalogDesigns || [])
-      .filter((d) => !d.deleted && d.photoId)
-      .sort((a, b) => b.createdAt - a.createdAt);
-
-    if (!fallbackRefs || fallbackRefs.length === 0) {
-      return fromState;
-    }
-
-    const map = new Map(fromState.map((d) => [d.id, d]));
-    for (const ref of fallbackRefs) {
-      if (!map.has(ref.id)) {
-        // Si el estado en vivo ya tiene ese diseño marcado como deleted o clientVisible=false, respetarlo
-        const deletedOrHidden = (state.catalogDesigns || []).find((x) => x.id === ref.id);
-        if (deletedOrHidden && (deletedOrHidden.deleted || deletedOrHidden.clientVisible === false)) {
-          continue;
+  const soldByDesign = useMemo(() => {
+    const map = new Map<string, number>();
+    if (fallbackRefs) {
+      for (const ref of fallbackRefs) {
+        if (ref.soldCount && ref.soldCount > 0) {
+          map.set(ref.id, ref.soldCount);
         }
-        map.set(ref.id, {
-          id: ref.id,
-          name: ref.name,
-          code: ref.code,
-          campaign: ref.campaign,
-          photoId: ref.photoId,
-          placement: ref.placement || 'back',
-          clientVisible: true,
-          createdAt: 0,
-          updatedAt: 0
-        });
       }
     }
-    return Array.from(map.values());
-  }, [state.catalogDesigns, fallbackRefs]);
+    for (const o of state.orders || []) {
+      if (o.deleted || o.status === 'cancelado') continue;
+      const units = (o.items || []).reduce((s, it) => s + (it.qty || 0), 0) || 1;
+      if (o.designId) {
+        map.set(o.designId, (map.get(o.designId) || 0) + units);
+      } else if (o.designCode || o.designName) {
+        const match = (state.catalogDesigns || []).find(
+          (d) =>
+            !d.deleted &&
+            ((o.designCode && d.code && d.code.toLowerCase() === o.designCode.toLowerCase()) ||
+              (o.designName && d.name.toLowerCase() === o.designName.toLowerCase()))
+        );
+        if (match) {
+          map.set(match.id, (map.get(match.id) || 0) + units);
+        }
+      }
+    }
+    return map;
+  }, [state.orders, state.catalogDesigns, fallbackRefs]);
+
+  const rawList = useMemo(() => {
+    const fromState = (state.catalogDesigns || [])
+      .filter((d) => !d.deleted && d.photoId);
+
+    const map = new Map(fromState.map((d) => [d.id, d]));
+    if (fallbackRefs && fallbackRefs.length > 0) {
+      for (const ref of fallbackRefs) {
+        if (!map.has(ref.id)) {
+          const deletedOrHidden = (state.catalogDesigns || []).find((x) => x.id === ref.id);
+          if (deletedOrHidden && (deletedOrHidden.deleted || deletedOrHidden.clientVisible === false)) {
+            continue;
+          }
+          map.set(ref.id, {
+            id: ref.id,
+            name: ref.name,
+            code: ref.code,
+            campaign: ref.campaign,
+            featured: ref.featured,
+            photoId: ref.photoId,
+            placement: ref.placement || 'back',
+            clientVisible: true,
+            createdAt: 0,
+            updatedAt: 0
+          });
+        }
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const featA = Boolean(a.featured);
+      const featB = Boolean(b.featured);
+      if (featA !== featB) return featA ? -1 : 1;
+      const soldA = soldByDesign.get(a.id) || 0;
+      const soldB = soldByDesign.get(b.id) || 0;
+      if (soldB !== soldA) return soldB - soldA;
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+  }, [state.catalogDesigns, fallbackRefs, soldByDesign]);
 
   const rawListKey = useMemo(
     () => rawList.map((d) => `${d.id}:${d.photoId}`).join('|'),
@@ -111,20 +146,38 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     };
   }, [rawListKey, photoVer]);
 
-  const allDesigns: CatalogQuickDesign[] = useMemo(
-    () =>
-      rawList.map((d) => ({
+  const allDesigns: CatalogQuickDesign[] = useMemo(() => {
+    const anySoldOrFeatured = rawList.some(
+      (d) => Boolean(d.featured) || (soldByDesign.get(d.id) || 0) > 0
+    );
+    let bestSellerRank = 0;
+    return rawList.map((d, idx) => {
+      const soldCount = soldByDesign.get(d.id) || 0;
+      const featured = Boolean(d.featured);
+      let isBestSeller = false;
+      if (anySoldOrFeatured) {
+        if (featured || (soldCount > 0 && bestSellerRank < 3)) {
+          isBestSeller = true;
+          bestSellerRank++;
+        }
+      } else if (idx < 2 && d.clientVisible !== false) {
+        isBestSeller = true;
+      }
+      return {
         id: d.id,
         name: d.name,
         code: d.code,
         campaign: d.campaign,
+        soldCount,
+        featured,
+        isBestSeller,
         photoId: d.photoId,
         imageUrl: urlMap[d.photoId] || MEM_PHOTO_CACHE.get(d.photoId) || null,
         placement: d.placement || 'back',
         clientVisible: d.clientVisible !== false
-      })),
-    [rawList, urlMap]
-  );
+      };
+    });
+  }, [rawList, urlMap, soldByDesign]);
 
   const clientDesigns: CatalogQuickDesign[] = useMemo(
     () => allDesigns.filter((d) => d.clientVisible !== false),
@@ -231,6 +284,8 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       }),
     setDesignCampaign: (id: string, campaign: string) =>
       updateCatalogDesign(id, { campaign: campaign === 'all' ? undefined : campaign }),
+    toggleFeatured: (id: string, nextFeatured: boolean) =>
+      updateCatalogDesign(id, { featured: nextFeatured }),
     deleteDesign: (id: string) => deleteCatalogDesign(id)
   };
 }

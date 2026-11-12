@@ -170,6 +170,8 @@ export interface CatalogDesign extends Entity {
   code?: string;
   /** Campaña o colección a la que pertenece (ej. Ranchero, Turístico, Cristiana) */
   campaign?: string;
+  /** Destacado manualmente como Más Vendido / Top */
+  featured?: boolean;
   photoId: string;
   /** Si es true, el cliente lo ve disponible al editar la camisa 3D */
   clientVisible: boolean;

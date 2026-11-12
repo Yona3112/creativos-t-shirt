@@ -128,6 +128,7 @@ export default function Catalog3D() {
     saveCurrentToCatalog,
     uploadFilesToCatalog,
     toggleVisible,
+    toggleFeatured,
     renameDesign,
     setDesignCampaign,
     deleteDesign
@@ -304,6 +305,8 @@ export default function Catalog3D() {
         name: d.name,
         code: d.code,
         campaign: d.campaign,
+        soldCount: d.soldCount,
+        featured: d.featured,
         photoId: d.photoId,
         placement: d.placement
       })),
@@ -614,6 +617,15 @@ export default function Catalog3D() {
               nextVis
                 ? 'Diseño habilitado para que el cliente lo vea'
                 : 'Diseño oculto para el cliente'
+            );
+            setTimeout(() => void syncLiveCatalogSnapshot(), 150);
+          }}
+          onToggleCatalogDesignFeatured={(id, nextFeat) => {
+            toggleFeatured(id, nextFeat);
+            toast(
+              nextFeat
+                ? '★ Diseño destacado al inicio como Más vendido'
+                : 'Diseño quitado de destacados'
             );
             setTimeout(() => void syncLiveCatalogSnapshot(), 150);
           }}

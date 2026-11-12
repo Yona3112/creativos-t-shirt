@@ -544,6 +544,12 @@ export interface CatalogQuickDesign {
   code?: string;
   /** Campaña o colección (ej. Ranchero, Turístico, Cristiana) */
   campaign?: string;
+  /** Cantidad vendida en pedidos */
+  soldCount?: number;
+  /** Destacado manualmente como Más vendido */
+  featured?: boolean;
+  /** Si debe mostrar la viñeta especial minimalista de Más vendido */
+  isBestSeller?: boolean;
   photoId: string;
   imageUrl: string | null;
   placement: DecalPlacement;
@@ -597,6 +603,7 @@ export function InteractiveShirt3D({
   onSaveCurrentToCatalog,
   onUploadCatalogFiles,
   onToggleCatalogDesignVisible,
+  onToggleCatalogDesignFeatured,
   onDeleteCatalogDesign,
   onRenameCatalogDesign,
   onChangeDesignCampaign,
@@ -649,6 +656,7 @@ export function InteractiveShirt3D({
   onSaveCurrentToCatalog?: (chosenCampaign?: string) => void;
   onUploadCatalogFiles?: (files: FileList | File[], chosenCampaign?: string) => void;
   onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
+  onToggleCatalogDesignFeatured?: (designId: string, nextFeatured: boolean) => void;
   onDeleteCatalogDesign?: (designId: string) => void;
   onRenameCatalogDesign?: (designId: string, name: string, code: string) => void;
   onChangeDesignCampaign?: (designId: string, campaign: string) => void;
@@ -669,7 +677,10 @@ export function InteractiveShirt3D({
   const themeStyle = BOUTIQUE_THEMES[boutiqueTheme] || BOUTIQUE_THEMES.ranchero;
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
+  const clientCarouselRef = useRef<HTMLDivElement>(null);
+  const adminCarouselRef = useRef<HTMLDivElement>(null);
   const [isWesternModalOpen, setIsWesternModalOpen] = useState(false);
+  const [showPositionSliders, setShowPositionSliders] = useState(false);
   const [uploadModalState, setUploadModalState] = useState<
     { mode: 'files'; files: File[] } | { mode: 'current' } | null
   >(null);
@@ -731,8 +742,33 @@ export function InteractiveShirt3D({
     return (d.campaign || '').toLowerCase() === activeCampaign.toLowerCase();
   });
 
+  const readySlideDesigns = filteredCatalogDesigns.filter((d) => !!d.imageUrl);
+  const currentSlideIdx = readySlideDesigns.findIndex(
+    (d) =>
+      (activeCatalogDesignId && d.id === activeCatalogDesignId) ||
+      (!!designUrl && d.imageUrl === designUrl)
+  );
+
+  const stepCatalogDesign = (delta: number) => {
+    if (!readySlideDesigns.length || !onSelectCatalogDesign) return;
+    setShowcaseActive(false);
+    const nextIdx =
+      currentSlideIdx < 0
+        ? delta >= 0
+          ? 0
+          : readySlideDesigns.length - 1
+        : (currentSlideIdx + delta + readySlideDesigns.length) % readySlideDesigns.length;
+    onSelectCatalogDesign(readySlideDesigns[nextIdx]);
+  };
+
+  const scrollCarousel = (ref: { current: HTMLDivElement | null }, dir: -1 | 1) => {
+    if (!ref.current) return;
+    ref.current.scrollBy({ left: dir * 280, behavior: 'smooth' });
+  };
+
   if (!isStoreOwner) {
     const isBackSide = placement === 'back';
+    const currentSlideDesign = currentSlideIdx >= 0 ? readySlideDesigns[currentSlideIdx] : null;
     return (
       <div className="relative select-none space-y-4">
         {onUploadFile && (
@@ -798,7 +834,7 @@ export function InteractiveShirt3D({
             </button>
           </div>
 
-          {/* Lienzo 3D Central */}
+          {/* Lienzo 3D Central con botones laterales tipo Slide */}
           <div
             className="relative mx-auto flex w-full max-w-[360px] items-center justify-center"
             style={{ aspectRatio: '1 / 1' }}
@@ -810,6 +846,27 @@ export function InteractiveShirt3D({
               }}
             />
             <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/60 blur-md" />
+
+            {readySlideDesigns.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => stepCatalogDesign(-1)}
+                  aria-label="Diseño anterior"
+                  className="absolute left-0 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-lg font-bold text-white/90 ring-1 ring-white/15 backdrop-blur-md transition hover:bg-black/65 active:scale-95"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stepCatalogDesign(1)}
+                  aria-label="Siguiente diseño"
+                  className="absolute right-0 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-lg font-bold text-white/90 ring-1 ring-white/15 backdrop-blur-md transition hover:bg-black/65 active:scale-95"
+                >
+                  ›
+                </button>
+              </>
+            )}
 
             <WebGLShirtCanvas
               hex={hex}
@@ -827,44 +884,121 @@ export function InteractiveShirt3D({
             />
           </div>
 
-          {/* Selector de Ubicación del Estampado (solo aparece cuando hay diseño activo) */}
+          {/* Selector de Ubicación del Estampado + Ajuste tipo Slide */}
           {designUrl && (
-            <div className="mt-1 flex items-center justify-center gap-2">
-              <div className="inline-flex items-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDesignChange?.({ placement: 'back', offsetX: 0, offsetY: 0 });
-                    setTargetAngleY(180);
-                  }}
-                  className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
-                    isBackSide ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
-                  }`}
-                >
-                  Estampar en Espalda
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDesignChange?.({ placement: 'center', offsetX: 0, offsetY: 0 });
-                    setTargetAngleY(0);
-                  }}
-                  className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
-                    !isBackSide ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
-                  }`}
-                >
-                  Estampar en Frente
-                </button>
-                {onClearDesign && (
+            <div className="mt-1 space-y-2">
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                <div className="inline-flex items-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
                   <button
                     type="button"
-                    onClick={onClearDesign}
-                    className="rounded-full px-3 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200"
+                    onClick={() => {
+                      onDesignChange?.({ placement: 'back', offsetX: 0, offsetY: 0 });
+                      setTargetAngleY(180);
+                    }}
+                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
+                      isBackSide ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
+                    }`}
                   >
-                    Quitar
+                    Espalda
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDesignChange?.({ placement: 'center', offsetX: 0, offsetY: 0 });
+                      setTargetAngleY(0);
+                    }}
+                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
+                      !isBackSide ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
+                    }`}
+                  >
+                    Frente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPositionSliders((v) => !v)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      showPositionSliders
+                        ? 'bg-white text-slate-950 shadow-sm'
+                        : 'text-white/80 hover:text-white'
+                    }`}
+                  >
+                    Mover
+                  </button>
+                  {onClearDesign && (
+                    <button
+                      type="button"
+                      onClick={onClearDesign}
+                      className="rounded-full px-3 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200"
+                    >
+                      Quitar
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {showPositionSliders && onDesignChange && (
+                <div className="mx-auto max-w-sm rounded-2xl bg-white/95 p-3 text-slate-900 shadow-md backdrop-blur-md">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      Desliza para mover o ajustar el diseño
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onDesignChange({ offsetX: 0, offsetY: 0, scale: 2.0 })}
+                      className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
+                    >
+                      Centrar A3
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div>
+                      <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                        <span>↕ Altura</span>
+                        <span>{Math.round(designOffsetY)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-20"
+                        max="22"
+                        step="1"
+                        value={designOffsetY}
+                        onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
+                        className="w-full accent-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                        <span>↔ Lado</span>
+                        <span>{Math.round(designOffsetX)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-20"
+                        max="20"
+                        step="1"
+                        value={designOffsetX}
+                        onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
+                        className="w-full accent-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                        <span>⤢ Tamaño</span>
+                        <span>{Math.round(designScale * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1.0"
+                        max="2.2"
+                        step="0.05"
+                        value={designScale}
+                        onChange={(e) => onDesignChange({ scale: Number(e.target.value) })}
+                        className="w-full accent-slate-900"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -898,121 +1032,195 @@ export function InteractiveShirt3D({
           )}
         </div>
 
-        {/* GALERÍA DE DISEÑOS MINIMALISTA */}
+        {/* GALERÍA DE DISEÑOS TIPO SLIDE ESTILO APPLE (CON MÁS VENDIDOS AL INICIO) */}
         <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <h3 className="text-sm font-semibold tracking-tight text-slate-900">Diseño</h3>
-                {campaigns && campaigns.length > 0 && onChangeActiveCampaign && (
-                  <div className="ml-1 flex flex-wrap items-center gap-1">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h3 className="text-sm font-semibold tracking-tight text-slate-900">Diseños</h3>
+              {campaigns && campaigns.length > 0 && onChangeActiveCampaign && (
+                <div className="ml-1 flex flex-wrap items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onChangeActiveCampaign('all')}
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                      activeCampaign === 'all'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Todos
+                  </button>
+                  {campaigns.map((camp) => (
                     <button
+                      key={camp}
                       type="button"
-                      onClick={() => onChangeActiveCampaign('all')}
+                      onClick={() => onChangeActiveCampaign(camp)}
                       className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
-                        activeCampaign === 'all'
+                        activeCampaign.toLowerCase() === camp.toLowerCase()
                           ? 'bg-slate-900 text-white'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                     >
-                      Todos
+                      {camp}
                     </button>
-                    {campaigns.map((camp) => (
-                      <button
-                        key={camp}
-                        type="button"
-                        onClick={() => onChangeActiveCampaign(camp)}
-                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
-                          activeCampaign.toLowerCase() === camp.toLowerCase()
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {camp}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {onUploadFile && (
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {filteredCatalogDesigns.length > 2 && (
+                <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 p-0.5">
                   <button
                     type="button"
-                    onClick={() => uploadInputRef.current?.click()}
-                    className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
+                    onClick={() => scrollCarousel(clientCarouselRef, -1)}
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-slate-700 hover:bg-white"
+                    aria-label="Deslizar a la izquierda"
                   >
-                    + Subir archivo A3
+                    ‹
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => scrollCarousel(clientCarouselRef, 1)}
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-slate-700 hover:bg-white"
+                    aria-label="Deslizar a la derecha"
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
+              {onUploadFile && (
                 <button
                   type="button"
-                  onClick={() => setIsWesternModalOpen(true)}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 transition hover:bg-slate-50 active:scale-95"
+                  onClick={() => uploadInputRef.current?.click()}
+                  className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
                 >
-                  + Texto / Logo
+                  + Subir archivo A3
                 </button>
-                {designUrl && onClearDesign && (
-                  <button
-                    type="button"
-                    onClick={onClearDesign}
-                    className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
-                  >
-                    Sin diseño
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible">
-              {filteredCatalogDesigns.map((d) => {
-                const isSelected =
-                  (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
-                  (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => {
-                      setShowcaseActive(false);
-                      if (isSelected && onClearDesign) {
-                        onClearDesign();
-                        return;
-                      }
-                      onSelectCatalogDesign?.(d);
-                    }}
-                    disabled={!d.imageUrl}
-                    className={`group flex w-[112px] shrink-0 snap-start flex-col rounded-2xl p-1.5 text-left transition ${
-                      isSelected
-                        ? 'bg-slate-900 text-white shadow-md'
-                        : 'bg-slate-50 text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div
-                      className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-2 transition duration-200 group-hover:scale-[1.02]"
-                      style={{ backgroundColor: hex }}
-                    >
-                      {d.imageUrl ? (
-                        <img
-                          src={d.imageUrl}
-                          alt={d.name}
-                          className="h-full w-full object-contain drop-shadow-sm"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className="text-[10px] font-medium text-slate-400">...</span>
-                      )}
-                    </div>
-                    <div
-                      className={`mt-1.5 w-full truncate px-1 text-center text-xs font-semibold ${
-                        isSelected ? 'text-white' : 'text-slate-800'
-                      }`}
-                    >
-                      {d.name}
-                    </div>
-                  </button>
-                );
-              })}
+              )}
+              <button
+                type="button"
+                onClick={() => setIsWesternModalOpen(true)}
+                className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 transition hover:bg-slate-50 active:scale-95"
+              >
+                + Texto / Logo
+              </button>
+              {designUrl && onClearDesign && (
+                <button
+                  type="button"
+                  onClick={onClearDesign}
+                  className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
+                >
+                  Sin diseño
+                </button>
+              )}
             </div>
           </div>
+
+          {/* Control rápido tipo Slide para cambiar diseño */}
+          {readySlideDesigns.length > 1 && (
+            <div className="mb-3 flex items-center gap-3 rounded-2xl bg-slate-50 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => stepCatalogDesign(-1)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
+              >
+                ‹
+              </button>
+              <div className="flex flex-1 flex-col gap-1">
+                <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                  <span className="truncate font-semibold text-slate-900">
+                    {currentSlideDesign ? currentSlideDesign.name : 'Desliza para elegir diseño'}
+                  </span>
+                  <span>
+                    {currentSlideIdx >= 0 ? currentSlideIdx + 1 : 0} / {readySlideDesigns.length}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={readySlideDesigns.length - 1}
+                  step={1}
+                  value={currentSlideIdx >= 0 ? currentSlideIdx : 0}
+                  onChange={(e) => {
+                    const idx = Number(e.target.value);
+                    const target = readySlideDesigns[idx];
+                    if (target && onSelectCatalogDesign) {
+                      setShowcaseActive(false);
+                      onSelectCatalogDesign(target);
+                    }
+                  }}
+                  className="w-full accent-slate-900"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => stepCatalogDesign(1)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
+              >
+                ›
+              </button>
+            </div>
+          )}
+
+          <div
+            ref={clientCarouselRef}
+            className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth pb-1"
+          >
+            {filteredCatalogDesigns.map((d) => {
+              const isSelected =
+                (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
+                (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
+              return (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => {
+                    setShowcaseActive(false);
+                    if (isSelected && onClearDesign) {
+                      onClearDesign();
+                      return;
+                    }
+                    onSelectCatalogDesign?.(d);
+                  }}
+                  disabled={!d.imageUrl}
+                  className={`group relative flex w-[122px] shrink-0 snap-start flex-col rounded-2xl p-1.5 text-left transition ${
+                    isSelected
+                      ? 'bg-slate-900 text-white shadow-md'
+                      : 'bg-slate-50 text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  {d.isBestSeller && (
+                    <span className="absolute left-2.5 top-2.5 z-10 inline-flex items-center gap-0.5 rounded-full bg-white/95 px-2 py-0.5 text-[9px] font-bold tracking-tight text-slate-900 shadow-sm ring-1 ring-black/10 backdrop-blur-md">
+                      <span className="text-amber-500">★</span> Más vendido
+                    </span>
+                  )}
+                  <div
+                    className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-2 transition duration-200 group-hover:scale-[1.02]"
+                    style={{ backgroundColor: hex }}
+                  >
+                    {d.imageUrl ? (
+                      <img
+                        src={d.imageUrl}
+                        alt={d.name}
+                        className="h-full w-full object-contain drop-shadow-sm"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span className="text-[10px] font-medium text-slate-400">...</span>
+                    )}
+                  </div>
+                  <div
+                    className={`mt-1.5 w-full truncate px-1 text-center text-xs font-semibold ${
+                      isSelected ? 'text-white' : 'text-slate-800'
+                    }`}
+                  >
+                    {d.name}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <WesternDesignModal
           isOpen={isWesternModalOpen}
@@ -1127,6 +1335,27 @@ export function InteractiveShirt3D({
               }}
             />
             <div className="pointer-events-none absolute bottom-4 h-4 w-44 rounded-full bg-black/15 blur-md" />
+
+            {readySlideDesigns.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => stepCatalogDesign(-1)}
+                  aria-label="Diseño anterior"
+                  className="absolute left-1 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stepCatalogDesign(1)}
+                  aria-label="Siguiente diseño"
+                  className="absolute right-1 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
+                >
+                  ›
+                </button>
+              </>
+            )}
 
             <WebGLShirtCanvas
               hex={hex}
@@ -1427,10 +1656,21 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Ubicación en la prenda */}
+          {/* Ubicación y Sliders de Posición en la prenda */}
           {onDesignChange && (
-            <div className="space-y-2 border-b border-slate-100 pb-3">
-              <div className="text-xs font-semibold text-slate-900">Ubicación</div>
+            <div className="space-y-2.5 border-b border-slate-100 pb-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-900">Ubicación y Posición</span>
+                {designUrl && (designOffsetX !== 0 || designOffsetY !== 0) && (
+                  <button
+                    type="button"
+                    onClick={() => onDesignChange({ offsetX: 0, offsetY: 0 })}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
+                  >
+                    Centrar
+                  </button>
+                )}
+              </div>
               <div className="grid grid-cols-3 gap-1.5">
                 {(
                   [
@@ -1453,6 +1693,42 @@ export function InteractiveShirt3D({
                   </button>
                 ))}
               </div>
+
+              {/* Sliders tipo Apple para mover el diseño arriba/abajo e izquierda/derecha */}
+              {designUrl && (
+                <div className="space-y-2 rounded-2xl bg-slate-50 p-2.5">
+                  <div>
+                    <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                      <span>↕ Altura (Arriba / Abajo)</span>
+                      <span>{Math.round(designOffsetY)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-20"
+                      max="22"
+                      step="1"
+                      value={designOffsetY}
+                      onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
+                      className="mt-1 w-full accent-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                      <span>↔ Lado (Izq. / Der.)</span>
+                      <span>{Math.round(designOffsetX)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-20"
+                      max="20"
+                      step="1"
+                      value={designOffsetX}
+                      onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
+                      className="mt-1 w-full accent-slate-900"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1562,6 +1838,26 @@ export function InteractiveShirt3D({
 
             {isStoreOwner && (
               <div className="flex flex-wrap items-center gap-1.5">
+                {filteredCatalogDesigns.length > 2 && (
+                  <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => scrollCarousel(adminCarouselRef, -1)}
+                      className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-slate-700 hover:bg-white"
+                      aria-label="Deslizar a la izquierda"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => scrollCarousel(adminCarouselRef, 1)}
+                      className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-slate-700 hover:bg-white"
+                      aria-label="Deslizar a la derecha"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
                 {designUrl && onSaveCurrentToCatalog && (
                   <button
                     type="button"
@@ -1593,6 +1889,52 @@ export function InteractiveShirt3D({
             )}
           </div>
 
+          {/* Barra tipo Slide para recorrer diseños del catálogo */}
+          {readySlideDesigns.length > 1 && (
+            <div className="mb-3 flex items-center gap-3 rounded-2xl bg-slate-50 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => stepCatalogDesign(-1)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
+              >
+                ‹
+              </button>
+              <div className="flex flex-1 flex-col gap-1">
+                <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                  <span className="truncate font-semibold text-slate-900">
+                    {currentSlideIdx >= 0 ? readySlideDesigns[currentSlideIdx].name : 'Desliza para cambiar diseño'}
+                  </span>
+                  <span>
+                    {currentSlideIdx >= 0 ? currentSlideIdx + 1 : 0} / {readySlideDesigns.length}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={readySlideDesigns.length - 1}
+                  step={1}
+                  value={currentSlideIdx >= 0 ? currentSlideIdx : 0}
+                  onChange={(e) => {
+                    const idx = Number(e.target.value);
+                    const target = readySlideDesigns[idx];
+                    if (target && onSelectCatalogDesign) {
+                      setShowcaseActive(false);
+                      onSelectCatalogDesign(target);
+                    }
+                  }}
+                  className="w-full accent-slate-900"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => stepCatalogDesign(1)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
+              >
+                ›
+              </button>
+            </div>
+          )}
+
           {filteredCatalogDesigns.length === 0 ? (
             <div className="flex items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3">
               <span className="text-xs text-slate-500">
@@ -1611,7 +1953,10 @@ export function InteractiveShirt3D({
               )}
             </div>
           ) : (
-            <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible">
+            <div
+              ref={adminCarouselRef}
+              className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth pb-1"
+            >
               {filteredCatalogDesigns.map((d) => {
                 const isSelected =
                   (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
@@ -1619,7 +1964,7 @@ export function InteractiveShirt3D({
                 return (
                   <div
                     key={d.id}
-                    className={`group relative flex w-[124px] shrink-0 snap-start flex-col justify-between rounded-2xl border p-2 transition ${
+                    className={`group relative flex w-[132px] shrink-0 snap-start flex-col justify-between rounded-2xl border p-2 transition ${
                       isSelected
                         ? 'border-slate-900 bg-slate-50 shadow-sm ring-1 ring-slate-900'
                         : d.clientVisible
@@ -1627,6 +1972,37 @@ export function InteractiveShirt3D({
                         : 'border-dashed border-slate-200 bg-slate-50/60 opacity-75'
                     }`}
                   >
+                    {isStoreOwner && onToggleCatalogDesignFeatured && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleCatalogDesignFeatured(d.id, !d.featured);
+                        }}
+                        title={
+                          d.featured
+                            ? 'Quitar de Más vendidos'
+                            : 'Destacar al inicio como Más vendido'
+                        }
+                        className={`absolute left-3 top-3 z-10 flex h-5 items-center gap-0.5 rounded-full px-1.5 text-[9px] font-bold shadow-sm backdrop-blur-md transition ${
+                          d.isBestSeller || d.featured
+                            ? 'bg-white/95 text-slate-900 ring-1 ring-black/10'
+                            : 'bg-black/40 text-white/80 hover:bg-white/90 hover:text-slate-900'
+                        }`}
+                      >
+                        <span className={d.isBestSeller || d.featured ? 'text-amber-500' : ''}>
+                          ★
+                        </span>
+                        {(d.isBestSeller || d.featured) && <span>Más vendido</span>}
+                      </button>
+                    )}
+
+                    {!onToggleCatalogDesignFeatured && d.isBestSeller && (
+                      <span className="absolute left-3 top-3 z-10 inline-flex items-center gap-0.5 rounded-full bg-white/95 px-2 py-0.5 text-[9px] font-bold tracking-tight text-slate-900 shadow-sm ring-1 ring-black/10 backdrop-blur-md">
+                        <span className="text-amber-500">★</span> Más vendido
+                      </span>
+                    )}
+
                     {isStoreOwner && onDeleteCatalogDesign && (
                       <button
                         type="button"

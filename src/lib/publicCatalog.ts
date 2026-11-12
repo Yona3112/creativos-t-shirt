@@ -20,6 +20,8 @@ export interface SharedCatalogDesignRef {
   name: string;
   code?: string;
   campaign?: string;
+  soldCount?: number;
+  featured?: boolean;
   photoId: string;
   placement: DecalPlacement;
 }
@@ -103,17 +105,45 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
       }
     }
   }
+  // Calcular unidades vendidas por diseño en pedidos reales
+  const soldByDesign = new Map<string, number>();
+  for (const o of state.orders || []) {
+    if (o.deleted || o.status === 'cancelado') continue;
+    const units = (o.items || []).reduce((s, it) => s + (it.qty || 0), 0) || 1;
+    if (o.designId) {
+      soldByDesign.set(o.designId, (soldByDesign.get(o.designId) || 0) + units);
+    } else if (o.designCode || o.designName) {
+      const match = (state.catalogDesigns || []).find(
+        (d) =>
+          !d.deleted &&
+          ((o.designCode && d.code && d.code.toLowerCase() === o.designCode.toLowerCase()) ||
+            (o.designName && d.name.toLowerCase() === o.designName.toLowerCase()))
+      );
+      if (match) {
+        soldByDesign.set(match.id, (soldByDesign.get(match.id) || 0) + units);
+      }
+    }
+  }
+
   const designs = (state.catalogDesigns || [])
     .filter((d) => !d.deleted && d.clientVisible && d.photoId)
-    .sort((a, b) => b.createdAt - a.createdAt)
     .map((d) => ({
       id: d.id,
       name: d.name,
       code: d.code,
       campaign: d.campaign,
+      soldCount: soldByDesign.get(d.id) || 0,
+      featured: Boolean(d.featured),
       photoId: d.photoId,
-      placement: (d.placement || 'back') as DecalPlacement
-    }));
+      placement: (d.placement || 'back') as DecalPlacement,
+      createdAt: d.createdAt || 0
+    }))
+    .sort((a, b) => {
+      if (a.featured !== b.featured) return a.featured ? -1 : 1;
+      if ((b.soldCount || 0) !== (a.soldCount || 0)) return (b.soldCount || 0) - (a.soldCount || 0);
+      return b.createdAt - a.createdAt;
+    })
+    .map(({ createdAt: _c, ...rest }) => rest);
 
   return {
     storeName: st.storeName,
