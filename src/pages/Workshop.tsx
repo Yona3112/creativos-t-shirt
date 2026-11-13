@@ -3,13 +3,16 @@ import type { Order } from '../lib/types';
 import { useAppState } from '../lib/store';
 import { folioLabel } from '../lib/ids';
 import { money } from '../lib/money';
-import { patchOrder, setOrderStatus } from '../lib/actions';
+import { deleteOrder, orderStockReturnCount, patchOrder, setOrderStatus } from '../lib/actions';
 import { printDailyOrdersReport } from '../lib/printReports';
-import { ColorDot, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
+import { ColorDot, Confirm, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
+import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
 
 export default function Workshop() {
   const state = useAppState();
   const [viewer, setViewer] = useState<string | null>(null);
+  const [pdfModal, setPdfModal] = useState<{ orders: Order[]; title: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Order | null>(null);
 
   const queue = useMemo(
     () =>
@@ -29,29 +32,100 @@ export default function Workshop() {
         <div className="text-xs font-extrabold text-slate-700">
           🔨 {queue.length} pedido{queue.length === 1 ? '' : 's'} en cola de producción / taller
         </div>
-        <button
-          type="button"
-          className="btn-primary px-3.5 py-2 text-xs"
-          onClick={() =>
-            printDailyOrdersReport(
-              queue,
-              state.settings,
-              `Cola de Producción en Taller (${queue.length} pedidos)`
-            )
-          }
-        >
-          🖨️ Imprimir Cola de Taller / Pedidos
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn-primary px-3.5 py-2 text-xs"
+            onClick={() =>
+              setPdfModal({
+                orders: queue,
+                title: `Cola de Taller (${queue.length} pedidos)`
+              })
+            }
+          >
+            📄 Guardar / Enviar PDF Taller
+          </button>
+          <button
+            type="button"
+            className="btn-soft px-3 py-2 text-xs"
+            onClick={() =>
+              printDailyOrdersReport(
+                queue,
+                state.settings,
+                `Cola de Producción en Taller (${queue.length} pedidos)`
+              )
+            }
+          >
+            🖨️ Imprimir
+          </button>
+        </div>
       </div>
       {queue.map((order) => (
-        <WorkshopCard key={order.id} order={order} onZoom={setViewer} />
+        <WorkshopCard
+          key={order.id}
+          order={order}
+          onZoom={setViewer}
+          onOpenPdf={() =>
+            setPdfModal({
+              orders: [order],
+              title: `Orden de Taller · ${folioLabel(order.folio)}`
+            })
+          }
+          onAskDelete={() => setConfirmDelete(order)}
+        />
       ))}
       <PhotoViewer src={viewer} onClose={() => setViewer(null)} />
+      {pdfModal && (
+        <WorkshopPdfModal
+          open
+          onClose={() => setPdfModal(null)}
+          orders={pdfModal.orders}
+          settings={state.settings}
+          title={pdfModal.title}
+        />
+      )}
+      <Confirm
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        title="Eliminar pedido y devolver stock"
+        text={
+          confirmDelete
+            ? `¿Eliminar el pedido ${folioLabel(confirmDelete.folio)} hecho por error? ${
+                orderStockReturnCount(confirmDelete) > 0
+                  ? `Se devolverán ${orderStockReturnCount(confirmDelete)} camisa(s) al inventario.`
+                  : 'Se eliminará del historial y taller.'
+              }`
+            : ''
+        }
+        confirmLabel="Sí, eliminar y devolver"
+        danger
+        onConfirm={() => {
+          if (confirmDelete) {
+            const ret = orderStockReturnCount(confirmDelete);
+            deleteOrder(confirmDelete.id);
+            toast(
+              ret > 0
+                ? `Pedido ${folioLabel(confirmDelete.folio)} eliminado · ${ret} camisa(s) regresaron al inventario`
+                : `Pedido ${folioLabel(confirmDelete.folio)} eliminado`
+            );
+          }
+        }}
+      />
     </div>
   );
 }
 
-function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) => void }) {
+function WorkshopCard({
+  order,
+  onZoom,
+  onOpenPdf,
+  onAskDelete
+}: {
+  order: Order;
+  onZoom: (src: string) => void;
+  onOpenPdf: () => void;
+  onAskDelete: () => void;
+}) {
   const photo = usePhoto(order.photoId);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState(order.notes || '');
@@ -77,6 +151,22 @@ function WorkshopCard({ order, onZoom }: { order: Order; onZoom: (src: string) =
             className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50"
           >
             ✏️ Notas
+          </button>
+          <button
+            type="button"
+            onClick={onOpenPdf}
+            className="rounded-lg border border-slate-200 bg-slate-900 px-2.5 py-1 text-xs font-bold text-white hover:bg-slate-800"
+            title="Guardar o enviar PDF de este pedido"
+          >
+            📄 PDF
+          </button>
+          <button
+            type="button"
+            onClick={onAskDelete}
+            className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-100"
+            title="Eliminar pedido y devolver camisas al stock"
+          >
+            🗑️
           </button>
         </div>
         {order.balance > 0 ? (

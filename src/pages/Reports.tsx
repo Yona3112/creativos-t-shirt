@@ -5,8 +5,9 @@ import { fromCents, money } from '../lib/money';
 import { folioLabel } from '../lib/ids';
 import { STATUS_LABEL } from '../lib/actions';
 import { downloadText, toCSV } from '../lib/csv';
-import { printDailyOrdersReport } from '../lib/printReports';
 import { ColorDot, Empty, toast } from '../components/ui';
+import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
+import type { Order } from '../lib/types';
 
 type Preset = 'hoy' | '7d' | '30d' | 'todo' | 'rango';
 
@@ -16,6 +17,7 @@ export default function Reports() {
   const [preset, setPreset] = useState<Preset>('hoy');
   const [fromDay, setFromDay] = useState(today);
   const [toDay, setToDay] = useState(today);
+  const [pdfModal, setPdfModal] = useState<{ orders: Order[]; title: string } | null>(null);
 
   const range = useMemo(() => {
     const endKey = preset === 'rango' ? toDay : today;
@@ -241,17 +243,17 @@ export default function Reports() {
           <button
             className="btn-primary w-full"
             onClick={() =>
-              printDailyOrdersReport(
+              setPdfModal({
                 orders,
-                state.settings,
-                preset === 'hoy'
-                  ? `Pedidos de Hoy (${today})`
-                  : `Pedidos del Período (${range.startKey} a ${range.endKey})`
-              )
+                title:
+                  preset === 'hoy'
+                    ? `Pedidos de Hoy (${today})`
+                    : `Pedidos del Período (${range.startKey} a ${range.endKey})`
+              })
             }
             disabled={orders.length === 0}
           >
-            🖨️ Imprimir Pedidos ({orders.length}) · PDF
+            📄 PDF / Imprimir Pedidos ({orders.length})
           </button>
           <button className="btn-soft w-full" onClick={exportCsv} disabled={orders.length === 0}>
             📥 Exportar a CSV
@@ -380,6 +382,16 @@ export default function Reports() {
           </section>
           </div>
         </>
+      )}
+
+      {pdfModal && (
+        <WorkshopPdfModal
+          open
+          onClose={() => setPdfModal(null)}
+          orders={pdfModal.orders}
+          settings={state.settings}
+          title={pdfModal.title}
+        />
       )}
     </div>
   );

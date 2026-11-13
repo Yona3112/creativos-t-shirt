@@ -4,9 +4,10 @@ import { notifyPhotos, useAppState } from '../lib/store';
 import { folioLabel, uid } from '../lib/ids';
 import { fromCents, money, toCents } from '../lib/money';
 import { dayKey, fmtDateTime } from '../lib/time';
-import { deleteOrder, markPaid, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
+import { deleteOrder, markPaid, orderStockReturnCount, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
 import { printDailyOrdersReport } from '../lib/printReports';
 import { shareLabel } from '../lib/pdf';
+import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
 import { compressImage } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { uploadPhotoNow } from '../lib/sync';
@@ -44,6 +45,7 @@ export default function Orders() {
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<Order | null>(null);
+  const [pdfModal, setPdfModal] = useState<{ orders: Order[]; title: string } | null>(null);
 
   const dayOrders = useMemo(
     () =>
@@ -107,28 +109,40 @@ export default function Orders() {
                 if (dayOrders.length === 0) {
                   return toast(`Sin pedidos el ${printDate}`, 'info');
                 }
-                printDailyOrdersReport(
-                  dayOrders,
-                  settings,
-                  printDate === today ? `Pedidos de Hoy (${printDate})` : `Pedidos del Día (${printDate})`
-                );
+                setPdfModal({
+                  orders: dayOrders,
+                  title: printDate === today ? `Pedidos de Hoy (${printDate})` : `Pedidos del Día (${printDate})`
+                });
               }}
             >
-              🖨️ Imprimir Día ({dayOrders.length})
+              📄 PDF Taller Día ({dayOrders.length})
             </button>
             <button
               type="button"
               className="btn-soft px-3 py-2 text-xs"
               disabled={orders.length === 0}
               onClick={() =>
-                printDailyOrdersReport(
+                setPdfModal({
                   orders,
+                  title: `Pedidos (${orders.length})`
+                })
+              }
+            >
+              📄 PDF Lista ({orders.length})
+            </button>
+            <button
+              type="button"
+              className="btn-ghost px-3 py-2 text-xs"
+              disabled={dayOrders.length === 0}
+              onClick={() =>
+                printDailyOrdersReport(
+                  dayOrders,
                   settings,
-                  `Pedidos (${orders.length})`
+                  printDate === today ? `Pedidos de Hoy (${printDate})` : `Pedidos del Día (${printDate})`
                 )
               }
             >
-              🖨️ Imprimir Lista ({orders.length})
+              🖨️ Imprimir Día
             </button>
           </div>
         </div>
@@ -165,6 +179,12 @@ export default function Orders() {
               onAskCancel={() => setCancelOrder(o)}
               onEdit={() => setEditingOrder(o)}
               onAskDelete={() => setConfirmDeleteOrder(o)}
+              onOpenWorkshopPdf={() =>
+                setPdfModal({
+                  orders: [o],
+                  title: `Orden Taller ${folioLabel(o.folio)}`
+                })
+              }
             />
           ))}
         </div>
@@ -186,15 +206,26 @@ export default function Orders() {
         title="Eliminar pedido"
         text={
           confirmDeleteOrder
-            ? `¿Eliminar el pedido ${folioLabel(confirmDeleteOrder.folio)} del listado?`
+            ? (() => {
+                const ret = orderStockReturnCount(confirmDeleteOrder);
+                return ret > 0
+                  ? `¿Eliminar el pedido ${folioLabel(confirmDeleteOrder.folio)}? Se regresarán ${ret} camisa(s) en blanco al inventario.`
+                  : `¿Eliminar el pedido ${folioLabel(confirmDeleteOrder.folio)} del listado?`;
+              })()
             : ''
         }
-        confirmLabel="Sí, eliminar pedido"
+        confirmLabel="Sí, eliminar y devolver stock"
         danger
         onConfirm={() => {
           if (confirmDeleteOrder) {
+            const ret = orderStockReturnCount(confirmDeleteOrder);
             deleteOrder(confirmDeleteOrder.id);
-            toast(`Pedido ${folioLabel(confirmDeleteOrder.folio)} eliminado`);
+            toast(
+              ret > 0
+                ? `Pedido ${folioLabel(confirmDeleteOrder.folio)} eliminado · ${ret} camisa(s) devueltas al inventario`
+                : `Pedido ${folioLabel(confirmDeleteOrder.folio)} eliminado`,
+              'ok'
+            );
           }
         }}
       />
@@ -283,6 +314,16 @@ export default function Orders() {
           </div>
         </div>
       )}
+
+      {pdfModal && (
+        <WorkshopPdfModal
+          open
+          onClose={() => setPdfModal(null)}
+          orders={pdfModal.orders}
+          settings={settings}
+          title={pdfModal.title}
+        />
+      )}
     </div>
   );
 }
@@ -293,7 +334,8 @@ function OrderCard({
   onZoom,
   onAskCancel,
   onEdit,
-  onAskDelete
+  onAskDelete,
+  onOpenWorkshopPdf
 }: {
   order: Order;
   settings: Settings;
@@ -301,6 +343,7 @@ function OrderCard({
   onAskCancel: () => void;
   onEdit: () => void;
   onAskDelete: () => void;
+  onOpenWorkshopPdf: () => void;
 }) {
   const photo = usePhoto(order.photoId);
   const guidePhoto = usePhoto(order.guidePhotoId || null);
@@ -691,10 +734,13 @@ function OrderCard({
         </div>
       )}
 
-      {/* Acciones de etiqueta PDF y WhatsApp */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {/* Acciones de PDF taller, etiqueta y WhatsApp */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <button type="button" className="btn-primary" onClick={onOpenWorkshopPdf}>
+          🧾 Orden Taller PDF
+        </button>
         <button className="btn-soft" onClick={handlePdf} disabled={busyPdf}>
-          📄 {busyPdf ? 'Generando PDF...' : `Etiqueta PDF (guia-${String(order.folio).padStart(8, '0')}.pdf)`}
+          📄 {busyPdf ? 'Generando...' : `Etiqueta PDF`}
         </button>
         <a
           className="btn bg-[#25D366] text-white hover:bg-[#1ebe5b]"
@@ -703,7 +749,7 @@ function OrderCard({
           rel="noreferrer"
           onClick={() => patchOrder(order.id, { whatsappSentAt: Date.now() })}
         >
-          💬 Enviar Guía por WhatsApp
+          💬 WhatsApp Guía
         </a>
       </div>
     </article>

@@ -1013,7 +1013,7 @@ export function InteractiveShirt3D({
           className={`relative overflow-hidden rounded-[28px] p-4 shadow-xl transition-colors duration-500 sm:p-6 ${themeStyle.stageClass}`}
         >
           {/* Barra superior flotante minimalista: Vista/Lado + Zoom */}
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex rounded-full bg-black/45 p-1 backdrop-blur-md ring-1 ring-white/15">
               {(
                 [
@@ -1033,7 +1033,7 @@ export function InteractiveShirt3D({
                         onDesignChange?.({ placement: sideKey, offsetX: 0, offsetY: 0 });
                       }
                     }}
-                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition sm:px-3.5 sm:text-xs ${
                       active
                         ? 'bg-white text-slate-950 shadow-sm'
                         : 'text-white/80 hover:text-white'
@@ -1048,7 +1048,7 @@ export function InteractiveShirt3D({
             <button
               type="button"
               onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
-              className={`inline-flex h-8 items-center gap-1 rounded-full px-3 text-xs font-semibold backdrop-blur-md transition ${
+              className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-semibold backdrop-blur-md transition sm:text-xs ${
                 zoom > 1.35
                   ? 'bg-white text-slate-950 shadow-sm'
                   : 'bg-black/45 text-white/85 ring-1 ring-white/15 hover:text-white'

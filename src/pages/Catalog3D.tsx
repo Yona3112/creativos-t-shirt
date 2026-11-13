@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getState, useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
 import { updateSettings, deleteColor, updateColor } from '../lib/actions';
@@ -16,7 +16,12 @@ import { db, savePhoto } from '../lib/db';
 import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
 import { subscribeLiveCatalogFirebase } from '../lib/firebaseSync';
 import { copyText, downloadBlob } from '../lib/csv';
-import { buildCatalogOrderPdfFile, renderCatalogOrderCardCanvas } from '../lib/pdf';
+import {
+  buildCatalogOrderPdfFile,
+  renderCatalogOrderCardCanvas,
+  sharePdfFileNative,
+  type CatalogOrderCardInput
+} from '../lib/pdf';
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -978,6 +983,13 @@ export function CustomerCatalogView({
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [paymentPending, setPaymentPending] = useState(false);
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const deliverySectionRef = useRef<HTMLElement>(null);
+
+  const phoneDigitsOnly = customerPhone.replace(/\D/g, '');
+  const isNameValid = customerName.trim().length >= 2;
+  const isPhoneValid = phoneDigitsOnly.length >= 8;
+  const isDeliveryReady = isNameValid && isPhoneValid;
 
   // Carrito de compras para el cliente: permite agregar múltiples prendas y diferentes diseños
   const [customerCart, setCustomerCart] = useState<CustomerCartItem[]>([]);
@@ -1147,10 +1159,24 @@ export function CustomerCatalogView({
   };
 
   const handleSendOrderWhatsApp = async () => {
-    const orderId = uid().slice(0, 12);
-    const cleanName = customerName.trim().slice(0, 80) || 'Cliente Tienda 3D';
+    const cleanName = customerName.trim().slice(0, 80);
     const cleanPhone = customerPhone.trim().slice(0, 24);
     const cleanAddr = customerAddress.trim().slice(0, 300);
+    const phoneDigits = cleanPhone.replace(/\D/g, '');
+    if (cleanName.length < 2 || phoneDigits.length < 8) {
+      const msg =
+        cleanName.length < 2 && phoneDigits.length < 8
+          ? 'Ingresa tu nombre completo y número de teléfono / WhatsApp para enviar el pedido'
+          : cleanName.length < 2
+          ? 'Ingresa tu nombre completo para confirmar el pedido'
+          : 'Ingresa tu número de teléfono / WhatsApp válido (mín. 8 dígitos)';
+      setDeliveryError(msg);
+      deliverySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      toast(msg, 'error');
+      return;
+    }
+    setDeliveryError(null);
+    const orderId = uid().slice(0, 12);
 
     const hasMultiItems = customerCart.length > 0;
     const finalCartItems: CustomerCartItem[] = hasMultiItems
@@ -1299,7 +1325,7 @@ export function CustomerCatalogView({
       : `https://wa.me/?text=${encodeURIComponent(orderText)}`;
 
     try {
-      const cardInput = {
+      const cardInput: CatalogOrderCardInput = {
         storeName: payload.storeName,
         orderId,
         customerName: cleanName,
@@ -1317,9 +1343,9 @@ export function CustomerCatalogView({
             ? `${webOrderItems.length} prendas variadas`
             : firstItem.designName || 'Diseño seleccionado',
         designCode: firstItem.designCode,
-        designDataUrl: firstItem.designThumb || designUrl,
+        designUrl: firstItem.designThumb || designUrl,
         placement: firstItem.placement,
-        campaign: clientCampaign !== 'all' ? clientCampaign : null
+        stockNote: clientCampaign !== 'all' ? `Colección: ${clientCampaign}` : undefined
       };
       const [canvas, pdfFile] = await Promise.all([
         renderCatalogOrderCardCanvas(cardInput),
@@ -1333,14 +1359,12 @@ export function CustomerCatalogView({
         whatsappHref: targetHref
       });
     } catch {
-      /* fallback directo a WhatsApp */
+      window.open(targetHref, '_blank', 'noopener,noreferrer');
     }
-
-    window.open(targetHref, '_blank', 'noopener,noreferrer');
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] pb-28 text-slate-900">
+    <div className="min-h-screen overflow-x-hidden bg-[#F5F5F7] pb-44 text-slate-900 sm:pb-28">
       {/* Barra superior cuando el administrador previsualiza la tienda */}
       {onExitPreview && (
         <div className="sticky top-0 z-50 border-b border-black/10 bg-slate-900 px-4 py-2 text-white">
@@ -1528,9 +1552,19 @@ export function CustomerCatalogView({
         </section>
 
         {/* DATOS DE ENTREGA Y CANTIDAD */}
-        <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold tracking-tight text-slate-900">Datos de entrega</h2>
+        <section
+          ref={deliverySectionRef}
+          className={`space-y-3 rounded-[24px] border bg-white p-4 shadow-sm transition ${
+            deliveryError ? 'border-red-400 ring-2 ring-red-500/40' : 'border-slate-200/80'
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight text-slate-900">
+                Datos de entrega <span className="text-red-500">*</span>
+              </h2>
+              <p className="text-[11px] text-slate-500">Nombre y teléfono obligatorios para confirmar</p>
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-500">Cantidad</span>
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-slate-900">
@@ -1544,27 +1578,48 @@ export function CustomerCatalogView({
               type="text"
               maxLength={80}
               value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              placeholder="Nombre completo"
-              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+              onChange={(e) => {
+                setCustomerName(e.target.value);
+                setDeliveryError(null);
+              }}
+              placeholder="Nombre completo *"
+              className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
+                deliveryError && !isNameValid
+                  ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+                  : 'border-slate-200 focus:border-slate-900'
+              }`}
             />
             <input
               type="tel"
+              inputMode="tel"
               maxLength={24}
               value={customerPhone}
-              onChange={(e) => setCustomerPhone(e.target.value)}
-              placeholder="Teléfono / WhatsApp"
-              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+              onChange={(e) => {
+                setCustomerPhone(e.target.value);
+                setDeliveryError(null);
+              }}
+              placeholder="Teléfono / WhatsApp (ej. 9999-9999) *"
+              className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
+                deliveryError && !isPhoneValid
+                  ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+                  : 'border-slate-200 focus:border-slate-900'
+              }`}
             />
             <input
               type="text"
               maxLength={300}
               value={customerAddress}
               onChange={(e) => setCustomerAddress(e.target.value)}
-              placeholder="Dirección o ciudad"
+              placeholder="Dirección o ciudad (opcional)"
               className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
             />
           </div>
+
+          {deliveryError && (
+            <div className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+              🔒 {deliveryError}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <div className="text-xs font-medium text-slate-500">Forma de pago preferida</div>
@@ -1599,55 +1654,83 @@ export function CustomerCatalogView({
               ⚡ Disponible para entrega inmediata en talla {size}.
             </div>
           )}
-        </section>
-      </div>
 
-      {/* BARRA INFERIOR FLOTANTE ESTILO APPLE */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.06] bg-white/95 px-4 py-3 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
-          <div className="min-w-0">
-            {customerCart.length > 0 ? (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setIsCartModalOpen(true)}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
-                >
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
-                    {cartTotalQty}
-                  </span>
-                  <span>Mi pedido ({cartTotalQty} {cartTotalQty === 1 ? 'prenda' : 'prendas'})</span>
-                  <span className="text-[10px] text-slate-400">· Ver lista ▾</span>
-                </button>
-                <div className="text-lg font-bold tracking-tight text-slate-900">{money(cartTotalPrice)}</div>
-              </div>
-            ) : (
-              <div>
-                <div className="truncate text-xs font-medium text-slate-500">
-                  {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
-                  {designUrl && selectedDesignName ? ` · ${selectedDesignName}` : ''}
-                </div>
-                <div className="text-lg font-bold tracking-tight text-slate-900">{money(total)}</div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
+          <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
             <button
               type="button"
               onClick={handleAddToCart}
-              className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 active:scale-95"
+              className="inline-flex min-h-[46px] w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]"
             >
               + Agregar al pedido
             </button>
             <button
               type="button"
               onClick={() => void handleSendOrderWhatsApp()}
-              className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
+              className="inline-flex min-h-[46px] w-full items-center justify-center rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-[0.99]"
             >
+              {!isDeliveryReady ? '🔒 ' : ''}
               {customerCart.length > 0
-                ? `Pedir WhatsApp (${cartTotalQty})`
-                : 'Pedir por WhatsApp'}
+                ? `Confirmar y Pedir (${cartTotalQty}) · ${money(cartTotalPrice)}`
+                : `Confirmar y Pedir · ${money(total)}`}
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {/* BARRA INFERIOR FLOTANTE ESTILO APPLE (100% RESPONSIVE MÓVIL + SAFE AREA) */}
+      <div
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.08] bg-white/95 px-3 py-2.5 shadow-[0_-8px_30px_rgba(0,0,0,0.08)] backdrop-blur-xl sm:px-4 sm:py-3"
+        style={{ paddingBottom: 'max(0.65rem, env(safe-area-inset-bottom))' }}
+      >
+        <div className="mx-auto flex max-w-2xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <div className="min-w-0 flex-1">
+            {customerCart.length > 0 ? (
+              <div className="flex items-center justify-between gap-2 sm:block">
+                <button
+                  type="button"
+                  onClick={() => setIsCartModalOpen(true)}
+                  className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                >
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
+                    {cartTotalQty}
+                  </span>
+                  <span className="truncate">Mi pedido ({cartTotalQty}) · Ver ▾</span>
+                </button>
+                <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
+                  {money(cartTotalPrice)}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2 sm:block">
+                <div className="min-w-0 truncate text-xs font-medium text-slate-500">
+                  {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
+                  {designUrl && selectedDesignName ? ` · ${selectedDesignName}` : ''}
+                </div>
+                <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
+                  {money(total)}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+            <button
+              type="button"
+              onClick={handleAddToCart}
+              className="inline-flex min-h-[44px] w-full items-center justify-center whitespace-nowrap rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 active:scale-95 sm:w-auto sm:px-3.5"
+            >
+              + Agregar
+              <span className="hidden sm:inline">&nbsp;al pedido</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSendOrderWhatsApp()}
+              className="inline-flex min-h-[44px] w-full items-center justify-center whitespace-nowrap rounded-full bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95 sm:w-auto sm:px-5"
+            >
+              {!isDeliveryReady ? '🔒 ' : ''}
+              {customerCart.length > 0
+                ? `Pedir (${cartTotalQty})`
+                : 'Pedir WhatsApp'}
             </button>
           </div>
         </div>
@@ -1806,38 +1889,39 @@ export function CustomerCatalogView({
                 className="w-full object-contain"
               />
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const f = orderSheetModal.pdfFile;
+                  downloadBlob(f.name, f);
+                  toast(`PDF guardado (${f.name})`, 'ok');
+                }}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-900 shadow-sm hover:bg-slate-50"
+              >
+                💾 Guardar PDF
+              </button>
               <button
                 type="button"
                 onClick={async () => {
                   const f = orderSheetModal.pdfFile;
-                  const nav = navigator as Navigator & {
-                    canShare?: (data?: ShareData) => boolean;
-                  };
-                  if (typeof nav.share === 'function' && nav.canShare?.({ files: [f] })) {
-                    try {
-                      await nav.share({
-                        title: f.name,
-                        text: `Pedido #${orderSheetModal.orderId.slice(0, 6).toUpperCase()}`,
-                        files: [f]
-                      });
-                      return;
-                    } catch {
-                      /* fallback a descarga */
-                    }
+                  const res = await sharePdfFileNative(f, {
+                    title: f.name,
+                    text: `Pedido #${orderSheetModal.orderId.slice(0, 6).toUpperCase()}`
+                  });
+                  if (res === 'downloaded') {
+                    toast(`PDF descargado (${f.name}) — ya puedes enviarlo por WhatsApp`, 'ok');
                   }
-                  downloadBlob(f.name, f);
-                  toast('PDF con fotito descargado');
                 }}
-                className="flex-1 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
+                className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-3.5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
               >
-                📄 Descargar / Compartir PDF con Fotito
+                📤 Enviar PDF
               </button>
               <a
                 href={orderSheetModal.whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-500"
+                className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-3.5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-500"
               >
                 💬 Abrir WhatsApp
               </a>

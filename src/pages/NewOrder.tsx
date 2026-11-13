@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CartLine, Customer, Order, Section } from '../lib/types';
 import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
@@ -7,7 +7,12 @@ import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K, isJpgFile } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto } from '../lib/sync';
-import { addressOneLine, createOrder, deleteColor, quickCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
+import { addressOneLine, createOrder, deleteColor, quickCustomer, saveCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
+
+function cleanHnPhoneDigits(raw: string): string {
+  const digits = (raw || '').replace(/\D/g, '');
+  return digits.length > 8 && digits.startsWith('504') ? digits.slice(3) : digits;
+}
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -331,10 +336,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     }
   };
 
-  // Cliente rápido
-  const [custMode, setCustMode] = useState<'buscar' | 'nuevo'>('buscar');
+  // Cliente rápido / Consumidor Final
+  const [custMode, setCustMode] = useState<'buscar' | 'nuevo' | 'consumidor'>('buscar');
   const [q, setQ] = useState('');
   const [qc, setQc] = useState({ name: '', phone: '', address: '' });
+  const [existingPhone, setExistingPhone] = useState('');
+  const [consumidorNote, setConsumidorNote] = useState('');
+  const [customerError, setCustomerError] = useState<string | null>(null);
+  const customerSectionRef = useRef<HTMLDivElement>(null);
   const [latestWebOrder, setLatestWebOrder] = useState<CustomerWebOrderPayload | null>(null);
   const [importingWebOrder, setImportingWebOrder] = useState(false);
 
@@ -564,13 +573,59 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       .slice(0, 6);
   }, [q, state.customers]);
 
+  const customerCheck = useMemo(() => {
+    if (custMode === 'consumidor') {
+      return { ok: true, reason: '' };
+    }
+    if (custMode === 'nuevo') {
+      if (qc.name.trim().length < 2) {
+        return { ok: false, reason: 'Ingresa el nombre del cliente o elige Consumidor Final' };
+      }
+      if (cleanHnPhoneDigits(qc.phone).length < 8) {
+        return { ok: false, reason: 'Ingresa un número de teléfono válido (mín. 8 dígitos) o elige Consumidor Final' };
+      }
+      return { ok: true, reason: '' };
+    }
+    if (!customer) {
+      return { ok: false, reason: 'Selecciona un cliente con teléfono o elige Consumidor Final' };
+    }
+    const storedDigits = cleanHnPhoneDigits(customer.phone || '');
+    const typedDigits = cleanHnPhoneDigits(existingPhone);
+    if (storedDigits.length < 8 && typedDigits.length < 8) {
+      return { ok: false, reason: `El cliente "${customer.name}" necesita un teléfono válido (mín. 8 dígitos)` };
+    }
+    return { ok: true, reason: '' };
+  }, [custMode, customer, qc.name, qc.phone, existingPhone]);
+
   const confirm = async (status: 'en_produccion' | 'borrador') => {
     if (!lines.length) return toast('Agrega al menos una camisa', 'error');
+    if (status !== 'borrador' && !customerCheck.ok) {
+      setCustomerError(customerCheck.reason);
+      customerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      toast(customerCheck.reason, 'error');
+      return;
+    }
+    setCustomerError(null);
     let cust: Customer | null = customer;
     let addressId = draft.addressId;
-    if (!cust && custMode === 'nuevo' && qc.name.trim()) {
-      cust = quickCustomer(qc.name, qc.phone ? `+504 ${qc.phone.replace(/^\+?504\s*/, '')}` : '', qc.address);
+    let walkIn: { name: string; phone?: string; address?: string } | null = null;
+    if (custMode === 'consumidor') {
+      cust = null;
+      addressId = null;
+      const alias = consumidorNote.trim();
+      walkIn = {
+        name: alias ? `Consumidor Final (${alias})` : 'Consumidor Final',
+        phone: 'Consumidor Final',
+        address: 'Entrega en tienda'
+      };
+    } else if (!cust && custMode === 'nuevo' && qc.name.trim()) {
+      const digits = cleanHnPhoneDigits(qc.phone);
+      cust = quickCustomer(qc.name, digits ? `+504 ${digits}` : '', qc.address);
       addressId = cust.addresses[0]?.id || null;
+    } else if (cust && cleanHnPhoneDigits(cust.phone || '').length < 8 && cleanHnPhoneDigits(existingPhone).length >= 8) {
+      const updatedPhone = `+504 ${cleanHnPhoneDigits(existingPhone)}`;
+      cust = { ...cust, phone: updatedPhone };
+      saveCustomer(cust);
     }
     if (cust && !addressId) addressId = cust.addresses.find((a) => a.isDefault)?.id || cust.addresses[0]?.id || null;
 
@@ -610,6 +665,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       lines: linesWithPhotos,
       customer: cust,
       addressId,
+      walkIn,
       shipping,
       deposit: paymentMode === 'pending' ? 0 : draft.deposit || 0,
       paymentPending: paymentMode === 'pending',
@@ -626,6 +682,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     const keep = { paymentMethod: draft.paymentMethod, workType: draft.workType };
     setDraft({ ...emptyDraft(), ...keep });
     setQc({ name: '', phone: '', address: '' });
+    setExistingPhone('');
+    setConsumidorNote('');
+    setCustomerError(null);
     setQ('');
     setCustMode('buscar');
     setDone(order);
@@ -1182,33 +1241,114 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         )}
 
         {/* Cliente */}
-        <div>
-          <div className="mb-2 grid grid-cols-2 gap-2">
-            <button className={`chip ${custMode === 'buscar' ? 'chip-on' : 'chip-off'}`} onClick={() => setCustMode('buscar')}>
+        <div
+          ref={customerSectionRef}
+          className={`rounded-2xl transition ${
+            customerError ? 'bg-red-50/70 p-2.5 -m-1 ring-2 ring-red-500' : ''
+          }`}
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Cliente o Consumidor Final *
+            </span>
+            {!customerCheck.ok && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                🔒 Requerido para confirmar
+              </span>
+            )}
+          </div>
+          <div className="mb-2 grid grid-cols-3 gap-1.5">
+            <button
+              type="button"
+              className={`chip text-xs ${custMode === 'buscar' ? 'chip-on' : 'chip-off'}`}
+              onClick={() => {
+                setCustMode('buscar');
+                setCustomerError(null);
+              }}
+            >
               👥 Cliente
             </button>
             <button
-              className={`chip ${custMode === 'nuevo' ? 'chip-on' : 'chip-off'}`}
+              type="button"
+              className={`chip text-xs ${custMode === 'nuevo' ? 'chip-on' : 'chip-off'}`}
               onClick={() => {
                 setCustMode('nuevo');
                 set({ customerId: null, addressId: null });
+                setCustomerError(null);
               }}
             >
               ➕ Nuevo
             </button>
+            <button
+              type="button"
+              className={`chip text-xs ${custMode === 'consumidor' ? 'chip-on' : 'chip-off'}`}
+              onClick={() => {
+                setCustMode('consumidor');
+                set({ customerId: null, addressId: null });
+                setCustomerError(null);
+              }}
+            >
+              🧾 Cons. Final
+            </button>
           </div>
-          {custMode === 'buscar' ? (
+          {custMode === 'consumidor' ? (
+            <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-sm text-emerald-950">
+              <div className="flex items-center gap-2 font-bold">
+                <span>🧾 Consumidor Final seleccionado</span>
+              </div>
+              <p className="text-xs text-emerald-800">
+                Venta directa en mostrador / sin registro de teléfono obligatorio.
+              </p>
+              <input
+                className="input bg-white text-sm"
+                placeholder="Referencia rápida opcional (ej. Mesa 2 o Nombre corto)"
+                value={consumidorNote}
+                onChange={(e) => setConsumidorNote(e.target.value)}
+                autoComplete="off"
+              />
+            </div>
+          ) : custMode === 'buscar' ? (
             customer ? (
               <div className="rounded-xl bg-brand-50 p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="font-bold">{customer.name}</div>
-                    <div className="text-sm text-slate-600">{customer.phone}</div>
+                    <div className="text-sm text-slate-600">{customer.phone || 'Sin teléfono registrado'}</div>
                   </div>
-                  <button className="btn-ghost min-h-[40px] px-3 text-sm" onClick={() => set({ customerId: null, addressId: null })}>
+                  <button
+                    type="button"
+                    className="btn-ghost min-h-[40px] px-3 text-sm"
+                    onClick={() => {
+                      set({ customerId: null, addressId: null });
+                      setExistingPhone('');
+                    }}
+                  >
                     Cambiar
                   </button>
                 </div>
+                {cleanHnPhoneDigits(customer.phone || '').length < 8 && (
+                  <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-2">
+                    <div className="mb-1 text-xs font-bold text-amber-900">
+                      ⚠️ Este cliente no tiene teléfono válido (mín. 8 dígitos). Complétalo para confirmar:
+                    </div>
+                    <div className="flex">
+                      <span className="flex items-center rounded-l-xl border border-r-0 border-amber-300 bg-white px-2.5 text-xs font-bold text-slate-600">
+                        +504
+                      </span>
+                      <input
+                        className="input rounded-l-none bg-white text-sm"
+                        placeholder="9999-9999"
+                        type="tel"
+                        inputMode="tel"
+                        value={existingPhone}
+                        onChange={(e) => {
+                          setExistingPhone(e.target.value);
+                          setCustomerError(null);
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
                 {customer.addresses.length > 0 && (
                   <select
                     className="input mt-2"
@@ -1226,21 +1366,32 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               </div>
             ) : (
               <div>
-                <input className="input" placeholder="Buscar por nombre o teléfono" value={q} onChange={(e) => setQ(e.target.value)} />
+                <input
+                  className="input"
+                  placeholder="Buscar por nombre o teléfono"
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value);
+                    setCustomerError(null);
+                  }}
+                />
                 {matches.length > 0 && (
                   <ul className="mt-1 divide-y divide-slate-100 rounded-xl border border-slate-200">
                     {matches.map((c) => (
                       <li key={c.id}>
                         <button
+                          type="button"
                           className="flex min-h-[52px] w-full flex-col justify-center px-3 text-left"
                           onClick={() => {
                             const def = c.addresses.find((a) => a.isDefault) || c.addresses[0];
                             set({ customerId: c.id, addressId: def?.id || null });
+                            setExistingPhone('');
+                            setCustomerError(null);
                             setQ('');
                           }}
                         >
                           <span className="font-semibold">{c.name}</span>
-                          <span className="text-xs text-slate-500">{c.phone}</span>
+                          <span className="text-xs text-slate-500">{c.phone || 'Sin teléfono'}</span>
                         </button>
                       </li>
                     ))}
@@ -1250,20 +1401,42 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             )
           ) : (
             <div className="space-y-2">
-              <input className="input" placeholder="Nombre" value={qc.name} onChange={(e) => setQc({ ...qc, name: e.target.value })} autoComplete="off" />
+              <input
+                className="input"
+                placeholder="Nombre completo *"
+                value={qc.name}
+                onChange={(e) => {
+                  setQc({ ...qc, name: e.target.value });
+                  setCustomerError(null);
+                }}
+                autoComplete="off"
+              />
               <div className="flex">
                 <span className="flex items-center rounded-l-xl border border-r-0 border-slate-300 bg-slate-50 px-3 font-semibold text-slate-600">+504</span>
                 <input
                   className="input rounded-l-none"
-                  placeholder="Teléfono"
+                  placeholder="Teléfono / WhatsApp (mín. 8 dígitos) *"
                   type="tel"
                   inputMode="tel"
                   value={qc.phone}
-                  onChange={(e) => setQc({ ...qc, phone: e.target.value })}
+                  onChange={(e) => {
+                    setQc({ ...qc, phone: e.target.value });
+                    setCustomerError(null);
+                  }}
                 />
               </div>
-              <textarea className="input min-h-[80px] py-2" placeholder="Dirección" value={qc.address} onChange={(e) => setQc({ ...qc, address: e.target.value })} />
+              <textarea
+                className="input min-h-[72px] py-2"
+                placeholder="Dirección o referencia (opcional)"
+                value={qc.address}
+                onChange={(e) => setQc({ ...qc, address: e.target.value })}
+              />
             </div>
+          )}
+          {customerError && (
+            <p className="mt-2 rounded-xl bg-red-100 px-3 py-2 text-xs font-bold text-red-700">
+              🔒 {customerError}
+            </p>
           )}
         </div>
 
@@ -1419,8 +1592,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           )}
         </dl>
 
-        <button className="btn-success w-full text-lg" onClick={() => confirm('en_produccion')} disabled={!lines.length}>
-          {paymentMode === 'pending'
+        <button
+          className={`w-full text-lg ${customerCheck.ok ? 'btn-success' : 'btn bg-amber-500 text-stone-950 hover:bg-amber-400'}`}
+          onClick={() => confirm('en_produccion')}
+          disabled={!lines.length}
+        >
+          {!customerCheck.ok
+            ? '🔒 Falta cliente / teléfono o Cons. Final'
+            : paymentMode === 'pending'
             ? `⏳ Confirmar (Pago Pendiente) · ${money(total)}`
             : `✅ Confirmar Pedido · ${money(total)}`}
         </button>

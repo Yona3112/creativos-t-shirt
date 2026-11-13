@@ -1,8 +1,11 @@
 import type { Order, Settings } from './types';
 import { money } from './money';
 import { folioLabel } from './ids';
-import { fmtDate } from './time';
+import { dayKey, fmtDate, fmtDateTime } from './time';
 import { downloadBlob } from './csv';
+import { STATUS_LABEL } from './actions';
+import { getState } from './store';
+import { lookupOrderDesignThumb, resolveOrderPhotosMap } from './printReports';
 
 const WIN_ANSI_MAP: Record<number, number> = {
   0x2013: 0x96, // –
@@ -177,19 +180,79 @@ export async function buildLabel(o: Order, settings: Settings): Promise<File> {
   return new File([blob], `guia-${String(o.folio).padStart(8, '0')}.pdf`, { type: 'application/pdf' });
 }
 
-export async function shareLabel(o: Order, settings: Settings): Promise<'shared' | 'downloaded'> {
-  const file = await buildLabel(o, settings);
+/** Carga una imagen de diseño de forma segura (sin ensuciar el canvas por CORS). */
+async function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
+  if (!src) return null;
+  let objectUrl: string | null = null;
+  try {
+    let resolvedSrc = src;
+    if (src.startsWith('http://') || src.startsWith('https://')) {
+      const resp = await fetch(src, { mode: 'cors' });
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      objectUrl = URL.createObjectURL(blob);
+      resolvedSrc = objectUrl;
+    }
+    return await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('image_load_error'));
+      i.src = resolvedSrc;
+    });
+  } catch {
+    return null;
+  } finally {
+    if (objectUrl) {
+      setTimeout(() => URL.revokeObjectURL(objectUrl!), 3000);
+    }
+  }
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+): void {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+export async function sharePdfFileNative(
+  file: File,
+  opts: { title: string; text?: string }
+): Promise<'shared' | 'downloaded' | 'cancelled'> {
   const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
-  if (nav.share && nav.canShare && nav.canShare({ files: [file] })) {
-    try {
-      await nav.share({ files: [file], title: file.name, text: `Guía ${folioLabel(o.folio)}` });
-      return 'shared';
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') return 'shared';
+  if (typeof nav.share === 'function') {
+    const canFiles = typeof nav.canShare === 'function' ? nav.canShare({ files: [file] }) : true;
+    if (canFiles) {
+      try {
+        await nav.share({ files: [file], title: opts.title, text: opts.text || opts.title });
+        return 'shared';
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError') return 'cancelled';
+      }
     }
   }
   downloadBlob(file.name, file);
   return 'downloaded';
+}
+
+export async function shareLabel(o: Order, settings: Settings): Promise<'shared' | 'downloaded'> {
+  const file = await buildLabel(o, settings);
+  const res = await sharePdfFileNative(file, {
+    title: file.name,
+    text: `Guía ${folioLabel(o.folio)}`
+  });
+  return res === 'downloaded' ? 'downloaded' : 'shared';
 }
 
 export interface CatalogOrderCardInput {
@@ -286,14 +349,8 @@ export async function renderCatalogOrderCardCanvas(
   ctx.stroke();
 
   if (input.designUrl) {
-    try {
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const i = new Image();
-        i.crossOrigin = 'anonymous';
-        i.onload = () => resolve(i);
-        i.onerror = () => reject(new Error('err'));
-        i.src = input.designUrl!;
-      });
+    const img = await loadImageSafe(input.designUrl);
+    if (img) {
       const pad = 28;
       const availW = boxW - pad * 2;
       const availH = boxH - pad * 2;
@@ -303,8 +360,6 @@ export async function renderCatalogOrderCardCanvas(
       const dx = boxX + (boxW - dw) / 2;
       const dy = boxY + (boxH - dh) / 2;
       ctx.drawImage(img, dx, dy, dw, dh);
-    } catch {
-      /* mantener recuadro del color */
     }
   } else {
     ctx.fillStyle = '#94A3B8';
@@ -454,24 +509,13 @@ export async function renderCatalogOrderCardCanvas(
   return canvas;
 }
 
-/**
- * Empaqueta el lienzo visual (con la fotito del diseño, color, talla y cliente)
- * dentro de un archivo PDF 1.4 real listo para enviar por WhatsApp o descargar.
- */
-export async function buildCatalogOrderPdfFile(input: CatalogOrderCardInput): Promise<File> {
-  const canvas = await renderCatalogOrderCardCanvas(input);
-  const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-  const b64 = jpegDataUrl.split(',')[1] || '';
-  const binStr = atob(b64);
-  const imgBytes = new Uint8Array(binStr.length);
-  for (let i = 0; i < binStr.length; i++) {
-    imgBytes[i] = binStr.charCodeAt(i);
-  }
-
-  const pageW = 360;
-  const pageH = 460;
-  const contentStream = `q\n${pageW} 0 0 ${pageH} 0 0 cm\n/Im1 Do\nQ`;
-
+/** Empaqueta uno o varios lienzos HTMLCanvasElement dentro de un archivo PDF 1.4 multipágina real. */
+export function packCanvasesToPdfFile(
+  canvases: HTMLCanvasElement[],
+  filename: string,
+  pageW = 595,
+  pageH = 842
+): File {
   const enc = new TextEncoder();
   const chunks: Uint8Array[] = [];
   const offsets: number[] = [0];
@@ -489,43 +533,444 @@ export async function buildCatalogOrderPdfFile(input: CatalogOrderCardInput): Pr
 
   pushStr('%PDF-1.4\n');
 
+  const n = Math.max(1, canvases.length);
+  const pageObjNums: number[] = [];
+  for (let i = 0; i < n; i++) {
+    pageObjNums.push(3 + i * 3);
+  }
+
   // Obj 1: Catalog
   offsets.push(pos);
   pushStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
 
   // Obj 2: Pages
   offsets.push(pos);
-  pushStr('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
-
-  // Obj 3: Page
-  offsets.push(pos);
   pushStr(
-    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`
+    `2 0 obj\n<< /Type /Pages /Kids [${pageObjNums.map((id) => `${id} 0 R`).join(' ')}] /Count ${n} >>\nendobj\n`
   );
 
-  // Obj 4: Image XObject (JPEG DCTDecode)
-  offsets.push(pos);
-  pushStr(
-    `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`
-  );
-  pushBytes(imgBytes);
-  pushStr('\nendstream\nendobj\n');
+  for (let i = 0; i < n; i++) {
+    const canvas = canvases[i];
+    const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    const b64 = jpegDataUrl.split(',')[1] || '';
+    const binStr = atob(b64);
+    const imgBytes = new Uint8Array(binStr.length);
+    for (let j = 0; j < binStr.length; j++) {
+      imgBytes[j] = binStr.charCodeAt(j);
+    }
 
-  // Obj 5: Content stream
-  offsets.push(pos);
-  pushStr(
-    `5 0 obj\n<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream\nendobj\n`
-  );
+    const pageObj = 3 + i * 3;
+    const imgObj = pageObj + 1;
+    const contObj = pageObj + 2;
+    const contentStream = `q\n${pageW} 0 0 ${pageH} 0 0 cm\n/Im1 Do\nQ`;
 
+    // Page object
+    offsets.push(pos);
+    pushStr(
+      `${pageObj} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im1 ${imgObj} 0 R >> >> /Contents ${contObj} 0 R >>\nendobj\n`
+    );
+
+    // Image XObject (JPEG DCTDecode)
+    offsets.push(pos);
+    pushStr(
+      `${imgObj} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`
+    );
+    pushBytes(imgBytes);
+    pushStr('\nendstream\nendobj\n');
+
+    // Content stream
+    offsets.push(pos);
+    pushStr(
+      `${contObj} 0 obj\n<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream\nendobj\n`
+    );
+  }
+
+  const totalObjs = 2 + n * 3;
   const xrefPos = pos;
-  pushStr(`xref\n0 6\n0000000000 65535 f \n`);
-  for (let i = 1; i <= 5; i++) {
+  pushStr(`xref\n0 ${totalObjs + 1}\n0000000000 65535 f \n`);
+  for (let i = 1; i <= totalObjs; i++) {
     pushStr(`${String(offsets[i]).padStart(10, '0')} 00000 n \n`);
   }
-  pushStr(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`);
+  pushStr(`trailer\n<< /Size ${totalObjs + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`);
 
   const blob = new Blob(chunks, { type: 'application/pdf' });
+  return new File([blob], filename, { type: 'application/pdf' });
+}
+
+/**
+ * Empaqueta el lienzo visual (con la fotito del diseño, color, talla y cliente)
+ * dentro de un archivo PDF 1.4 real listo para enviar por WhatsApp o descargar.
+ */
+export async function buildCatalogOrderPdfFile(input: CatalogOrderCardInput): Promise<File> {
+  const canvas = await renderCatalogOrderCardCanvas(input);
   const shortId = input.orderId.slice(0, 6).toUpperCase();
-  return new File([blob], `Pedido-${shortId}.pdf`, { type: 'application/pdf' });
+  return packCanvasesToPdfFile([canvas], `Pedido-${shortId}.pdf`, 360, 460);
+}
+
+function wrapCanvasTextByWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const lines: string[] = [];
+  for (const para of (text || '').split(/\r?\n/)) {
+    const words = para.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+    let cur = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const candidate = `${cur} ${words[i]}`;
+      if (ctx.measureText(candidate).width <= maxWidth) {
+        cur = candidate;
+      } else {
+        lines.push(cur);
+        cur = words[i];
+      }
+    }
+    lines.push(cur);
+  }
+  return lines;
+}
+
+/**
+ * Genera el PDF multipágina de Orden de Taller / Pedidos del Día con miniaturas
+ * de los diseños sobre el color de camisa, tallas, notas de producción y saldo.
+ * Funciona 100% offline/PWA sin depender de window.open ni de diálogos del navegador.
+ */
+export async function buildWorkshopOrdersPdfFile(
+  rawOrders: Order[],
+  settings: Settings,
+  title = 'Orden de Taller'
+): Promise<{ file: File; previewUrls: string[] }> {
+  const orders = rawOrders.filter((o) => !o.deleted && o.status !== 'cancelado');
+  const targetOrders = orders.length > 0 ? orders : rawOrders.filter((o) => !o.deleted);
+  const photoMap = await resolveOrderPhotosMap(targetOrders);
+  const catalogDesigns = getState().catalogDesigns || [];
+
+  // Precargar HTMLImageElements únicos por src para no decodificar repetido
+  const decodedCache = new Map<string, HTMLImageElement | null>();
+  const getDecoded = async (src: string | null): Promise<HTMLImageElement | null> => {
+    if (!src) return null;
+    if (decodedCache.has(src)) return decodedCache.get(src) || null;
+    const img = await loadImageSafe(src);
+    decodedCache.set(src, img);
+    return img;
+  };
+
+  const W = 900;
+  const H = 1272;
+  const M = 36;
+  const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif';
+
+  const pages: HTMLCanvasElement[] = [];
+
+  const createPage = (pageNum: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; y: number } => {
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.fillStyle = '#F5F5F7';
+    ctx.fillRect(0, 0, W, H);
+
+    // Cabecera superior tipo Apple
+    ctx.fillStyle = '#0F172A';
+    drawRoundedRect(ctx, M, M, W - M * 2, pageNum === 1 ? 86 : 58, 18);
+    ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `800 ${pageNum === 1 ? 22 : 17}px ${FONT}`;
+    ctx.fillText(settings.storeName || 'Creativos Gift Shop', M + 20, M + (pageNum === 1 ? 36 : 36));
+
+    if (pageNum === 1) {
+      ctx.fillStyle = '#94A3B8';
+      ctx.font = `600 13px ${FONT}`;
+      ctx.fillText(title, M + 20, M + 62);
+    }
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#38BDF8';
+    ctx.font = `700 13px ${FONT}`;
+    ctx.fillText(fmtDateTime(Date.now()), W - M - 20, M + (pageNum === 1 ? 36 : 36));
+    if (pageNum === 1) {
+      ctx.fillStyle = '#E2E8F0';
+      const units = targetOrders.reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty, 0), 0);
+      ctx.fillText(`${targetOrders.length} pedido(s) · ${units} prenda(s)`, W - M - 20, M + 62);
+    }
+    ctx.textAlign = 'left';
+
+    pages.push(canvas);
+    return { canvas, ctx, y: M + (pageNum === 1 ? 104 : 74) };
+  };
+
+  let cur = createPage(1);
+
+  if (targetOrders.length === 0) {
+    cur.ctx.fillStyle = '#FFFFFF';
+    drawRoundedRect(cur.ctx, M, cur.y, W - M * 2, 120, 20);
+    cur.ctx.fill();
+    cur.ctx.fillStyle = '#64748B';
+    cur.ctx.font = `700 16px ${FONT}`;
+    cur.ctx.textAlign = 'center';
+    cur.ctx.fillText('No hay pedidos activos para exportar', W / 2, cur.y + 66);
+    cur.ctx.textAlign = 'left';
+  }
+
+  for (const o of targetOrders) {
+    // Calcular dimensiones estimadas de la tarjeta del pedido
+    const measureCtx = cur.ctx;
+    measureCtx.font = `600 13px ${FONT}`;
+    const noteLines = o.notes ? wrapCanvasTextByWidth(measureCtx, `Nota taller: ${o.notes}`, W - M * 2 - 44).slice(0, 4) : [];
+    const addrLine = o.shipTo.address?.trim() ? `Entrega: ${o.shipTo.address.trim()}` : 'Entrega / Recoge en tienda';
+    const addrLines = wrapCanvasTextByWidth(measureCtx, addrLine, W - M * 2 - 44).slice(0, 2);
+
+    const headH = 54;
+    const clientH = 52 + addrLines.length * 18 + (noteLines.length > 0 ? 18 + noteLines.length * 18 : 0);
+    const rowH = 88;
+    const totalCardH = headH + clientH + o.items.length * rowH + 22;
+
+    if (cur.y + Math.min(totalCardH, headH + clientH + rowH + 24) > H - M - 28) {
+      cur = createPage(pages.length + 1);
+    }
+
+    const drawOrderHeaderAndClient = (ctx: CanvasRenderingContext2D, startY: number, isCont = false): number => {
+      const cardW = W - M * 2;
+      // Fondo cabecera
+      ctx.fillStyle = '#FFFFFF';
+      drawRoundedRect(ctx, M, startY, cardW, headH + (isCont ? 0 : clientH), 18);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#CBD5E1';
+      ctx.stroke();
+
+      ctx.save();
+      drawRoundedRect(ctx, M, startY, cardW, headH, 18);
+      ctx.clip();
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillRect(M, startY, cardW, headH);
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.moveTo(M, startY + headH);
+      ctx.lineTo(M + cardW, startY + headH);
+      ctx.strokeStyle = '#E2E8F0';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Folio y Trabajo
+      ctx.fillStyle = '#0F172A';
+      ctx.font = `900 18px ${FONT}`;
+      ctx.fillText(folioLabel(o.folio) + (isCont ? ' (cont.)' : ''), M + 18, startY + 33);
+
+      ctx.fillStyle = '#E2E8F0';
+      const workTxt = o.workType || 'DTF';
+      ctx.font = `700 12px ${FONT}`;
+      const workW = Math.min(200, ctx.measureText(workTxt).width + 22);
+      drawRoundedRect(ctx, M + 148, startY + 14, workW, 26, 13);
+      ctx.fill();
+      ctx.fillStyle = '#1E293B';
+      ctx.fillText(workTxt, M + 159, startY + 31);
+
+      ctx.fillStyle = '#64748B';
+      ctx.font = `600 11px ${FONT}`;
+      ctx.fillText(STATUS_LABEL[o.status] || o.status, M + 158 + workW, startY + 31);
+
+      // Estado de pago derecha
+      const isPaid = o.balance <= 0;
+      const isPendingStore = o.balance > 0 && o.deposit <= 0;
+      const payLabel = isPaid
+        ? `PAGADO 100% · ${money(o.total)}`
+        : isPendingStore
+        ? `PAGO PENDIENTE TIENDA · ${money(o.balance)}`
+        : `SALDO PENDIENTE · ${money(o.balance)}`;
+      ctx.font = `800 12px ${FONT}`;
+      const payW = ctx.measureText(payLabel).width + 22;
+      ctx.fillStyle = isPaid ? '#DCFCE7' : isPendingStore ? '#FEF3C7' : '#FEE2E2';
+      drawRoundedRect(ctx, M + cardW - payW - 14, startY + 13, payW, 28, 10);
+      ctx.fill();
+      ctx.fillStyle = isPaid ? '#166534' : isPendingStore ? '#92400E' : '#991B1B';
+      ctx.textAlign = 'right';
+      ctx.fillText(payLabel, M + cardW - 25, startY + 31);
+      ctx.textAlign = 'left';
+
+      if (isCont) return startY + headH + 8;
+
+      let cy = startY + headH + 22;
+      ctx.fillStyle = '#0F172A';
+      ctx.font = `800 15px ${FONT}`;
+      const clientTitle = `Cliente: ${o.shipTo.name || 'Consumidor Final'}${o.shipTo.phone ? `   ·   Tel: ${o.shipTo.phone}` : ''}`;
+      ctx.fillText(clientTitle.slice(0, 74), M + 18, cy);
+
+      cy += 20;
+      ctx.fillStyle = '#334155';
+      ctx.font = `600 13px ${FONT}`;
+      for (const ln of addrLines) {
+        ctx.fillText(ln, M + 18, cy);
+        cy += 18;
+      }
+
+      if (noteLines.length > 0) {
+        cy += 4;
+        const nBoxH = noteLines.length * 18 + 14;
+        ctx.fillStyle = '#FEF3C7';
+        drawRoundedRect(ctx, M + 14, cy - 12, cardW - 28, nBoxH, 10);
+        ctx.fill();
+        ctx.fillStyle = '#92400E';
+        ctx.font = `700 12.5px ${FONT}`;
+        for (const nln of noteLines) {
+          ctx.fillText(nln, M + 24, cy + 4);
+          cy += 18;
+        }
+        cy += 4;
+      }
+
+      return startY + headH + clientH;
+    };
+
+    let y = drawOrderHeaderAndClient(cur.ctx, cur.y, false);
+
+    // Pre-cargar miniaturas de las prendas del pedido
+    const orderFallbackImg = lookupOrderDesignThumb(
+      { photoId: o.photoId, designId: o.designId, designCode: o.designCode, designName: o.designName },
+      photoMap,
+      catalogDesigns
+    );
+
+    for (let idx = 0; idx < o.items.length; idx++) {
+      const it = o.items[idx];
+      if (y + rowH > H - M - 26) {
+        cur = createPage(pages.length + 1);
+        y = drawOrderHeaderAndClient(cur.ctx, cur.y, true);
+      }
+
+      const ctx = cur.ctx;
+      const cardW = W - M * 2;
+      ctx.fillStyle = '#FFFFFF';
+      drawRoundedRect(ctx, M, y, cardW, rowH - 6, 14);
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#E2E8F0';
+      ctx.stroke();
+
+      // Recuadro miniatura del diseño sobre color de camisa
+      const thumbSize = 68;
+      const tx = M + 14;
+      const ty = y + 7;
+      ctx.fillStyle = it.colorHex || '#1A1A1C';
+      drawRoundedRect(ctx, tx, ty, thumbSize, thumbSize, 12);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(15,23,42,0.18)';
+      ctx.stroke();
+
+      const itemImgSrc =
+        lookupOrderDesignThumb(
+          {
+            photoId: it.photoId,
+            photoUrl: it.photoUrl,
+            designId: it.designId || o.designId,
+            designCode: it.designCode || o.designCode,
+            designName: it.designName || o.designName,
+            orderPhotoId: o.photoId
+          },
+          photoMap,
+          catalogDesigns
+        ) || (o.photoId || o.designName ? orderFallbackImg : null);
+
+      const loadedImg = await getDecoded(itemImgSrc);
+      const hasPrint = Boolean(
+        it.designName || it.photoId || (o.designName && !o.workType.toLowerCase().includes('lisa')) || o.photoId
+      );
+
+      if (loadedImg) {
+        const pad = 6;
+        const avail = thumbSize - pad * 2;
+        const sc = Math.min(avail / (loadedImg.naturalWidth || 1), avail / (loadedImg.naturalHeight || 1));
+        const dw = (loadedImg.naturalWidth || 1) * sc;
+        const dh = (loadedImg.naturalHeight || 1) * sc;
+        ctx.drawImage(loadedImg, tx + (thumbSize - dw) / 2, ty + (thumbSize - dh) / 2, dw, dh);
+      } else {
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = `700 10px ${FONT}`;
+        ctx.textAlign = 'center';
+        ctx.fillText(hasPrint ? 'DISEÑO' : 'LISA', tx + thumbSize / 2, ty + thumbSize / 2 + 4);
+        ctx.textAlign = 'left';
+      }
+
+      // Meta de prenda
+      const mx = tx + thumbSize + 16;
+      ctx.beginPath();
+      ctx.arc(mx + 7, y + 25, 7, 0, Math.PI * 2);
+      ctx.fillStyle = it.colorHex || '#111827';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#64748B';
+      ctx.stroke();
+
+      ctx.fillStyle = '#0F172A';
+      ctx.font = `800 15px ${FONT}`;
+      ctx.fillText(`${it.brandName} · ${it.colorName}`, mx + 20, y + 30);
+
+      const designTitle = it.designName
+        ? `${it.designCode ? `[${it.designCode}] ` : ''}${it.designName}`
+        : hasPrint
+        ? o.designName
+          ? `${o.designCode ? `[${o.designCode}] ` : ''}${o.designName}`
+          : 'Diseño Personalizado'
+        : 'Camisa Lisa (Sin estampado)';
+      const rawPlace = it.placement || o.placement;
+      const sideLabel = hasPrint
+        ? rawPlace === 'back'
+          ? 'ESPALDA'
+          : rawPlace === 'pocket'
+          ? 'BOLSILLO'
+          : 'FRENTE'
+        : 'LISA';
+
+      ctx.fillStyle = '#334155';
+      ctx.font = `700 13.5px ${FONT}`;
+      const designShort = designTitle.length > 42 ? `${designTitle.slice(0, 41)}…` : designTitle;
+      ctx.fillText(designShort, mx, y + 54);
+
+      const dWidth = ctx.measureText(designShort).width;
+      ctx.fillStyle = hasPrint ? '#EFF6FF' : '#F1F5F9';
+      drawRoundedRect(ctx, mx + dWidth + 10, y + 39, 82, 20, 10);
+      ctx.fill();
+      ctx.fillStyle = hasPrint ? '#1D4ED8' : '#475569';
+      ctx.font = `800 10.5px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(sideLabel, mx + dWidth + 51, y + 53);
+      ctx.textAlign = 'left';
+
+      // Talla x Cantidad grande a la derecha
+      const badgeW = 128;
+      const badgeH = 44;
+      ctx.fillStyle = '#0F172A';
+      drawRoundedRect(ctx, M + cardW - badgeW - 14, y + 19, badgeW, badgeH, 12);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = `900 18px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`${it.size} × ${it.qty}`, M + cardW - 14 - badgeW / 2, y + 47);
+      ctx.textAlign = 'left';
+
+      y += rowH;
+    }
+
+    cur.y = y + 14;
+  }
+
+  // Numeración de pie de página
+  pages.forEach((canvas, idx) => {
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#64748B';
+    ctx.font = `600 11px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`Página ${idx + 1} de ${pages.length} · ${settings.storeName}`, W / 2, H - 14);
+    ctx.textAlign = 'left';
+  });
+
+  const filename =
+    targetOrders.length === 1
+      ? `Taller-${String(targetOrders[0].folio).padStart(8, '0')}.pdf`
+      : `Cola-Taller-${dayKey()}.pdf`;
+  const file = packCanvasesToPdfFile(pages, filename, 595, 842);
+  const previewUrls = pages.map((c) => c.toDataURL('image/jpeg', 0.85));
+  return { file, previewUrls };
 }
 

@@ -210,6 +210,10 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
   );
 
   const stockEntries = (Array.isArray(s.stockEntries) ? s.stockEntries : []).filter(Boolean);
+  const rawReadyMade = (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(
+    (r) => r && !r.deleted && r.qty > 0
+  );
+  const cleanOrders = rawOrders.filter(Boolean);
 
   return {
     version: 1,
@@ -217,12 +221,14 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     brands: finalBrands,
     colors: cleanColors,
     customers: (Array.isArray(s.customers) ? s.customers : []).filter(Boolean),
-    orders: rawOrders.filter(Boolean),
-    movements: dropDeletedEntryMovements(compactMovements(rawMovements, activeBrandIdSet), stockEntries),
-    catalogDesigns: cleanDesigns,
-    readyMadeStock: (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(
-      (r) => r && !r.deleted && r.qty > 0
+    orders: cleanOrders,
+    movements: dropDeletedOrderMovements(
+      dropDeletedEntryMovements(compactMovements(rawMovements, activeBrandIdSet), stockEntries),
+      cleanOrders,
+      rawReadyMade
     ),
+    catalogDesigns: cleanDesigns,
+    readyMadeStock: rawReadyMade,
     stockEntries,
     _by: s._by,
     _at: s._at
@@ -234,6 +240,22 @@ function dropDeletedEntryMovements(movements: Movement[], entries: StockEntry[])
   const dead = new Set(entries.filter((e) => e.deleted).map((e) => e.id));
   if (!dead.size) return movements;
   return movements.filter((m) => !m.entryId || !dead.has(m.entryId));
+}
+
+/** Si un pedido fue eliminado (deleted), sus movimientos regresan las camisas descontadas al inventario en todos los dispositivos. */
+function dropDeletedOrderMovements(
+  movements: Movement[],
+  orders: Order[],
+  readyMadeStock: ReadyMadeShirt[]
+): Movement[] {
+  const readyOrderIds = new Set(
+    readyMadeStock.filter((r) => !r.deleted && r.qty > 0 && r.orderId).map((r) => r.orderId as string)
+  );
+  const dead = new Set(
+    orders.filter((o) => o.deleted && !readyOrderIds.has(o.id)).map((o) => o.id)
+  );
+  if (!dead.size) return movements;
+  return movements.filter((m) => !m.orderId || !dead.has(m.orderId));
 }
 
 /** Reemplaza los tonos genéricos anteriores solo en colores sin modificaciones manuales (updatedAt === 0). */
@@ -281,16 +303,22 @@ function assignDesignCodes(list: CatalogDesign[]): CatalogDesign[] {
 
 export function mergeStates(local: AppState, remote: AppState): AppState {
   const stockEntries = mergeEntities(local.stockEntries || [], remote.stockEntries || []);
+  const orders = fixFolios(mergeEntities(local.orders, remote.orders));
+  const readyMadeStock = mergeReadyMade(local.readyMadeStock || [], remote.readyMadeStock || []);
   return {
     version: 1,
     settings: mergeSettings(local.settings, remote.settings),
     brands: mergeEntities(local.brands, remote.brands),
     colors: mergeEntities(local.colors, remote.colors),
     customers: mergeEntities(local.customers, remote.customers),
-    orders: fixFolios(mergeEntities(local.orders, remote.orders)),
-    movements: dropDeletedEntryMovements(mergeMovements(local.movements, remote.movements), stockEntries),
+    orders,
+    movements: dropDeletedOrderMovements(
+      dropDeletedEntryMovements(mergeMovements(local.movements, remote.movements), stockEntries),
+      orders,
+      readyMadeStock
+    ),
     catalogDesigns: mergeEntities(local.catalogDesigns || [], remote.catalogDesigns || []),
-    readyMadeStock: mergeReadyMade(local.readyMadeStock || [], remote.readyMadeStock || []),
+    readyMadeStock,
     stockEntries,
     _by: local._by,
     _at: Math.max(local._at || 0, remote._at || 0)

@@ -382,6 +382,8 @@ export interface NewOrderInput {
   lines: CartLine[];
   customer: Customer | null;
   addressId: string | null;
+  /** Datos cuando se factura como Consumidor Final o cliente de mostrador sin guardarlo en CRM */
+  walkIn?: { name: string; phone?: string; address?: string } | null;
   shipping: number;
   deposit: number;
   /** Si true, el cliente paga después en tienda (anticipo explícito L 0) */
@@ -452,9 +454,12 @@ export function createOrder(input: NewOrderInput): Order {
     const deposit = input.paymentPending ? 0 : input.deposit > 0 ? Math.min(input.deposit, total) : total;
     const addr = input.customer?.addresses.find((a) => a.id === input.addressId);
     const shipTo: ShipTo = {
-      name: addr?.recipient || input.customer?.name || '',
-      phone: input.customer?.phone || '',
-      address: addressText(addr ? { ...addr, recipient: '' } : undefined).replace(/^\n+/, '')
+      name: addr?.recipient || input.customer?.name || input.walkIn?.name || '',
+      phone: input.customer?.phone || input.walkIn?.phone || '',
+      address:
+        addressText(addr ? { ...addr, recipient: '' } : undefined).replace(/^\n+/, '') ||
+        input.walkIn?.address ||
+        ''
     };
 
     const uniqueDesignNames = Array.from(
@@ -521,12 +526,22 @@ export function patchOrder(id: string, patch: Partial<Order>): void {
 
 export function deleteOrder(id: string): void {
   const t = now();
-  update((s) => ({
-    ...s,
-    orders: s.orders.map((o) =>
-      o.id === id ? { ...o, deleted: true, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) } : o
-    )
-  }));
+  update((s) => {
+    const hasReadyMadeFromOrder = (s.readyMadeStock || []).some(
+      (r) => !r.deleted && r.qty > 0 && r.orderId === id
+    );
+    return {
+      ...s,
+      movements: hasReadyMadeFromOrder ? s.movements : s.movements.filter((m) => m.orderId !== id),
+      orders: s.orders.map((o) =>
+        o.id === id ? { ...o, deleted: true, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) } : o
+      )
+    };
+  });
+}
+
+export function orderStockReturnCount(order: Order): number {
+  return order.items.reduce((sum, it) => sum + Math.max(0, it.fromStock || 0), 0);
 }
 
 export const STATUS_FLOW: OrderStatus[] = ['borrador', 'en_produccion', 'enviado', 'entregado'];

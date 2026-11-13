@@ -1,18 +1,20 @@
-import { useMemo } from 'react';
-import type { Section } from '../lib/types';
+import { useMemo, useState } from 'react';
+import type { Order, Section } from '../lib/types';
 import { useAppState, useStock } from '../lib/store';
 import { dayKey, fmtDateTime } from '../lib/time';
 import { money } from '../lib/money';
 import { lowColorStockList, orderUnits } from '../lib/inventory';
-import { printDailyOrdersReport, printInventoryReport } from '../lib/printReports';
+import { printInventoryReport } from '../lib/printReports';
 import { folioLabel } from '../lib/ids';
 import { ColorDot, Empty, toast } from '../components/ui';
+import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
 import { StatusBadge } from './Orders';
 
 export default function Home({ navigate }: { navigate: (s: Section) => void }) {
   const state = useAppState();
   const info = useStock();
   const today = dayKey();
+  const [pdfModal, setPdfModal] = useState<{ orders: Order[]; title: string } | null>(null);
 
   const todaysOrders = useMemo(
     () =>
@@ -57,13 +59,13 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
           className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300"
           onClick={() => {
             if (todaysOrders.length === 0) {
-              return toast('Sin pedidos hoy para imprimir', 'info');
+              return toast('Sin pedidos hoy para exportar', 'info');
             }
-            printDailyOrdersReport(todaysOrders, state.settings, `Pedidos de Hoy (${today})`);
+            setPdfModal({ orders: todaysOrders, title: `Pedidos de Hoy (${today})` });
           }}
         >
           <span className="text-xs font-bold text-slate-900">
-            🖨️ Pedidos de Hoy ({todaysOrders.length})
+            📄 Pedidos de Hoy ({todaysOrders.length})
           </span>
           <span className="text-xs font-bold text-slate-500">PDF →</span>
         </button>
@@ -158,13 +160,23 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
                     )}
                   </div>
                   <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-sm font-black text-amber-900">
-                    Quedan {item.totalStock} uds
+                    {item.totalStock} uds
                   </span>
                 </button>
               );
             })}
           </div>
         </section>
+      )}
+
+      {pdfModal && (
+        <WorkshopPdfModal
+          open
+          onClose={() => setPdfModal(null)}
+          orders={pdfModal.orders}
+          settings={state.settings}
+          title={pdfModal.title}
+        />
       )}
     </div>
   );

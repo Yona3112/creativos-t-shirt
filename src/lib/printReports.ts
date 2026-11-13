@@ -17,7 +17,7 @@ function esc(s: string | number | null | undefined): string {
     .replace(/"/g, '&quot;');
 }
 
-function buildPrintHtml(title: string, bodyHtml: string, extraCss = ''): string {
+function buildPrintHtml(title: string, bodyHtml: string, extraCss = '', autoPrint = true): string {
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -194,7 +194,9 @@ function buildPrintHtml(title: string, bodyHtml: string, extraCss = ''): string 
     </div>
   </div>
   ${bodyHtml}
-  <script>
+  ${
+    autoPrint
+      ? `<script>
     (function() {
       function triggerPrint() {
         setTimeout(function() { window.print(); }, 180);
@@ -228,18 +230,58 @@ function buildPrintHtml(title: string, bodyHtml: string, extraCss = ''): string 
         }, 900);
       });
     })();
-  </script>
+  </script>`
+      : ''
+  }
 </body>
 </html>`;
 }
 
+function printHtmlViaIframe(html: string): void {
+  try {
+    const old = document.getElementById('cgs-print-iframe');
+    if (old) old.remove();
+    const iframe = document.createElement('iframe');
+    iframe.id = 'cgs-print-iframe';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
+    const iw = iframe.contentWindow;
+    const doc = iw?.document;
+    if (!iw || !doc) {
+      toast('Usa el botón "Guardar / Enviar PDF" para exportar el documento', 'info');
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+    setTimeout(() => {
+      try {
+        iw.focus();
+        iw.print();
+      } catch {
+        toast('Usa "Guardar / Enviar PDF" para exportar el archivo en este dispositivo', 'info');
+      }
+      setTimeout(() => iframe.remove(), 60000);
+    }, 350);
+  } catch {
+    toast('Usa "Guardar / Enviar PDF" para exportar el archivo', 'info');
+  }
+}
+
 function openPrintDocument(title: string, bodyHtml: string): void {
-  const html = buildPrintHtml(title, bodyHtml);
   const win = window.open('', '_blank');
   if (!win) {
-    toast('Permite las ventanas emergentes en tu navegador para imprimir', 'error');
+    printHtmlViaIframe(buildPrintHtml(title, bodyHtml, '', false));
     return;
   }
+  const html = buildPrintHtml(title, bodyHtml);
   win.document.open();
   win.document.write(html);
   win.document.close();
@@ -452,7 +494,7 @@ export function printInventoryReport(
  * Resuelve la fuente de imagen de un diseño (desde IndexedDB local o Firestore compartido)
  * usando primero `photoId` del ítem, luego fallback en catálogo por id/código/nombre y por último `order.photoId`.
  */
-async function resolveOrderPhotosMap(orders: Order[]): Promise<Map<string, string>> {
+export async function resolveOrderPhotosMap(orders: Order[]): Promise<Map<string, string>> {
   const photoMap = new Map<string, string>();
   const designs = getState().catalogDesigns || [];
   const findFallbackPhotoId = (
@@ -511,6 +553,35 @@ async function resolveOrderPhotosMap(orders: Order[]): Promise<Map<string, strin
   return photoMap;
 }
 
+export function lookupOrderDesignThumb(
+  opts: {
+    photoId?: string | null;
+    photoUrl?: string | null;
+    designId?: string | null;
+    designCode?: string | null;
+    designName?: string | null;
+    orderPhotoId?: string | null;
+  },
+  photoMap: Map<string, string>,
+  catalogDesigns = getState().catalogDesigns || []
+): string | null {
+  if (opts.photoId && photoMap.has(opts.photoId)) return photoMap.get(opts.photoId) || null;
+  if (opts.photoUrl && (opts.photoUrl.startsWith('data:') || opts.photoUrl.startsWith('http'))) return opts.photoUrl;
+  const match = catalogDesigns.find(
+    (d) =>
+      !d.deleted &&
+      d.photoId &&
+      ((opts.designId && d.id === opts.designId) ||
+        (opts.designCode && d.code && d.code.toLowerCase() === opts.designCode.toLowerCase()) ||
+        (opts.designName && d.name.toLowerCase() === opts.designName.toLowerCase()))
+  );
+  if (match?.photoId && photoMap.has(match.photoId)) return photoMap.get(match.photoId) || null;
+  if (opts.orderPhotoId && photoMap.has(opts.orderPhotoId)) {
+    return photoMap.get(opts.orderPhotoId) || null;
+  }
+  return null;
+}
+
 /**
  * Imprime los Pedidos del Día (o lista filtrada) en diseño minimalista estilo Apple,
  * mostrando miniatura de cada diseño sobre el color de camisa para que Taller entienda al instante.
@@ -521,45 +592,20 @@ export function printDailyOrdersReport(
   periodLabel = 'Pedidos del Día'
 ): void {
   const win = window.open('', '_blank');
-  if (!win) {
-    toast('Permite las ventanas emergentes en tu navegador para imprimir', 'error');
-    return;
+  if (win) {
+    // Pantalla de carga instantánea mientras se obtienen las miniaturas del diseño
+    win.document.open();
+    win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>${esc(periodLabel)}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;align-items:center;justify-content:center;min-height:90vh;color:#334155;background:#f8fafc;margin:0;}.box{background:#fff;padding:24px 32px;border-radius:16px;border:1px solid #e2e8f0;text-align:center;box-shadow:0 4px 20px rgba(15,23,42,0.06);}</style></head><body><div class="box"><div style="font-size:15px;font-weight:700;color:#0f172a;">Preparando ordenes e imágenes de diseño...</div><div style="font-size:12px;color:#64748b;margin-top:6px;">Un momento por favor</div></div></body></html>`);
+    win.document.close();
   }
-
-  // Pantalla de carga instantánea mientras se obtienen las miniaturas del diseño
-  win.document.open();
-  win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>${esc(periodLabel)}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;align-items:center;justify-content:center;min-height:90vh;color:#334155;background:#f8fafc;margin:0;}.box{background:#fff;padding:24px 32px;border-radius:16px;border:1px solid #e2e8f0;text-align:center;box-shadow:0 4px 20px rgba(15,23,42,0.06);}</style></head><body><div class="box"><div style="font-size:15px;font-weight:700;color:#0f172a;">Preparando ordenes e imágenes de diseño...</div><div style="font-size:12px;color:#64748b;margin-top:6px;">Un momento por favor</div></div></body></html>`);
-  win.document.close();
 
   const activeOrders = orders.filter((o) => !o.deleted && o.status !== 'cancelado');
 
   void (async () => {
     const photoMap = await resolveOrderPhotosMap(activeOrders);
     const catalogDesigns = getState().catalogDesigns || [];
-    const lookupPhotoSrc = (opts: {
-      photoId?: string | null;
-      photoUrl?: string | null;
-      designId?: string | null;
-      designCode?: string | null;
-      designName?: string | null;
-      orderPhotoId?: string | null;
-    }): string | null => {
-      if (opts.photoId && photoMap.has(opts.photoId)) return photoMap.get(opts.photoId) || null;
-      if (opts.photoUrl && opts.photoUrl.startsWith('data:')) return opts.photoUrl;
-      const match = catalogDesigns.find(
-        (d) =>
-          !d.deleted &&
-          d.photoId &&
-          ((opts.designId && d.id === opts.designId) ||
-            (opts.designCode && d.code && d.code.toLowerCase() === opts.designCode.toLowerCase()) ||
-            (opts.designName && d.name.toLowerCase() === opts.designName.toLowerCase()))
-      );
-      if (match?.photoId && photoMap.has(match.photoId)) return photoMap.get(match.photoId) || null;
-      if (opts.orderPhotoId && photoMap.has(opts.orderPhotoId)) {
-        return photoMap.get(opts.orderPhotoId) || null;
-      }
-      return null;
-    };
+    const lookupPhotoSrc = (opts: Parameters<typeof lookupOrderDesignThumb>[0]) =>
+      lookupOrderDesignThumb(opts, photoMap, catalogDesigns);
 
     let totalRevenue = 0;
     let totalPaid = 0;
@@ -1041,10 +1087,15 @@ export function printDailyOrdersReport(
       ${pickingHtml}
     `;
 
-    const fullHtml = buildPrintHtml(`${periodLabel} - ${settings.storeName}`, bodyHtml, appleCardsCss);
-    win.document.open();
-    win.document.write(fullHtml);
-    win.document.close();
+    if (win) {
+      const fullHtml = buildPrintHtml(`${periodLabel} - ${settings.storeName}`, bodyHtml, appleCardsCss);
+      win.document.open();
+      win.document.write(fullHtml);
+      win.document.close();
+    } else {
+      const fullHtml = buildPrintHtml(`${periodLabel} - ${settings.storeName}`, bodyHtml, appleCardsCss, false);
+      printHtmlViaIframe(fullHtml);
+    }
   })();
 }
 

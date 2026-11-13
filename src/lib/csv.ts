@@ -20,7 +20,7 @@ export function downloadBlob(filename: string, blob: Blob): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  setTimeout(() => URL.revokeObjectURL(url), 15000);
 }
 
 export async function copyText(text: string): Promise<boolean> {
