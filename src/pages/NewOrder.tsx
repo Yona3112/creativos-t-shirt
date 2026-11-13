@@ -637,7 +637,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     <div className="space-y-4 pb-6">
       {/* Banner 1-Clic cuando un cliente envía un pedido desde la Tienda 3D */}
       {latestWebOrder && (
-        <section className="rounded-2xl border-2 border-amber-400 bg-gradient-to-r from-amber-950 via-stone-900 to-amber-950 p-3.5 text-white shadow-lg">
+        <section className="rounded-[24px] border border-white/10 bg-slate-900/95 p-4 text-white shadow-lg backdrop-blur-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               {latestWebOrder.designThumb && (

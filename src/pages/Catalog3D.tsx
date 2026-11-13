@@ -958,7 +958,6 @@ export function CustomerCatalogView({
 
   const [selectedColor, setSelectedColor] = useState<SharedCatalogColor>(payload.colors[0]);
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
-  const [priceTier, setPriceTier] = useState<'300' | '350'>(initialDesignUrl ? '350' : '300');
   const [clientCampaign, setClientCampaign] = useState<string>(
     initialPayload.activeCampaign || payload.activeCampaign || 'all'
   );
@@ -1078,8 +1077,8 @@ export function CustomerCatalogView({
     );
   }, [state.readyMadeStock, hasDesign, selectedColor, size, selectedDesignName]);
 
-  const unitPrice =
-    priceTier === '350' ? (payload.priceCustom || 35000) : (payload.priceNormal || 30000);
+  // Precio único simplificado para el cliente en Tienda 3D (L 350.00)
+  const unitPrice = payload.priceCustom || 35000;
   const total = qty * unitPrice;
 
   const cartTotalQty = customerCart.reduce((sum, it) => sum + it.qty, 0);
@@ -1372,7 +1371,7 @@ export function CustomerCatalogView({
             )}
           </div>
 
-          {/* Selector segmentado limpio: solo L 300.00 y L 350.00 + Botón Carrito */}
+          {/* Precio único minimalista estilo Apple (L 350.00) + Botón Carrito */}
           <div className="flex items-center gap-2">
             {customerCart.length > 0 && (
               <button
@@ -1386,56 +1385,8 @@ export function CustomerCatalogView({
               </button>
             )}
 
-            <div className="inline-flex shrink-0 rounded-full bg-slate-100 p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setPriceTier('300');
-                  setDesignUrl(null);
-                  setActiveCatalogDesignId(null);
-                  setSelectedDesignName(null);
-                  setSelectedDesignCode(null);
-                  setSelectedDesignPhotoId(null);
-                }}
-                className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
-                  priceTier === '300'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {money(payload.priceNormal || 30000)}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setPriceTier('350');
-                  if (!designUrl && clientDesigns.length > 0) {
-                    const pool =
-                      clientCampaign && clientCampaign !== 'all'
-                        ? clientDesigns.filter(
-                            (d) => !d.campaign || d.campaign === 'all' || d.campaign === clientCampaign
-                          )
-                        : clientDesigns;
-                    const first = (pool.length > 0 ? pool : clientDesigns).find((d) => d.imageUrl);
-                    if (first && first.imageUrl) {
-                      setDesignUrl(first.imageUrl);
-                      setActiveCatalogDesignId(first.id);
-                      setSelectedDesignName(first.name);
-                      setSelectedDesignCode(first.code || null);
-                      setSelectedDesignPhotoId(first.photoId);
-                      setPlacement('back');
-                      setScale(2.0);
-                    }
-                  }
-                }}
-                className={`rounded-full px-3.5 py-1 text-xs font-bold transition ${
-                  priceTier === '350'
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {money(payload.priceCustom || 35000)}
-              </button>
+            <div className="inline-flex shrink-0 items-center rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm">
+              {money(unitPrice)}
             </div>
           </div>
         </div>
@@ -1458,13 +1409,11 @@ export function CustomerCatalogView({
             if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
             if (patch.designUrl !== undefined) {
               setDesignUrl(patch.designUrl);
-              setPriceTier('350');
             }
             if (patch.designName !== undefined) setSelectedDesignName(patch.designName);
             if (patch.photoId !== undefined) setSelectedDesignPhotoId(patch.photoId);
           }}
           onClearDesign={() => {
-            setPriceTier('300');
             setDesignUrl(null);
             setActiveCatalogDesignId(null);
             setSelectedDesignName(null);
@@ -1478,7 +1427,6 @@ export function CustomerCatalogView({
               const processed = autoJpg ? await applyBackgroundRemoval(raw, true, 34) : raw;
               const customPid = `photo_client_${uid()}`;
               const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
-              setPriceTier('350');
               setDesignUrl(processed);
               setActiveCatalogDesignId(null);
               setSelectedDesignName(cleanName ? `Archivo A3: ${cleanName.slice(0, 24)}` : 'Archivo personalizado A3');
@@ -1517,7 +1465,6 @@ export function CustomerCatalogView({
           onChangeActiveCampaign={setClientCampaign}
           onSelectCatalogDesign={(d) => {
             if (!d.imageUrl) return;
-            setPriceTier('350');
             setDesignUrl(d.imageUrl);
             setActiveCatalogDesignId(d.id);
             setSelectedDesignName(d.name);
