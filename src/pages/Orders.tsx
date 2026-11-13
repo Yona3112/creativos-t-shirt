@@ -491,15 +491,23 @@ function OrderCard({
           <div className="text-lg font-extrabold text-slate-900">Total: {money(order.total)}</div>
         </div>
         {order.balance > 0 && order.status !== 'cancelado' ? (
-          <div className="flex items-center gap-2">
-            <span className="rounded-xl bg-red-600 px-3 py-1.5 text-sm font-extrabold text-white">
-              Saldo pendiente: {money(order.balance)}
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`rounded-xl px-3 py-1.5 text-sm font-extrabold ${
+                order.deposit <= 0
+                  ? 'bg-amber-500 text-stone-950'
+                  : 'bg-red-600 text-white'
+              }`}
+            >
+              {order.deposit <= 0
+                ? `⏳ Pago pendiente (Paga en tienda): ${money(order.balance)}`
+                : `Saldo pendiente: ${money(order.balance)}`}
             </span>
             <button
               className="btn-ghost min-h-[44px] px-3 text-xs font-bold text-emerald-700"
               onClick={() => {
                 markPaid(order.id);
-                toast('Saldo marcado como pagado');
+                toast('Pago completo registrado');
               }}
             >
               ✓ Liquidar
@@ -742,7 +750,13 @@ function EditOrderModal({
       brandName: it.brandName,
       colorName: it.colorName,
       colorHex: it.colorHex,
-      sku: it.sku
+      sku: it.sku,
+      designId: it.designId || null,
+      designName: it.designName || null,
+      designCode: it.designCode || null,
+      photoId: it.photoId || null,
+      photoUrl: null,
+      placement: it.placement || null
     }));
     const subtotal = nextItems.reduce((sum, i) => sum + i.qty * i.unitPrice, 0);
     const shipCents = toCents(shipping);

@@ -384,6 +384,8 @@ export interface NewOrderInput {
   addressId: string | null;
   shipping: number;
   deposit: number;
+  /** Si true, el cliente paga después en tienda (anticipo explícito L 0) */
+  paymentPending?: boolean;
   paymentMethod: string;
   workType: string;
   notes: string;
@@ -441,13 +443,13 @@ export function createOrder(input: NewOrderInput): Order {
         designName: itemDesignName,
         designCode: itemDesignCode,
         photoId: itemPhotoId,
-        photoUrl: l.photo || null,
+        photoUrl: l.photo && !l.photo.startsWith('data:') ? l.photo : null,
         placement: itemPlacement
       };
     });
     const subtotal = items.reduce((sum, i) => sum + i.qty * i.unitPrice, 0);
     const total = subtotal + input.shipping;
-    const deposit = input.deposit > 0 ? Math.min(input.deposit, total) : total;
+    const deposit = input.paymentPending ? 0 : input.deposit > 0 ? Math.min(input.deposit, total) : total;
     const addr = input.customer?.addresses.find((a) => a.id === input.addressId);
     const shipTo: ShipTo = {
       name: addr?.recipient || input.customer?.name || '',
@@ -699,6 +701,9 @@ export function addCatalogDesign(input: {
   placement?: CatalogDesign['placement'];
   campaign?: string;
   code?: string;
+  tone?: CatalogDesign['tone'];
+  allowedColorMode?: CatalogDesign['allowedColorMode'];
+  allowedColorIds?: string[];
 }): CatalogDesign {
   const t = now();
   const existing = getState().catalogDesigns || [];
@@ -714,6 +719,9 @@ export function addCatalogDesign(input: {
     clientVisible: input.clientVisible ?? true,
     placement: input.placement || 'back',
     campaign: input.campaign || 'all',
+    tone: input.tone,
+    allowedColorMode: input.allowedColorMode || 'all',
+    allowedColorIds: input.allowedColorIds && input.allowedColorIds.length > 0 ? input.allowedColorIds : undefined,
     createdAt: t,
     updatedAt: t
   };

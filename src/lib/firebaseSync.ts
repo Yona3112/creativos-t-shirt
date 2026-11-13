@@ -92,6 +92,8 @@ export class FirebaseSyncEngine {
   private chain: Promise<void> = Promise.resolve();
   private readonly device = getDeviceId();
   private opts: EngineOptions;
+  private lastRemoteSig: string | null = null;
+  private verifiedRemotePhotos = new Set<string>();
   lastSeenAt: number | null = null;
   status: SyncStatus = 'local';
 
@@ -165,6 +167,8 @@ export class FirebaseSyncEngine {
     }
     this.fs = null;
     this.lastSeenAt = null;
+    this.lastRemoteSig = null;
+    this.verifiedRemotePhotos.clear();
     this.setStatus('local');
   }
 
@@ -191,6 +195,7 @@ export class FirebaseSyncEngine {
   private async absorb(remoteRaw: AppState, remoteAt: string | null) {
     const local = this.opts.getState();
     const remote = normalize(remoteRaw);
+    this.lastRemoteSig = contentSignature(remote);
     const merged = mergeStates(local, remote);
     if (remoteAt) {
       const parsed = Date.parse(remoteAt);
@@ -199,7 +204,7 @@ export class FirebaseSyncEngine {
     if (contentSignature(merged) !== contentSignature(local)) {
       this.opts.applyRemote(merged);
     }
-    if (contentSignature(merged) !== contentSignature(remote)) {
+    if (contentSignature(merged) !== this.lastRemoteSig) {
       await this.write(merged);
     } else {
       this.setStatus('live');
@@ -233,24 +238,53 @@ export class FirebaseSyncEngine {
     if (!this.fs) return;
     if (!navigator.onLine) return this.setStatus('offline');
     this.setStatus('syncing');
-    await this.write(this.opts.getState());
+    let stateToWrite = this.opts.getState();
+    try {
+      const syncDocRef = doc(this.fs, 'cgs_sync', 'app_state');
+      const snap = await getDoc(syncDocRef);
+      if (snap.exists()) {
+        const data = snap.data() as { payload?: AppState };
+        const rawRemote = data?.payload;
+        if (rawRemote && rawRemote.version === 1 && rawRemote._by !== this.device) {
+          const remote = normalize(rawRemote);
+          const remoteSig = contentSignature(remote);
+          if (remoteSig !== this.lastRemoteSig) {
+            this.lastRemoteSig = remoteSig;
+            const merged = mergeStates(stateToWrite, remote);
+            if (contentSignature(merged) !== contentSignature(stateToWrite)) {
+              this.opts.applyRemote(merged);
+            }
+            stateToWrite = merged;
+            await this.fetchMissingPhotos(merged);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[firebase-sync] pre-push check', err);
+    }
+    await this.write(stateToWrite);
     await this.uploadPendingPhotos();
   }
 
   private async write(state: AppState) {
     if (!this.fs) return;
     const now = new Date().toISOString();
-    const rawPayload: AppState = { ...state, _by: this.device, _at: Date.now() };
+    // Asegurar que nunca viajen imágenes base64 incrustadas dentro de app_state (límite 1 MiB de Firestore)
+    const sanitized = normalize(state);
+    const rawPayload: AppState = { ...sanitized, _by: this.device, _at: Date.now() };
     // Firestore rechaza propiedades con valor `undefined`; serializamos para limpiarlas de forma segura
     const payload: AppState = JSON.parse(JSON.stringify(rawPayload));
     const syncDocRef = doc(this.fs, 'cgs_sync', 'app_state');
     await setDoc(syncDocRef, { payload, updated_at: now });
+    this.lastRemoteSig = contentSignature(sanitized);
 
     // Publicar vitrina pública para el cliente (#tienda)
     try {
-      const publicSnap = JSON.stringify(buildPublicCatalog(state));
-      const pubDoc = doc(this.fs, 'cgs_photos', LIVE_CATALOG_KEY);
-      await setDoc(pubDoc, { data: publicSnap });
+      const publicSnap = JSON.stringify(buildPublicCatalog(sanitized));
+      if (publicSnap.length <= 920000) {
+        const pubDoc = doc(this.fs, 'cgs_photos', LIVE_CATALOG_KEY);
+        await setDoc(pubDoc, { data: publicSnap });
+      }
     } catch {
       /* ignorar */
     }
@@ -263,29 +297,65 @@ export class FirebaseSyncEngine {
     if (!this.fs || !navigator.onLine) return;
     const pending = await db.photos.where('synced').equals(0).toArray();
     for (const p of pending) {
-      try {
-        await uploadPhotoNowFirebase(p.id, p.data);
-      } catch (err) {
-        console.warn('[firebase-sync] foto upload', p.id, err);
-        continue;
-      }
+      if (!p?.data) continue;
+      const ok = await uploadPhotoNowFirebase(p.id, p.data);
+      if (ok) this.verifiedRemotePhotos.add(p.id);
     }
-    // Asegurar que todas las fotos de diseños del catálogo queden respaldadas en la nube
+    // Verificar una vez por sesión que los diseños del catálogo y pedidos recientes existan en la nube
     await this.syncAllCatalogPhotos();
   }
 
   async syncAllCatalogPhotos() {
     if (!this.fs || !navigator.onLine) return;
     const state = this.opts.getState();
-    const catalogDesigns = (state.catalogDesigns || []).filter((d) => !d.deleted && d.photoId);
-    for (const d of catalogDesigns) {
+    const catalogPhotoIds = (state.catalogDesigns || [])
+      .filter((d) => !d.deleted && d.photoId)
+      .map((d) => d.photoId);
+    const orderPhotoIds = (state.orders || [])
+      .filter((o) => !o.deleted)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 60)
+      .flatMap((o) => [
+        o.photoId,
+        o.guidePhotoId,
+        ...(o.items || []).map((it) => it.photoId)
+      ])
+      .filter((id): id is string => Boolean(id));
+
+    const candidateIds = Array.from(new Set([...catalogPhotoIds, ...orderPhotoIds])).filter(
+      (id) => !this.verifiedRemotePhotos.has(id)
+    );
+    if (!candidateIds.length) return;
+
+    // Comprobar en lotes cuáles faltan realmente en Firestore (evita resubir megabytes en cada clic)
+    const remoteExists = new Set<string>();
+    const photosCol = collection(this.fs, 'cgs_photos');
+    for (let i = 0; i < candidateIds.length; i += 30) {
+      const batch = candidateIds.slice(i, i + 30);
       try {
-        const local = await db.photos.get(d.photoId);
-        if (local?.data) {
-          await uploadPhotoNowFirebase(d.photoId, local.data);
+        const res = await getDocs(query(photosCol, where(documentId(), 'in', batch)));
+        for (const d of res.docs) {
+          const docData = d.data();
+          if (typeof docData?.data === 'string' || (typeof docData?.chunks === 'number' && docData.chunks >= 1)) {
+            remoteExists.add(d.id);
+            this.verifiedRemotePhotos.add(d.id);
+          }
         }
       } catch (err) {
-        console.warn('[firebase-sync] syncAllCatalogPhotos', d.name, err);
+        console.warn('[firebase-sync] check remote photos', err);
+      }
+    }
+
+    const toUpload = candidateIds.filter((id) => !remoteExists.has(id));
+    for (const id of toUpload) {
+      try {
+        const local = await db.photos.get(id);
+        if (local?.data) {
+          const ok = await uploadPhotoNowFirebase(id, local.data);
+          if (ok) this.verifiedRemotePhotos.add(id);
+        }
+      } catch (err) {
+        console.warn('[firebase-sync] syncAllCatalogPhotos', id, err);
       }
     }
   }
@@ -293,16 +363,23 @@ export class FirebaseSyncEngine {
   private async fetchMissingPhotos(state: AppState) {
     if (!this.fs || !navigator.onLine) return;
     const orderPhotos = state.orders
-      .filter((o) => !o.deleted && (o.photoId || o.guidePhotoId))
+      .filter((o) => !o.deleted)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, 60)
-      .flatMap((o) => [o.photoId, o.guidePhotoId].filter(Boolean) as string[]);
+      .slice(0, 100)
+      .flatMap((o) => [
+        o.photoId,
+        o.guidePhotoId,
+        ...(o.items || []).map((it) => it.photoId)
+      ])
+      .filter((id): id is string => Boolean(id));
     const catalogPhotos = (state.catalogDesigns || [])
       .filter((d) => d.photoId && !d.deleted)
       .map((d) => d.photoId);
     const wanted = Array.from(new Set([...catalogPhotos, ...orderPhotos]));
     if (!wanted.length) return;
-    const have = new Set((await db.photos.where('id').anyOf(wanted).primaryKeys()) as string[]);
+
+    const existingRows = await db.photos.where('id').anyOf(wanted).toArray();
+    const have = new Set(existingRows.filter((r) => Boolean(r?.data)).map((r) => r.id));
     const missing = wanted.filter((id) => !have.has(id));
     if (!missing.length) return;
 
@@ -312,25 +389,47 @@ export class FirebaseSyncEngine {
       chunks.push(missing.slice(i, i + 30));
     }
     let anyLoaded = false;
+    const chunkedIds: string[] = [];
     for (const chunk of chunks) {
       try {
         const photosCol = collection(this.fs, 'cgs_photos');
         const q = query(photosCol, where(documentId(), 'in', chunk));
         const res = await getDocs(q);
         if (!res.empty) {
-          const rows = res.docs.map((d) => ({
-            id: d.id,
-            data: d.data().data as string,
-            synced: 1 as const,
-            createdAt: Date.now()
-          }));
-          await db.photos.bulkPut(rows);
-          anyLoaded = true;
+          const rows: { id: string; data: string; synced: 1; createdAt: number }[] = [];
+          for (const d of res.docs) {
+            const docData = d.data();
+            if (docData?.chunks && Number(docData.chunks) > 1) {
+              chunkedIds.push(d.id);
+            } else if (typeof docData?.data === 'string' && docData.data.length > 0) {
+              rows.push({
+                id: d.id,
+                data: docData.data,
+                synced: 1 as const,
+                createdAt: Date.now()
+              });
+              this.verifiedRemotePhotos.add(d.id);
+            }
+          }
+          if (rows.length > 0) {
+            await db.photos.bulkPut(rows);
+            anyLoaded = true;
+          }
         }
       } catch (e) {
         console.warn('[firebase-sync] missing photos', e);
       }
     }
+
+    // Descargar fotos grandes divididas en múltiples fragmentos
+    for (const id of chunkedIds) {
+      const assembled = await fetchSharedPhotoFirebase(id);
+      if (assembled) {
+        this.verifiedRemotePhotos.add(id);
+        anyLoaded = true;
+      }
+    }
+
     if (anyLoaded) {
       this.opts.onPhotos();
     }
@@ -339,9 +438,9 @@ export class FirebaseSyncEngine {
 
 const CHUNK_SIZE = 650000;
 
-export async function uploadPhotoNowFirebase(id: string, data: string): Promise<void> {
+export async function uploadPhotoNowFirebase(id: string, data: string): Promise<boolean> {
   const cfg = getFirebaseConfig();
-  if (!cfg || !navigator.onLine) return;
+  if (!cfg || !navigator.onLine) return false;
   try {
     const { fs } = getOrInitFirebase(cfg);
     if (data.length <= CHUNK_SIZE) {
@@ -367,8 +466,10 @@ export async function uploadPhotoNowFirebase(id: string, data: string): Promise<
     } catch {
       /* ignorar fallo menor en IndexedDB local */
     }
+    return true;
   } catch (err) {
     console.warn('[firebase-sync] Error subiendo foto:', id, err);
+    return false;
   }
 }
 

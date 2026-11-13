@@ -150,6 +150,7 @@ export default function Catalog3D() {
     toggleFeatured,
     renameDesign,
     setDesignCampaign,
+    setDesignColors,
     deleteDesign
   } = useCatalogDesigns();
 
@@ -590,14 +591,24 @@ export default function Catalog3D() {
             renameDesign(id, name, code);
             toast('Nombre y código del diseño actualizados');
           }}
-          onSaveCurrentToCatalog={(chosenCampaign) => {
+          onChangeDesignColors={(id, mode, ids, tone) => {
+            setDesignColors(id, mode, ids, tone);
+            toast('Colores disponibles del diseño actualizados');
+            setTimeout(() => void syncLiveCatalogSnapshot(), 150);
+          }}
+          onSaveCurrentToCatalog={(chosen) => {
             if (!designUrl) return;
-            const targetCamp = chosenCampaign || activeCampaign;
+            const opts = typeof chosen === 'string' ? { campaign: chosen } : chosen || {};
+            const targetCamp = opts.campaign || activeCampaign;
             void saveCurrentToCatalog({
               dataUrl: designUrl,
+              name: opts.name,
               placement,
               campaign: targetCamp,
-              existingPhotoId: photoId
+              existingPhotoId: photoId,
+              allowedColorMode: opts.allowedColorMode,
+              allowedColorIds: opts.allowedColorIds,
+              tone: opts.tone
             }).then((saved) => {
               setActiveCatalogDesignId(saved.id);
               toast(
@@ -608,14 +619,18 @@ export default function Catalog3D() {
               setTimeout(() => void syncLiveCatalogSnapshot(), 150);
             });
           }}
-          onUploadCatalogFiles={(files, chosenCampaign) => {
-            const targetCamp = chosenCampaign || activeCampaign;
+          onUploadCatalogFiles={(files, chosen) => {
+            const opts = typeof chosen === 'string' ? { campaign: chosen } : chosen || {};
+            const targetCamp = opts.campaign || activeCampaign;
             setProcessingMsg('Procesando diseños (JPG → PNG transparente)...');
             void uploadFilesToCatalog(files, {
               removeBg,
               tolerance: bgTolerance,
               placement,
               campaign: targetCamp,
+              customName: opts.customName,
+              allowedColorMode: opts.allowedColorMode,
+              allowedColorIds: opts.allowedColorIds,
               clientVisible: true
             })
               .then((n) => {
@@ -963,6 +978,7 @@ export function CustomerCatalogView({
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
+  const [paymentPending, setPaymentPending] = useState(false);
 
   // Carrito de compras para el cliente: permite agregar múltiples prendas y diferentes diseños
   const [customerCart, setCustomerCart] = useState<CustomerCartItem[]>([]);
@@ -1227,6 +1243,8 @@ export function CustomerCatalogView({
       photoId: mainPhotoId,
       designThumb: mainThumbUrl,
       campaign: clientCampaign !== 'all' ? clientCampaign : null,
+      paymentMethod: paymentPending ? 'Pago Pendiente en Tienda' : 'Transferencia / Anticipo',
+      paymentPending,
       placement: firstItem.placement || 'back',
       scale: firstItem.scale || 2.0,
       items: webOrderItems
@@ -1239,11 +1257,14 @@ export function CustomerCatalogView({
     void uploadPhotoNow(`weborder_${orderId}`, rawOrderJson);
 
     const importUrl = `${location.origin}${location.pathname}#pedido=${orderId}`;
+    const paymentLine = paymentPending
+      ? '⏳ Pago pendiente (Paga al llegar a la tienda)'
+      : '💳 Transferencia / Anticipo';
     const clientHeader =
-      cleanName || cleanPhone || cleanAddr
-        ? `\n👤 *DATOS DEL CLIENTE:*\n• Nombre: ${cleanName}${
+      cleanName || cleanPhone || cleanAddr || paymentPending
+        ? `\n👤 *DATOS DEL CLIENTE:*${cleanName ? `\n• Nombre: ${cleanName}` : ''}${
             cleanPhone ? `\n• Teléfono: ${cleanPhone}` : ''
-          }${cleanAddr ? `\n• Dirección / Nota: ${cleanAddr}` : ''}\n`
+          }${cleanAddr ? `\n• Dirección / Nota: ${cleanAddr}` : ''}\n• Forma de pago: *${paymentLine}*\n`
         : '';
 
     let itemsDetailsText = '';
@@ -1476,15 +1497,17 @@ export function CustomerCatalogView({
           colorOptions={payload.colors.map((c) => {
             const totalC = getColorTotalStock(c);
             return {
-              id: c.name,
+              id: resolveColorId(c) || c.id || c.name,
               name: c.name,
               hex: c.hex,
               available: totalC > 0
             };
           })}
-          activeColorId={selectedColor?.name}
-          onSelectColor={(cName) => {
-            const found = payload.colors.find((x) => x.name === cName);
+          activeColorId={resolveColorId(selectedColor) || selectedColor?.id || selectedColor?.name}
+          onSelectColor={(cid) => {
+            const found = payload.colors.find(
+              (x) => (resolveColorId(x) || x.id || x.name) === cid || x.name === cid
+            );
             if (found) handleSelectColor(found);
           }}
           catalogDesigns={clientDesigns}
@@ -1594,6 +1617,34 @@ export function CustomerCatalogView({
               placeholder="Dirección o ciudad"
               className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-slate-500">Forma de pago preferida</div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPaymentPending(false)}
+                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                  !paymentPending
+                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                💳 Transferencia / Anticipo
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentPending(true)}
+                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                  paymentPending
+                    ? 'border-amber-500 bg-amber-500 text-stone-950 shadow-sm'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                ⏳ Pagar al recoger en tienda
+              </button>
+            </div>
           </div>
 
           {readyMadeMatch && (

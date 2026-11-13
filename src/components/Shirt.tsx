@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { contrastText } from '../lib/inventory';
+import {
+  analyzeDesignTone,
+  isColorCompatibleWithDesign,
+  isDarkFabricColor,
+  type DesignToneAnalysis
+} from '../lib/image';
+import type { AllowedColorMode, DesignTone } from '../lib/types';
 import { WesternDesignModal } from './WesternDesignModal';
 
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
@@ -555,6 +562,12 @@ export interface CatalogQuickDesign {
   imageUrl: string | null;
   placement: DecalPlacement;
   clientVisible: boolean;
+  /** Tono predominante detectado de la imagen ('dark' | 'light' | 'mixed') */
+  tone?: DesignTone;
+  /** Restricción de telas permitidas para este diseño */
+  allowedColorMode?: AllowedColorMode;
+  /** IDs específicos permitidos cuando allowedColorMode === 'custom' */
+  allowedColorIds?: string[];
 }
 
 export interface ShirtColorOption {
@@ -608,6 +621,7 @@ export function InteractiveShirt3D({
   onDeleteCatalogDesign,
   onRenameCatalogDesign,
   onChangeDesignCampaign,
+  onChangeDesignColors,
   campaigns,
   activeCampaign = 'all',
   onChangeActiveCampaign,
@@ -654,13 +668,39 @@ export function InteractiveShirt3D({
   activeCatalogDesignId?: string | null;
   onSelectCatalogDesign?: (design: CatalogQuickDesign) => void;
   isStoreOwner?: boolean;
-  onSaveCurrentToCatalog?: (chosenCampaign?: string) => void;
-  onUploadCatalogFiles?: (files: FileList | File[], chosenCampaign?: string) => void;
+  onSaveCurrentToCatalog?: (
+    chosen?:
+      | string
+      | {
+          campaign?: string;
+          name?: string;
+          allowedColorMode?: AllowedColorMode | 'auto';
+          allowedColorIds?: string[];
+          tone?: DesignTone;
+        }
+  ) => void;
+  onUploadCatalogFiles?: (
+    files: FileList | File[],
+    chosen?:
+      | string
+      | {
+          campaign?: string;
+          customName?: string;
+          allowedColorMode?: AllowedColorMode | 'auto';
+          allowedColorIds?: string[];
+        }
+  ) => void;
   onToggleCatalogDesignVisible?: (designId: string, nextVisible: boolean) => void;
   onToggleCatalogDesignFeatured?: (designId: string, nextFeatured: boolean) => void;
   onDeleteCatalogDesign?: (designId: string) => void;
   onRenameCatalogDesign?: (designId: string, name: string, code: string) => void;
   onChangeDesignCampaign?: (designId: string, campaign: string) => void;
+  onChangeDesignColors?: (
+    designId: string,
+    allowedColorMode: AllowedColorMode,
+    allowedColorIds?: string[],
+    tone?: DesignTone
+  ) => void;
   campaigns?: string[];
   activeCampaign?: string;
   onChangeActiveCampaign?: (campaign: string) => void;
@@ -688,12 +728,195 @@ export function InteractiveShirt3D({
   const [uploadTargetCampaign, setUploadTargetCampaign] = useState<string>(
     activeCampaign && activeCampaign !== 'all' ? activeCampaign : 'Ranchero'
   );
+  const [uploadCustomName, setUploadCustomName] = useState<string>('');
+  const [uploadColorMode, setUploadColorMode] = useState<AllowedColorMode | 'auto'>('auto');
+  const [uploadCustomColorIds, setUploadCustomColorIds] = useState<string[]>([]);
+  const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
+  const [uploadAnalysis, setUploadAnalysis] = useState<DesignToneAnalysis | null>(null);
+  const [uploadBatchSummary, setUploadBatchSummary] = useState<{
+    dark: number;
+    light: number;
+    mixed: number;
+  } | null>(null);
+  const [editColorsDesign, setEditColorsDesign] = useState<CatalogQuickDesign | null>(null);
 
   useEffect(() => {
     if (activeCampaign && activeCampaign !== 'all') {
       setUploadTargetCampaign(activeCampaign);
     }
   }, [activeCampaign]);
+
+  const activeCatalogDesign =
+    (catalogDesigns || []).find(
+      (d) =>
+        (activeCatalogDesignId && d.id === activeCatalogDesignId) ||
+        (!!designUrl && !!d.imageUrl && d.imageUrl === designUrl)
+    ) || null;
+
+  const findCompatibleColor = (
+    design: CatalogQuickDesign | null,
+    preferCurrentFirst = true
+  ): ShirtColorOption | null => {
+    if (!colorOptions || colorOptions.length === 0) return null;
+    if (preferCurrentFirst) {
+      const current = colorOptions.find((c) =>
+        activeColorId ? c.id === activeColorId : c.name === colorName
+      );
+      if (current && isColorCompatibleWithDesign(current, design).allowed) {
+        return current;
+      }
+    }
+    return colorOptions.find((c) => isColorCompatibleWithDesign(c, design).allowed) || null;
+  };
+
+  // Auto-cambiar a un color compatible si el diseño activo bloquea la camisa actual
+  useEffect(() => {
+    if (!activeCatalogDesign || !colorOptions || !onSelectColor) return;
+    const current = colorOptions.find((c) =>
+      activeColorId ? c.id === activeColorId : c.name === colorName
+    );
+    if (!current) return;
+    const compat = isColorCompatibleWithDesign(current, activeCatalogDesign);
+    if (!compat.allowed) {
+      const next = findCompatibleColor(activeCatalogDesign, false);
+      if (next && next.id !== current.id) {
+        onSelectColor(next.id);
+      }
+    }
+  }, [
+    activeCatalogDesign?.id,
+    activeCatalogDesign?.allowedColorMode,
+    activeCatalogDesign?.tone,
+    activeCatalogDesign?.allowedColorIds?.join(','),
+    activeColorId
+  ]);
+
+  const applyCatalogDesignWithColorGuard = (d: CatalogQuickDesign) => {
+    if (colorOptions && onSelectColor) {
+      const current = colorOptions.find((c) =>
+        activeColorId ? c.id === activeColorId : c.name === colorName
+      );
+      if (current && !isColorCompatibleWithDesign(current, d).allowed) {
+        const next = findCompatibleColor(d, false);
+        if (next && next.id !== current.id) {
+          onSelectColor(next.id);
+        }
+      }
+    }
+    onSelectCatalogDesign?.(d);
+  };
+
+  const openUploadDialog = (nextState: { mode: 'files'; files: File[] } | { mode: 'current' }) => {
+    const defCamp =
+      activeCampaign && activeCampaign !== 'all'
+        ? activeCampaign
+        : campaigns && campaigns.length > 0
+        ? campaigns[0]
+        : 'Ranchero';
+    setUploadTargetCampaign(defCamp);
+    setUploadAnalysis(null);
+    setUploadBatchSummary(null);
+    setUploadPreviewUrl(null);
+    setEditColorsDesign(null);
+
+    if (nextState.mode === 'files') {
+      const first = nextState.files[0];
+      setUploadCustomName(
+        nextState.files.length === 1 && first
+          ? first.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().slice(0, 32)
+          : ''
+      );
+      setUploadColorMode(nextState.files.length > 1 ? 'auto' : 'all');
+      setUploadCustomColorIds((colorOptions || []).map((c) => c.id));
+      setUploadModalState(nextState);
+
+      const readAsDataUrl = (f: File) =>
+        new Promise<string>((resolve) => {
+          const r = new FileReader();
+          r.onload = () => resolve(typeof r.result === 'string' ? r.result : '');
+          r.onerror = () => resolve('');
+          r.readAsDataURL(f);
+        });
+
+      void (async () => {
+        const urls = await Promise.all(nextState.files.map(readAsDataUrl));
+        if (urls[0]) setUploadPreviewUrl(urls[0]);
+        const analyses = await Promise.all(urls.filter(Boolean).map(analyzeDesignTone));
+        if (analyses.length > 0) {
+          setUploadAnalysis(analyses[0]);
+          if (nextState.files.length === 1) {
+            const sug = analyses[0].suggestedColorMode;
+            setUploadColorMode(sug);
+            if (colorOptions) {
+              setUploadCustomColorIds(
+                colorOptions
+                  .filter((c) =>
+                    sug === 'light_fabrics'
+                      ? !isDarkFabricColor(c.hex)
+                      : sug === 'dark_fabrics'
+                      ? isDarkFabricColor(c.hex)
+                      : true
+                  )
+                  .map((c) => c.id)
+              );
+            }
+          } else {
+            const dark = analyses.filter((a) => a.tone === 'dark').length;
+            const light = analyses.filter((a) => a.tone === 'light').length;
+            const mixed = analyses.length - dark - light;
+            setUploadBatchSummary({ dark, light, mixed });
+            setUploadColorMode('auto');
+          }
+        }
+      })();
+    } else {
+      setUploadCustomName('');
+      setUploadPreviewUrl(designUrl || null);
+      setUploadColorMode('all');
+      setUploadCustomColorIds((colorOptions || []).map((c) => c.id));
+      setUploadModalState(nextState);
+      if (designUrl) {
+        void analyzeDesignTone(designUrl).then((res) => {
+          setUploadAnalysis(res);
+          setUploadColorMode(res.suggestedColorMode);
+          if (colorOptions) {
+            setUploadCustomColorIds(
+              colorOptions
+                .filter((c) =>
+                  res.suggestedColorMode === 'light_fabrics'
+                    ? !isDarkFabricColor(c.hex)
+                    : res.suggestedColorMode === 'dark_fabrics'
+                    ? isDarkFabricColor(c.hex)
+                    : true
+                )
+                .map((c) => c.id)
+            );
+          }
+        });
+      }
+    }
+  };
+
+  const openEditColorsDialog = (d: CatalogQuickDesign) => {
+    setUploadModalState(null);
+    setEditColorsDesign(d);
+    setUploadPreviewUrl(d.imageUrl);
+    setUploadAnalysis(null);
+    const mode: AllowedColorMode =
+      d.allowedColorMode ||
+      (d.tone === 'dark' ? 'light_fabrics' : d.tone === 'light' ? 'dark_fabrics' : 'all');
+    setUploadColorMode(mode);
+    setUploadCustomColorIds(
+      d.allowedColorIds && d.allowedColorIds.length > 0
+        ? d.allowedColorIds
+        : (colorOptions || [])
+            .filter((c) => isColorCompatibleWithDesign(c, { ...d, allowedColorMode: mode }).allowed)
+            .map((c) => c.id)
+    );
+    if (d.imageUrl) {
+      void analyzeDesignTone(d.imageUrl).then(setUploadAnalysis);
+    }
+  };
 
   const handleApplyWesternDesign = (dataUrl: string, name: string, targetPlacement: 'back' | 'center') => {
     onSelectCatalogDesign?.({
@@ -727,11 +950,11 @@ export function InteractiveShirt3D({
           (designUrl && d.imageUrl === designUrl)
       );
       const nextIdx = (currentIdx + 1) % readyDesigns.length;
-      onSelectCatalogDesign(readyDesigns[nextIdx]);
+      applyCatalogDesignWithColorGuard(readyDesigns[nextIdx]);
     }, 3200);
 
     return () => window.clearInterval(timer);
-  }, [showcaseActive, catalogDesigns, activeCatalogDesignId, designUrl, onSelectCatalogDesign]);
+  }, [showcaseActive, catalogDesigns, activeCatalogDesignId, designUrl, onSelectCatalogDesign, activeColorId]);
 
   const adjustScale = (delta: number) => {
     const next = clamp(Math.round((designScale + delta) * 100) / 100, 0.30, 4.00);
@@ -759,7 +982,7 @@ export function InteractiveShirt3D({
           ? 0
           : readySlideDesigns.length - 1
         : (currentSlideIdx + delta + readySlideDesigns.length) % readySlideDesigns.length;
-    onSelectCatalogDesign(readySlideDesigns[nextIdx]);
+    applyCatalogDesignWithColorGuard(readySlideDesigns[nextIdx]);
   };
 
   const scrollCarousel = (ref: { current: HTMLDivElement | null }, dir: -1 | 1) => {
@@ -1011,34 +1234,66 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Selector de Color minimalista tipo Apple */}
-          {colorOptions && colorOptions.length > 0 && onSelectColor && (
-            <div className="mt-4 flex flex-col items-center gap-2 rounded-2xl bg-white/95 px-4 py-3 shadow-sm backdrop-blur-md">
-              <div className="text-xs font-medium text-slate-500">
-                Color — <strong className="font-semibold text-slate-900">{colorName}</strong>
+          {/* Selector de Color minimalista tipo Apple (respeta contraste negro/blanco del diseño) */}
+          {colorOptions && colorOptions.length > 0 && onSelectColor && (() => {
+            const hasRestricted = colorOptions.some(
+              (c) => !isColorCompatibleWithDesign(c, activeCatalogDesign).allowed
+            );
+            const restrictionLabel =
+              activeCatalogDesign?.allowedColorMode === 'light_fabrics' ||
+              (!activeCatalogDesign?.allowedColorMode && activeCatalogDesign?.tone === 'dark')
+                ? 'Diseño de tinta oscura · disponible solo en telas claras'
+                : activeCatalogDesign?.allowedColorMode === 'dark_fabrics' ||
+                  (!activeCatalogDesign?.allowedColorMode && activeCatalogDesign?.tone === 'light')
+                ? 'Diseño claro · disponible solo en telas oscuras'
+                : 'Colores seleccionados para este diseño';
+
+            return (
+              <div className="mt-4 flex flex-col items-center gap-2 rounded-2xl bg-white/95 px-4 py-3 shadow-sm backdrop-blur-md">
+                <div className="text-xs font-medium text-slate-500">
+                  Color — <strong className="font-semibold text-slate-900">{colorName}</strong>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                  {colorOptions.map((c) => {
+                    const active = activeColorId ? c.id === activeColorId : c.name === colorName;
+                    const compat = isColorCompatibleWithDesign(c, activeCatalogDesign);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        disabled={!compat.allowed}
+                        onClick={() => compat.allowed && onSelectColor(c.id)}
+                        title={compat.allowed ? c.name : `${c.name} · ${compat.reason}`}
+                        aria-label={compat.allowed ? c.name : `${c.name} no disponible`}
+                        className={`relative h-8 w-8 rounded-full border transition-transform duration-150 ${
+                          !compat.allowed
+                            ? 'cursor-not-allowed border-slate-300 opacity-25'
+                            : active
+                            ? 'scale-110 border-slate-900 ring-2 ring-slate-900 ring-offset-2'
+                            : 'border-black/20 hover:scale-105'
+                        }`}
+                        style={{ backgroundColor: c.hex }}
+                      >
+                        {!compat.allowed && (
+                          <span
+                            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                            aria-hidden="true"
+                          >
+                            <span className="h-[1.5px] w-7 -rotate-45 rounded bg-slate-700/80" />
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {hasRestricted && activeCatalogDesign && (
+                  <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-600">
+                    <span>{restrictionLabel}</span>
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap items-center justify-center gap-2.5">
-                {colorOptions.map((c) => {
-                  const active = activeColorId ? c.id === activeColorId : c.name === colorName;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => onSelectColor(c.id)}
-                      title={c.name}
-                      aria-label={c.name}
-                      className={`relative h-8 w-8 rounded-full border transition-transform duration-150 ${
-                        active
-                          ? 'scale-110 border-slate-900 ring-2 ring-slate-900 ring-offset-2'
-                          : 'border-black/20 hover:scale-105'
-                      }`}
-                      style={{ backgroundColor: c.hex }}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {/* GALERÍA DE DISEÑOS TIPO SLIDE ESTILO APPLE (CON MÁS VENDIDOS AL INICIO) */}
@@ -1155,7 +1410,7 @@ export function InteractiveShirt3D({
                     const target = readySlideDesigns[idx];
                     if (target && onSelectCatalogDesign) {
                       setShowcaseActive(false);
-                      onSelectCatalogDesign(target);
+                      applyCatalogDesignWithColorGuard(target);
                     }
                   }}
                   className="w-full accent-slate-900"
@@ -1179,6 +1434,16 @@ export function InteractiveShirt3D({
               const isSelected =
                 (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                 (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
+              const thumbCompat = isColorCompatibleWithDesign(
+                { id: activeColorId, name: colorName, hex },
+                d
+              ).allowed;
+              const thumbBg = thumbCompat
+                ? hex
+                : d.allowedColorMode === 'dark_fabrics' ||
+                  (!d.allowedColorMode && d.tone === 'light')
+                ? '#1A1A1C'
+                : '#F5F5F7';
               return (
                 <motion.button
                   key={d.id}
@@ -1192,7 +1457,7 @@ export function InteractiveShirt3D({
                       onClearDesign();
                       return;
                     }
-                    onSelectCatalogDesign?.(d);
+                    applyCatalogDesignWithColorGuard(d);
                   }}
                   disabled={!d.imageUrl}
                   className={`group relative flex w-[122px] shrink-0 snap-start flex-col rounded-2xl p-1.5 text-left transition ${
@@ -1208,7 +1473,7 @@ export function InteractiveShirt3D({
                   )}
                   <div
                     className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-2 transition duration-200 group-hover:scale-[1.02]"
-                    style={{ backgroundColor: hex }}
+                    style={{ backgroundColor: thumbBg }}
                   >
                     {d.imageUrl ? (
                       <img
@@ -1256,11 +1521,8 @@ export function InteractiveShirt3D({
             const f = e.target.files?.[0];
             if (f) {
               onUploadFile(f);
-              if (onUploadCatalogFiles && campaigns && campaigns.length > 0) {
-                setUploadTargetCampaign(
-                  activeCampaign && activeCampaign !== 'all' ? activeCampaign : campaigns[0]
-                );
-                setUploadModalState({ mode: 'files', files: [f] });
+              if (onUploadCatalogFiles) {
+                openUploadDialog({ mode: 'files', files: [f] });
               }
             }
             e.target.value = '';
@@ -1477,24 +1739,68 @@ export function InteractiveShirt3D({
                           ? c.id === activeColorId
                           : c.name === colorName;
                         const included = c.included ?? true;
+                        const compat = isColorCompatibleWithDesign(c, activeCatalogDesign);
                         return (
                           <button
                             key={c.id}
                             type="button"
-                            onClick={() => onSelectColor(c.id)}
-                            title={`${c.name}${c.stockText ? ` · ${c.stockText}` : ''}`}
+                            disabled={!compat.allowed}
+                            onClick={() => compat.allowed && onSelectColor(c.id)}
+                            title={
+                              compat.allowed
+                                ? `${c.name}${c.stockText ? ` · ${c.stockText}` : ''}`
+                                : `${c.name} · ${compat.reason}`
+                            }
                             className={`relative h-7 w-7 rounded-full border transition-transform ${
-                              active
+                              !compat.allowed
+                                ? 'cursor-not-allowed border-slate-300 opacity-25'
+                                : active
                                 ? 'scale-110 border-slate-900 ring-2 ring-slate-900 ring-offset-2'
                                 : included
                                 ? 'border-black/20 hover:scale-105'
                                 : 'border-dashed border-slate-300 opacity-40'
                             }`}
                             style={{ backgroundColor: c.hex }}
-                          />
+                          >
+                            {!compat.allowed && (
+                              <span
+                                className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                                aria-hidden="true"
+                              >
+                                <span className="h-[1.5px] w-6 -rotate-45 rounded bg-slate-700/80" />
+                              </span>
+                            )}
+                          </button>
                         );
                       })}
                     </div>
+                    {activeCatalogDesign &&
+                      colorOptions.some(
+                        (c) => !isColorCompatibleWithDesign(c, activeCatalogDesign).allowed
+                      ) && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50/90 px-2.5 py-1.5 text-[11px] text-amber-900 ring-1 ring-amber-200/70">
+                          <span>
+                            {activeCatalogDesign.allowedColorMode === 'light_fabrics' ||
+                            (!activeCatalogDesign.allowedColorMode &&
+                              activeCatalogDesign.tone === 'dark')
+                              ? 'Diseño oscuro bloqueado en telas oscuras para mantener nitidez.'
+                              : activeCatalogDesign.allowedColorMode === 'dark_fabrics' ||
+                                (!activeCatalogDesign.allowedColorMode &&
+                                  activeCatalogDesign.tone === 'light')
+                              ? 'Diseño claro bloqueado en telas claras para mantener nitidez.'
+                              : 'Algunos colores están bloqueados para este diseño.'}
+                          </span>
+                          {onChangeDesignColors && (
+                            <button
+                              type="button"
+                              onClick={() => openEditColorsDialog(activeCatalogDesign)}
+                              className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-800 ring-1 ring-black/10 hover:bg-slate-50"
+                            >
+                              Colores disponibles
+                            </button>
+                          )}
+                        </div>
+                      )}
                   </div>
                 );
               })()}
@@ -1789,14 +2095,7 @@ export function InteractiveShirt3D({
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
                   const filesArr = Array.from(e.target.files);
-                  if (campaigns && campaigns.length > 0) {
-                    setUploadTargetCampaign(
-                      activeCampaign && activeCampaign !== 'all' ? activeCampaign : campaigns[0]
-                    );
-                    setUploadModalState({ mode: 'files', files: filesArr });
-                  } else {
-                    onUploadCatalogFiles(filesArr);
-                  }
+                  openUploadDialog({ mode: 'files', files: filesArr });
                 }
                 e.target.value = '';
               }}
@@ -1873,16 +2172,7 @@ export function InteractiveShirt3D({
                 {designUrl && onSaveCurrentToCatalog && (
                   <button
                     type="button"
-                    onClick={() => {
-                      if (campaigns && campaigns.length > 0) {
-                        setUploadTargetCampaign(
-                          activeCampaign && activeCampaign !== 'all' ? activeCampaign : campaigns[0]
-                        );
-                        setUploadModalState({ mode: 'current' });
-                      } else {
-                        onSaveCurrentToCatalog();
-                      }
-                    }}
+                    onClick={() => openUploadDialog({ mode: 'current' })}
                     className="rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
                   >
                     + Guardar actual
@@ -1931,7 +2221,7 @@ export function InteractiveShirt3D({
                     const target = readySlideDesigns[idx];
                     if (target && onSelectCatalogDesign) {
                       setShowcaseActive(false);
-                      onSelectCatalogDesign(target);
+                      applyCatalogDesignWithColorGuard(target);
                     }
                   }}
                   className="w-full accent-slate-900"
@@ -1973,10 +2263,28 @@ export function InteractiveShirt3D({
                 const isSelected =
                   (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                   (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
+                const thumbCompat = isColorCompatibleWithDesign(
+                  { id: activeColorId, name: colorName, hex },
+                  d
+                ).allowed;
+                const thumbBg = thumbCompat
+                  ? hex
+                  : d.allowedColorMode === 'dark_fabrics' ||
+                    (!d.allowedColorMode && d.tone === 'light')
+                  ? '#1A1A1C'
+                  : '#F5F5F7';
+                const colorLabel =
+                  d.allowedColorMode === 'light_fabrics' || (!d.allowedColorMode && d.tone === 'dark')
+                    ? '☀️ Telas claras'
+                    : d.allowedColorMode === 'dark_fabrics' || (!d.allowedColorMode && d.tone === 'light')
+                    ? '🌙 Telas oscuras'
+                    : d.allowedColorMode === 'custom'
+                    ? `🎨 ${d.allowedColorIds?.length || 0} color(es)`
+                    : '🎨 Todos colores';
                 return (
                   <div
                     key={d.id}
-                    className={`group relative flex w-[132px] shrink-0 snap-start flex-col justify-between rounded-2xl border p-2 transition ${
+                    className={`group relative flex w-[138px] shrink-0 snap-start flex-col justify-between rounded-2xl border p-2 transition ${
                       isSelected
                         ? 'border-slate-900 bg-slate-50 shadow-sm ring-1 ring-slate-900'
                         : d.clientVisible
@@ -2033,14 +2341,14 @@ export function InteractiveShirt3D({
                       type="button"
                       onClick={() => {
                         setShowcaseActive(false);
-                        onSelectCatalogDesign?.(d);
+                        applyCatalogDesignWithColorGuard(d);
                       }}
                       disabled={!d.imageUrl}
                       className="flex w-full flex-col items-center text-left focus:outline-none"
                     >
                       <div
                         className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-2"
-                        style={{ backgroundColor: hex }}
+                        style={{ backgroundColor: thumbBg }}
                       >
                         {d.imageUrl ? (
                           <img
@@ -2060,6 +2368,16 @@ export function InteractiveShirt3D({
 
                     {isStoreOwner && (
                       <div className="mt-1.5 space-y-1">
+                        {onChangeDesignColors && (
+                          <button
+                            type="button"
+                            onClick={() => openEditColorsDialog(d)}
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-1.5 py-1 text-[10px] font-semibold text-slate-700 transition hover:bg-slate-100"
+                            title="Elegir colores disponibles para este diseño"
+                          >
+                            {colorLabel}
+                          </button>
+                        )}
                         {campaigns && onChangeDesignCampaign && (
                           <select
                             value={d.campaign || 'all'}
@@ -2119,88 +2437,320 @@ export function InteractiveShirt3D({
         </div>
       )}
 
-      {uploadModalState && (
+      {(uploadModalState || editColorsDesign) && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
-          onClick={() => setUploadModalState(null)}
+          onClick={() => {
+            setUploadModalState(null);
+            setEditColorsDesign(null);
+          }}
         >
           <div
-            className="w-full max-w-md rounded-[28px] border border-slate-200 bg-white p-5 shadow-2xl"
+            className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-[28px] border border-slate-200 bg-white p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold tracking-tight text-slate-900">
-                  Elegir Campaña del Diseño
+                  {editColorsDesign
+                    ? `Colores · ${editColorsDesign.name}`
+                    : uploadModalState?.mode === 'files'
+                    ? 'Subir Diseño · Opciones'
+                    : 'Guardar Diseño en Catálogo'}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  {uploadModalState.mode === 'files'
-                    ? `${uploadModalState.files.length} archivo(s) seleccionado(s) · Visible al cliente de inmediato`
-                    : 'Guardar diseño actual en el catálogo y hacerlo visible al cliente'}
+                  {editColorsDesign
+                    ? 'Configura en qué colores de camisa luce nítido este diseño'
+                    : uploadModalState?.mode === 'files'
+                    ? `${uploadModalState.files.length} archivo(s) · elige campaña y tonos compatibles`
+                    : 'Elige campaña y colores permitidos para que se vea impecable'}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setUploadModalState(null)}
+                onClick={() => {
+                  setUploadModalState(null);
+                  setEditColorsDesign(null);
+                }}
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600 hover:bg-slate-200"
               >
                 ✕
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div className="text-xs font-semibold text-slate-700">
-                ¿En qué campaña quieres publicar este diseño?
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(campaigns || ['Ranchero', 'Turístico', 'Cristiana']).map((camp) => {
-                  const sel = uploadTargetCampaign.toLowerCase() === camp.toLowerCase();
-                  return (
+            <div className="space-y-4">
+              {/* Vista previa + Cálculo automático de Negro / Blanco */}
+              {(uploadPreviewUrl || uploadAnalysis || uploadBatchSummary) && (
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-3">
+                  {uploadPreviewUrl && (
+                    <div
+                      className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-black/10 p-1.5"
+                      style={{
+                        backgroundColor:
+                          uploadColorMode === 'dark_fabrics'
+                            ? '#1A1A1C'
+                            : uploadColorMode === 'light_fabrics'
+                            ? '#FFFFFF'
+                            : uploadAnalysis?.tone === 'light'
+                            ? '#1A1A1C'
+                            : '#F5F5F7'
+                      }}
+                    >
+                      <img
+                        src={uploadPreviewUrl}
+                        alt="Vista previa"
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    {uploadBatchSummary ? (
+                      <div className="text-xs font-semibold text-slate-800">
+                        Cálculo del lote: 🖤 {uploadBatchSummary.dark} oscuro(s) · 🤍{' '}
+                        {uploadBatchSummary.light} claro(s) · 🎨 {uploadBatchSummary.mixed} mixto(s)
+                      </div>
+                    ) : uploadAnalysis ? (
+                      <>
+                        <div className="text-xs font-semibold text-slate-900">
+                          {uploadAnalysis.tone === 'dark'
+                            ? '🖤 Diseño de tinta oscura detectado'
+                            : uploadAnalysis.tone === 'light'
+                            ? '🤍 Diseño de tinta blanca/clara detectado'
+                            : '🎨 Diseño multitono equilibrado'}
+                        </div>
+                        <div className="text-[11px] text-slate-600">
+                          Negro/Oscuro: <b>{uploadAnalysis.darkPercent}%</b> · Blanco/Claro:{' '}
+                          <b>{uploadAnalysis.lightPercent}%</b>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-xs text-slate-500">Calculando contraste negro/blanco…</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Nombre del diseño (cuando es 1 archivo o diseño actual al subir) */}
+              {!editColorsDesign &&
+                ((uploadModalState?.mode === 'files' && uploadModalState.files.length === 1) ||
+                  uploadModalState?.mode === 'current') && (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      Nombre del diseño
+                    </label>
+                    <input
+                      type="text"
+                      value={uploadCustomName}
+                      onChange={(e) => setUploadCustomName(e.target.value)}
+                      placeholder="Ej. Rancho Honduras Dorado"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 outline-none focus:border-slate-900 focus:bg-white"
+                    />
+                  </div>
+                )}
+
+              {/* Selector de Campaña (solo al subir/guardar) */}
+              {!editColorsDesign && (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-700">
+                    1 · Campaña del catálogo
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(campaigns && campaigns.length > 0
+                      ? campaigns
+                      : ['Ranchero', 'Turístico', 'Cristiana']
+                    ).map((camp) => {
+                      const sel = uploadTargetCampaign.toLowerCase() === camp.toLowerCase();
+                      return (
+                        <button
+                          key={camp}
+                          type="button"
+                          onClick={() => setUploadTargetCampaign(camp)}
+                          className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                            sel
+                              ? 'bg-slate-900 text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`}
+                        >
+                          {camp}
+                        </button>
+                      );
+                    })}
                     <button
-                      key={camp}
                       type="button"
-                      onClick={() => setUploadTargetCampaign(camp)}
-                      className={`rounded-full px-3.5 py-2 text-xs font-semibold transition ${
-                        sel
+                      onClick={() => setUploadTargetCampaign('all')}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                        uploadTargetCampaign === 'all'
                           ? 'bg-slate-900 text-white shadow-sm'
                           : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                       }`}
                     >
-                      {camp}
+                      Todas (General)
                     </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => setUploadTargetCampaign('all')}
-                  className={`rounded-full px-3.5 py-2 text-xs font-semibold transition ${
-                    uploadTargetCampaign === 'all'
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  Todas (General)
-                </button>
-                {onAddCampaign && (
+                    {onAddCampaign && (
+                      <button
+                        type="button"
+                        onClick={onAddCampaign}
+                        className="rounded-full border border-dashed border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-slate-500 hover:text-slate-900"
+                      >
+                        + Nueva
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Colores disponibles para este diseño */}
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-700">
+                  {editColorsDesign
+                    ? 'Colores de camisa disponibles para este diseño'
+                    : '2 · Colores de camisa disponibles'}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {uploadModalState?.mode === 'files' && uploadModalState.files.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setUploadColorMode('auto')}
+                      className={`col-span-2 rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                        uploadColorMode === 'auto'
+                          ? 'border-slate-900 bg-slate-900 text-white'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      ✨ Automático por archivo (calcula negro/blanco individual)
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={onAddCampaign}
-                    className="rounded-full border border-dashed border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 hover:border-slate-500 hover:text-slate-900"
+                    onClick={() => {
+                      setUploadColorMode('light_fabrics');
+                      if (colorOptions) {
+                        setUploadCustomColorIds(
+                          colorOptions.filter((c) => !isDarkFabricColor(c.hex)).map((c) => c.id)
+                        );
+                      }
+                    }}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                      uploadColorMode === 'light_fabrics'
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
                   >
-                    + Nueva campaña
+                    ☀️ Solo telas claras
+                    <div className="text-[10px] font-normal opacity-80">Bloquea negro y oscuros</div>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUploadColorMode('dark_fabrics');
+                      if (colorOptions) {
+                        setUploadCustomColorIds(
+                          colorOptions.filter((c) => isDarkFabricColor(c.hex)).map((c) => c.id)
+                        );
+                      }
+                    }}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                      uploadColorMode === 'dark_fabrics'
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    🌙 Solo telas oscuras
+                    <div className="text-[10px] font-normal opacity-80">Bloquea blanco y claras</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUploadColorMode('all');
+                      if (colorOptions) {
+                        setUploadCustomColorIds(colorOptions.map((c) => c.id));
+                      }
+                    }}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                      uploadColorMode === 'all'
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    🎨 Todos los colores
+                    <div className="text-[10px] font-normal opacity-80">Sin restricción</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUploadColorMode('custom')}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                      uploadColorMode === 'custom'
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ✓ Elegir específicos
+                    <div className="text-[10px] font-normal opacity-80">Toca cada color abajo</div>
+                  </button>
+                </div>
+
+                {colorOptions && colorOptions.length > 0 && uploadColorMode !== 'auto' && (
+                  <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-2.5">
+                    <div className="mb-1.5 text-[11px] font-medium text-slate-500">
+                      {uploadColorMode === 'custom'
+                        ? 'Toca los colores donde SÍ se puede usar este diseño:'
+                        : 'Vista de colores habilitados:'}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {colorOptions.map((c) => {
+                        const checked =
+                          uploadColorMode === 'all'
+                            ? true
+                            : uploadColorMode === 'light_fabrics'
+                            ? !isDarkFabricColor(c.hex)
+                            : uploadColorMode === 'dark_fabrics'
+                            ? isDarkFabricColor(c.hex)
+                            : uploadCustomColorIds.includes(c.id);
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              setUploadColorMode('custom');
+                              setUploadCustomColorIds((prev) =>
+                                prev.includes(c.id)
+                                  ? prev.filter((id) => id !== c.id)
+                                  : [...prev, c.id]
+                              );
+                            }}
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                              checked
+                                ? 'border-slate-900 bg-white text-slate-900 shadow-sm'
+                                : 'border-slate-200 bg-slate-100 text-slate-400 opacity-60 line-through'
+                            }`}
+                          >
+                            <span
+                              className="h-3 w-3 rounded-full border border-black/20"
+                              style={{ backgroundColor: c.hex }}
+                            />
+                            <span>{c.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
 
-              <div className="rounded-2xl bg-emerald-50/80 px-3.5 py-2.5 text-xs font-medium text-emerald-900">
-                ✓ El diseño se publicará como <b>Visible al cliente</b> en la campaña{' '}
-                <b>{uploadTargetCampaign === 'all' ? 'General (Todas)' : uploadTargetCampaign}</b>.
-              </div>
+              {!editColorsDesign && (
+                <div className="rounded-2xl bg-emerald-50/80 px-3.5 py-2.5 text-xs font-medium text-emerald-900">
+                  ✓ Se publicará como <b>Visible al cliente</b> en{' '}
+                  <b>{uploadTargetCampaign === 'all' ? 'General (Todas)' : uploadTargetCampaign}</b>.
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => setUploadModalState(null)}
+                  onClick={() => {
+                    setUploadModalState(null);
+                    setEditColorsDesign(null);
+                  }}
                   className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
                 >
                   Cancelar
@@ -2208,18 +2758,50 @@ export function InteractiveShirt3D({
                 <button
                   type="button"
                   onClick={() => {
+                    if (editColorsDesign) {
+                      const finalMode: AllowedColorMode =
+                        uploadColorMode === 'auto'
+                          ? uploadAnalysis?.suggestedColorMode || 'all'
+                          : uploadColorMode;
+                      onChangeDesignColors?.(
+                        editColorsDesign.id,
+                        finalMode,
+                        finalMode === 'custom' ? uploadCustomColorIds : undefined,
+                        uploadAnalysis?.tone || editColorsDesign.tone
+                      );
+                      setEditColorsDesign(null);
+                      return;
+                    }
                     const camp = uploadTargetCampaign;
                     const st = uploadModalState;
                     setUploadModalState(null);
+                    if (!st) return;
                     if (st.mode === 'files') {
-                      onUploadCatalogFiles?.(st.files, camp);
+                      onUploadCatalogFiles?.(st.files, {
+                        campaign: camp,
+                        customName: uploadCustomName.trim() || undefined,
+                        allowedColorMode: uploadColorMode,
+                        allowedColorIds:
+                          uploadColorMode === 'custom' ? uploadCustomColorIds : undefined
+                      });
                     } else {
-                      onSaveCurrentToCatalog?.(camp);
+                      const finalMode: AllowedColorMode =
+                        uploadColorMode === 'auto'
+                          ? uploadAnalysis?.suggestedColorMode || 'all'
+                          : uploadColorMode;
+                      onSaveCurrentToCatalog?.({
+                        campaign: camp,
+                        name: uploadCustomName.trim() || undefined,
+                        allowedColorMode: finalMode,
+                        allowedColorIds:
+                          finalMode === 'custom' ? uploadCustomColorIds : undefined,
+                        tone: uploadAnalysis?.tone
+                      });
                     }
                   }}
                   className="rounded-full bg-slate-900 px-5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800"
                 >
-                  Subir y Hacer Visible
+                  {editColorsDesign ? 'Guardar colores' : 'Subir y Hacer Visible'}
                 </button>
               </div>
             </div>

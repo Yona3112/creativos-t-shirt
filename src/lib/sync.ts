@@ -333,7 +333,8 @@ export class SyncEngine {
 
 export async function uploadPhotoNow(id: string, data: string): Promise<void> {
   if (getFirebaseConfig()) {
-    return uploadPhotoNowFirebase(id, data);
+    await uploadPhotoNowFirebase(id, data);
+    return;
   }
   const cfg = getConfig();
   if (!cfg || !navigator.onLine) return;

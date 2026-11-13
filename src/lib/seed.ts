@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shipping: 11000,
   lowStock: 10,
   carriers: ['Boxful', 'Cargo Expreso', 'C807 Express', 'Forza Delivery', 'Rápido Cargo', '504 Express', 'Entrega Local (Copán)'],
-  paymentMethods: ['Transferencia BAC', 'Transferencia Atlántida', 'Transferencia Ficohsa', 'Efectivo', 'Contra Entrega'],
+  paymentMethods: ['Pago Pendiente en Tienda', 'Transferencia BAC', 'Transferencia Atlántida', 'Transferencia Ficohsa', 'Efectivo', 'Contra Entrega'],
   workTypes: ['DTF Espalda', 'DTF Frontal', 'DTF Frente y Espalda', 'Camisa Lisa', 'Bordado', 'Vinil / Sublimación'],
   storeTheme: 'ranchero',
   waConfirm:

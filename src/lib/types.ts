@@ -171,6 +171,9 @@ export interface Settings {
   activeCampaign?: string;
 }
 
+export type DesignTone = 'dark' | 'light' | 'mixed';
+export type AllowedColorMode = 'all' | 'light_fabrics' | 'dark_fabrics' | 'custom';
+
 export interface CatalogDesign extends Entity {
   name: string;
   /** Código corto para reportes (ej. D-001) */
@@ -184,6 +187,12 @@ export interface CatalogDesign extends Entity {
   clientVisible: boolean;
   /** Ubicación predeterminada ('center' | 'pocket' | 'full' | 'back') */
   placement: 'center' | 'pocket' | 'full' | 'back';
+  /** Tono predominante detectado de la imagen ('dark' = tinta oscura, 'light' = tinta blanca/clara) */
+  tone?: DesignTone;
+  /** Restricción de telas/colores donde se puede estampar este diseño */
+  allowedColorMode?: AllowedColorMode;
+  /** IDs de colores permitidos cuando allowedColorMode === 'custom' */
+  allowedColorIds?: string[];
   createdAt: number;
 }
 

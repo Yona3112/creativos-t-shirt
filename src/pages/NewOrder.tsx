@@ -36,6 +36,7 @@ interface Draft {
   withShipping: boolean;
   shipping: number;
   paymentMethod: string;
+  paymentMode?: 'full' | 'pending' | 'partial';
   workType: string;
   deposit: number | null;
   notes: string;
@@ -43,6 +44,10 @@ interface Draft {
 
 function emptyDraft(): Draft {
   const s = getState().settings;
+  const nonPendingMethod =
+    s.paymentMethods.find((p) => !p.toLowerCase().includes('pendiente')) ||
+    s.paymentMethods[0] ||
+    'Efectivo';
   return {
     lines: [],
     photo: null,
@@ -56,7 +61,8 @@ function emptyDraft(): Draft {
     addressId: null,
     withShipping: true,
     shipping: s.shipping,
-    paymentMethod: s.paymentMethods[0] || 'Efectivo',
+    paymentMethod: nonPendingMethod,
+    paymentMode: 'full',
     workType: s.workTypes.find((w) => w.toLowerCase().includes('espalda')) || s.workTypes[0] || 'DTF Frontal',
     deposit: null,
     notes: ''
@@ -129,11 +135,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const lines = useMemo(() => repriceCart(draft.lines, settings, state.brands), [draft.lines, settings, state.brands]);
   const cartQty = lines.reduce((s, l) => s + l.qty, 0);
   const projectedQty = cartQty + qty;
-  const isCustomWork = Boolean(
-    draft.photo ||
-    draft.designName ||
-    (draft.workType && !draft.workType.toLowerCase().includes('lisa'))
-  );
+  const isLisaExplicit = Boolean(draft.workType && draft.workType.toLowerCase().includes('lisa'));
+  const isCustomWork = isLisaExplicit
+    ? false
+    : Boolean(draft.photo || draft.designName || draft.workType);
   const autoPrice = isCustomWork
     ? (settings.priceCustom || 35000)
     : tierPrice(settings, brand, projectedQty);
@@ -142,8 +147,22 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const subtotal = lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
   const shipping = draft.withShipping ? draft.shipping : 0;
   const total = subtotal + shipping;
-  const deposit = draft.deposit && draft.deposit > 0 ? Math.min(draft.deposit, total) : total;
-  const balance = total - deposit;
+  const paymentMode: 'full' | 'pending' | 'partial' =
+    draft.paymentMode ||
+    (draft.paymentMethod?.toLowerCase().includes('pendiente')
+      ? 'pending'
+      : draft.deposit !== null && draft.deposit > 0 && draft.deposit < total
+      ? 'partial'
+      : 'full');
+  const deposit =
+    paymentMode === 'pending'
+      ? 0
+      : paymentMode === 'partial'
+      ? Math.min(Math.max(0, draft.deposit || 0), total)
+      : draft.deposit && draft.deposit > 0
+      ? Math.min(draft.deposit, total)
+      : total;
+  const balance = Math.max(0, total - deposit);
 
   const customer = state.customers.find((c) => c.id === draft.customerId) || null;
 
@@ -151,12 +170,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     if (!brand || !color) return toast('Elige marca y color', 'error');
     if (qty < 1) return;
     const isManual = manualPrice !== null;
-    const curDesignId = draft.photo ? draft.designId || null : null;
-    const curDesignName = draft.photo ? draft.designName || 'Diseño personalizado' : null;
-    const curDesignCode = draft.photo ? draft.designCode || null : null;
-    const curPlacement = draft.photo ? draft.placement || 'back' : null;
-    const curPhoto = draft.photo || null;
-    const curRawPhoto = draft.rawPhoto || null;
+    const hasDesignForLine = isCustomWork && Boolean(draft.photo);
+    const curDesignId = hasDesignForLine ? draft.designId || null : null;
+    const curDesignName = hasDesignForLine ? draft.designName || 'Diseño personalizado' : null;
+    const curDesignCode = hasDesignForLine ? draft.designCode || null : null;
+    const curPlacement = hasDesignForLine ? draft.placement || 'back' : null;
+    const curPhoto = hasDesignForLine ? draft.photo || null : null;
+    const curRawPhoto = hasDesignForLine ? draft.rawPhoto || null : null;
     const curScale = draft.designScale || 2.0;
     const curOffsetX = draft.designOffsetX || 0;
     const curOffsetY = draft.designOffsetY || 0;
@@ -226,8 +246,15 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     uploadFilesToCatalog,
     toggleVisible,
     renameDesign,
+    setDesignCampaign,
+    setDesignColors,
     deleteDesign
   } = useCatalogDesigns();
+
+  const customWorkTypeDefault =
+    settings.workTypes.find((w) => w.toLowerCase().includes('espalda')) ||
+    settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) ||
+    'DTF Espalda';
 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
@@ -246,7 +273,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         designCode: draft.designCode || 'CUSTOM',
         designScale: 2.0,
         designOffsetX: 0,
-        designOffsetY: 0
+        designOffsetY: 0,
+        workType: draft.workType.toLowerCase().includes('lisa') ? customWorkTypeDefault : draft.workType
       });
       toast(
         autoJpgToPng
@@ -434,6 +462,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             : 'Camisa lisa'
         ].filter(Boolean);
 
+        const isPendingPay = Boolean(
+          webOrder.paymentPending ||
+            (webOrder.paymentMethod || '').toLowerCase().includes('pendiente')
+        );
+        const pendingMethodName =
+          settings.paymentMethods.find((p) => p.toLowerCase().includes('pendiente')) ||
+          'Pago Pendiente en Tienda';
+
         setDraft((prev) => ({
           ...prev,
           lines: importedLines.length > 0 ? importedLines : prev.lines,
@@ -448,6 +484,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           designName: firstDesignName,
           designCode: firstDesignCode,
           workType: matchedWorkType,
+          paymentMode: isPendingPay ? 'pending' : 'full',
+          deposit: isPendingPay ? 0 : null,
+          paymentMethod: isPendingPay
+            ? pendingMethodName
+            : webOrder.paymentMethod || prev.paymentMethod,
           customerId: existingCustomer ? existingCustomer.id : null,
           addressId: existingCustomer
             ? (existingCustomer.addresses.find((a) => a.isDefault) || existingCustomer.addresses[0])?.id || null
@@ -570,7 +611,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       customer: cust,
       addressId,
       shipping,
-      deposit: draft.deposit || 0,
+      deposit: paymentMode === 'pending' ? 0 : draft.deposit || 0,
+      paymentPending: paymentMode === 'pending',
       paymentMethod: draft.paymentMethod,
       workType: draft.workType,
       notes: finalNotes,
@@ -733,7 +775,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 placement: 'back',
                 designScale: 2.0,
                 designOffsetX: 0,
-                designOffsetY: 0
+                designOffsetY: 0,
+                workType: draft.workType.toLowerCase().includes('lisa')
+                  ? customWorkTypeDefault
+                  : draft.workType
               });
               toast(`"${d.code ? `[${d.code}] ` : ''}${d.name}" colocado en ESPALDA (Tamaño A3)`);
             }}
@@ -744,24 +789,43 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               }
               toast('Nombre y código del diseño actualizados');
             }}
-            onSaveCurrentToCatalog={() => {
+            campaigns={settings.campaigns}
+            onChangeDesignCampaign={(id, camp) => {
+              setDesignCampaign(id, camp);
+              toast(camp === 'all' ? 'Campaña actualizada a General' : `Movido a campaña ${camp}`);
+            }}
+            onChangeDesignColors={(id, mode, ids, tone) => {
+              setDesignColors(id, mode, ids, tone);
+              toast('Colores disponibles actualizados para este diseño');
+            }}
+            onSaveCurrentToCatalog={(opts) => {
               if (!draft.photo) return;
+              const o = typeof opts === 'string' ? { campaign: opts } : opts || {};
               void saveCurrentToCatalog({
                 dataUrl: draft.photo,
-                name: draft.designName || undefined,
+                name: o.name || draft.designName || undefined,
                 code: draft.designCode || undefined,
-                placement: draft.placement || 'back'
+                campaign: o.campaign,
+                placement: draft.placement || 'back',
+                allowedColorMode: o.allowedColorMode,
+                allowedColorIds: o.allowedColorIds,
+                tone: o.tone
               }).then((saved) => {
                 set({ designId: saved.id, designName: saved.name, designCode: saved.code });
                 toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
               });
             }}
-            onUploadCatalogFiles={(files) => {
+            onUploadCatalogFiles={(files, opts) => {
+              const o = typeof opts === 'string' ? { campaign: opts } : opts || {};
               setProcMsg('Agregando diseños al catálogo...');
               void uploadFilesToCatalog(files, {
                 removeBg: draft.removeBg ?? false,
                 tolerance: 32,
-                placement: 'back'
+                placement: 'back',
+                campaign: o.campaign,
+                customName: o.customName,
+                allowedColorMode: o.allowedColorMode,
+                allowedColorIds: o.allowedColorIds
               })
                 .then((n) => {
                   if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
@@ -863,42 +927,76 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         <h2 className="section-title">5 · Precio</h2>
         <div className="grid grid-cols-2 gap-2">
           <div
+            role="button"
+            tabIndex={0}
             className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
-              !isCustomWork ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:border-slate-300'
+              !isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
             }`}
             onClick={() => {
               setManualPrice(null);
               set({ workType: 'Camisa Lisa' });
             }}
-          >
-            <div className="mb-1 text-xs font-bold text-slate-600">👕 Camisa Lisa</div>
-            <MoneyInput
-              ariaLabel="Precio camisa lisa"
-              value={normalForBrand}
-              onChange={(c) => {
-                if (c === null) return;
-                if (brand && brand.priceOverride !== null) updateBrand(brand.id, { priceOverride: c });
-                else updateSettings({ priceNormal: c });
-              }}
-            />
-          </div>
-          <div
-            className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
-              isCustomWork ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:border-slate-300'
-            }`}
-            onClick={() => {
-              setManualPrice(null);
-              if (draft.workType === 'Camisa Lisa') {
-                set({ workType: settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) || 'DTF Espalda' });
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setManualPrice(null);
+                set({ workType: 'Camisa Lisa' });
               }
             }}
           >
-            <div className="mb-1 text-xs font-bold text-slate-600">✨ Personalizada A3</div>
-            <MoneyInput
-              ariaLabel="Precio personalizada"
-              value={settings.priceCustom || 35000}
-              onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
-            />
+            <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
+              <span>👕 Camisa Lisa</span>
+              {!isCustomWork && (
+                <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                  Activo
+                </span>
+              )}
+            </div>
+            <div onClick={(e) => e.stopPropagation()}>
+              <MoneyInput
+                ariaLabel="Precio camisa lisa"
+                value={normalForBrand}
+                onChange={(c) => {
+                  if (c === null) return;
+                  if (brand && brand.priceOverride !== null) updateBrand(brand.id, { priceOverride: c });
+                  else updateSettings({ priceNormal: c });
+                }}
+              />
+            </div>
+          </div>
+          <div
+            role="button"
+            tabIndex={0}
+            className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
+              isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
+            }`}
+            onClick={() => {
+              setManualPrice(null);
+              set({ workType: customWorkTypeDefault });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setManualPrice(null);
+                set({ workType: customWorkTypeDefault });
+              }
+            }}
+          >
+            <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
+              <span>✨ Personalizada A3</span>
+              {isCustomWork && (
+                <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                  Activo
+                </span>
+              )}
+            </div>
+            <div onClick={(e) => e.stopPropagation()}>
+              <MoneyInput
+                ariaLabel="Precio personalizada"
+                value={settings.priceCustom || 35000}
+                onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
+              />
+            </div>
           </div>
         </div>
         <div>
@@ -1183,20 +1281,117 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="pm">
-              Método de pago
-            </label>
-            <select id="pm" className="input" value={draft.paymentMethod} onChange={(e) => set({ paymentMethod: e.target.value })}>
-              {settings.paymentMethods.map((p) => (
-                <option key={p}>{p}</option>
-              ))}
-            </select>
+        {/* Estado de pago estilo Apple (Pagado / Pago Pendiente / Anticipo) */}
+        <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+          <div className="text-xs font-bold text-slate-700">Estado del pago</div>
+          <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-slate-200/70 p-1">
+            {(
+              [
+                ['full', '✓ Pagado 100%'],
+                ['pending', '⏳ Pago Pendiente'],
+                ['partial', '½ Anticipo']
+              ] as const
+            ).map(([m, lbl]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  const pendingOption =
+                    settings.paymentMethods.find((p) => p.toLowerCase().includes('pendiente')) ||
+                    'Pago Pendiente en Tienda';
+                  const paidOption =
+                    settings.paymentMethods.find((p) => !p.toLowerCase().includes('pendiente')) ||
+                    settings.paymentMethods[0] ||
+                    'Efectivo';
+                  if (m === 'pending') {
+                    set({
+                      paymentMode: 'pending',
+                      deposit: 0,
+                      paymentMethod: pendingOption
+                    });
+                  } else if (m === 'full') {
+                    set({
+                      paymentMode: 'full',
+                      deposit: null,
+                      paymentMethod: draft.paymentMethod.toLowerCase().includes('pendiente')
+                        ? paidOption
+                        : draft.paymentMethod
+                    });
+                  } else {
+                    set({
+                      paymentMode: 'partial',
+                      deposit: draft.deposit && draft.deposit > 0 ? draft.deposit : Math.round(total * 0.5),
+                      paymentMethod: draft.paymentMethod.toLowerCase().includes('pendiente')
+                        ? paidOption
+                        : draft.paymentMethod
+                    });
+                  }
+                }}
+                className={`rounded-lg px-2 py-2 text-xs font-bold transition ${
+                  paymentMode === m
+                    ? m === 'pending'
+                      ? 'bg-amber-500 text-stone-950 shadow-sm'
+                      : 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
           </div>
-          <div>
-            <label className="label">Anticipo Recibido (L)</label>
-            <MoneyInput ariaLabel="Anticipo recibido" value={draft.deposit} allowEmpty placeholder="Pagado 100%" onChange={(c) => set({ deposit: c })} />
+
+          <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="pm">
+                Método de pago
+              </label>
+              <select
+                id="pm"
+                className="input bg-white"
+                value={draft.paymentMethod}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.toLowerCase().includes('pendiente')) {
+                    set({ paymentMethod: val, paymentMode: 'pending', deposit: 0 });
+                  } else {
+                    set({
+                      paymentMethod: val,
+                      paymentMode: paymentMode === 'pending' ? 'full' : paymentMode,
+                      deposit: paymentMode === 'pending' ? null : draft.deposit
+                    });
+                  }
+                }}
+              >
+                {settings.paymentMethods.map((p) => (
+                  <option key={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Anticipo Recibido (L)</label>
+              {paymentMode === 'pending' ? (
+                <div className="flex min-h-[44px] items-center justify-between rounded-xl border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900">
+                  <span>⏳ Paga al llegar a tienda</span>
+                  <span>L 0.00</span>
+                </div>
+              ) : (
+                <MoneyInput
+                  ariaLabel="Anticipo recibido"
+                  value={draft.deposit}
+                  allowEmpty
+                  placeholder="Pagado 100%"
+                  onChange={(c) => {
+                    if (c === 0) {
+                      set({ paymentMode: 'pending', deposit: 0 });
+                    } else if (c !== null && c < total) {
+                      set({ paymentMode: 'partial', deposit: c });
+                    } else {
+                      set({ paymentMode: 'full', deposit: c });
+                    }
+                  }}
+                />
+              )}
+            </div>
           </div>
         </div>
 
@@ -1213,9 +1408,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           <Row k="Total" v={money(total)} strong />
           {balance > 0 && (
             <>
-              <Row k="Anticipo" v={money(deposit)} />
+              <Row k={deposit === 0 ? 'Anticipo (Pago Pendiente)' : 'Anticipo'} v={money(deposit)} />
               <div className="flex items-center justify-between rounded-lg bg-red-50 px-2 py-1 text-red-700">
-                <dt className="font-bold">Saldo pendiente a cobrar</dt>
+                <dt className="font-bold">
+                  {deposit === 0 ? 'Pago pendiente total en tienda' : 'Saldo pendiente a cobrar'}
+                </dt>
                 <dd className="text-lg font-extrabold">{money(balance)}</dd>
               </div>
             </>
@@ -1223,7 +1420,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </dl>
 
         <button className="btn-success w-full text-lg" onClick={() => confirm('en_produccion')} disabled={!lines.length}>
-          ✅ Confirmar Pedido · {money(total)}
+          {paymentMode === 'pending'
+            ? `⏳ Confirmar (Pago Pendiente) · ${money(total)}`
+            : `✅ Confirmar Pedido · ${money(total)}`}
         </button>
         <div className="grid grid-cols-2 gap-2">
           <button className="btn-ghost" onClick={() => confirm('borrador')} disabled={!lines.length}>

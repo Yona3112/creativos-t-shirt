@@ -7,6 +7,8 @@
  * 4. Generador de miniaturas ligeras (thumbnails) para fichas de pedidos y vista en Taller.
  */
 
+import type { AllowedColorMode, DesignTone } from './types';
+
 export function isJpgFile(file: File): boolean {
   const type = (file.type || '').toLowerCase();
   const name = (file.name || '').toLowerCase();
@@ -440,4 +442,169 @@ function applyUnsharpMask(
   }
 
   ctx.putImageData(imgData, 0, 0);
+}
+
+export interface DesignToneAnalysis {
+  tone: DesignTone;
+  avgLuminance: number;
+  darkPercent: number;
+  lightPercent: number;
+  suggestedColorMode: AllowedColorMode;
+}
+
+/** Calcula la luminancia perceptual (0 = negro puro, 1 = blanco puro) de un color hex. */
+export function getColorLuminance(hex: string): number {
+  const clean = (hex || '').trim().replace(/^#/, '');
+  let r = 128;
+  let g = 128;
+  let b = 128;
+  if (clean.length === 3) {
+    r = parseInt(clean[0] + clean[0], 16) || 0;
+    g = parseInt(clean[1] + clean[1], 16) || 0;
+    b = parseInt(clean[2] + clean[2], 16) || 0;
+  } else if (clean.length >= 6) {
+    r = parseInt(clean.slice(0, 2), 16);
+    g = parseInt(clean.slice(2, 4), 16);
+    b = parseInt(clean.slice(4, 6), 16);
+    if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+      return 0.5;
+    }
+  } else {
+    return 0.5;
+  }
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+/** True si la tela de la camisa es oscura (ej. negro, marino, café, rojo oscuro, verde botella). */
+export function isDarkFabricColor(hex: string): boolean {
+  return getColorLuminance(hex) < 0.46;
+}
+
+/**
+ * Calcula qué proporción de tinta negra/oscura vs blanca/clara tiene un diseño PNG transparente
+ * para determinar automáticamente en qué tonos de tela se ve nítido y en cuáles se pierde.
+ */
+export function analyzeDesignTone(sourceDataUrl: string): Promise<DesignToneAnalysis> {
+  return new Promise((resolve) => {
+    const fallback: DesignToneAnalysis = {
+      tone: 'mixed',
+      avgLuminance: 0.5,
+      darkPercent: 0,
+      lightPercent: 0,
+      suggestedColorMode: 'all'
+    };
+    if (!sourceDataUrl || typeof document === 'undefined') {
+      resolve(fallback);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const size = 96;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(fallback);
+          return;
+        }
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(img, 0, 0, size, size);
+        const { data } = ctx.getImageData(0, 0, size, size);
+        let weightSum = 0;
+        let lumSum = 0;
+        let darkCount = 0;
+        let lightCount = 0;
+        let opaqueCount = 0;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const a = data[i + 3];
+          if (a < 48) continue;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          const w = a / 255;
+          opaqueCount += 1;
+          weightSum += w;
+          lumSum += lum * w;
+          if (lum < 0.36) darkCount += 1;
+          else if (lum > 0.68) lightCount += 1;
+        }
+
+        if (opaqueCount === 0 || weightSum === 0) {
+          resolve(fallback);
+          return;
+        }
+
+        const avgLuminance = lumSum / weightSum;
+        const darkRatio = darkCount / opaqueCount;
+        const lightRatio = lightCount / opaqueCount;
+        const darkPercent = Math.round(darkRatio * 100);
+        const lightPercent = Math.round(lightRatio * 100);
+
+        let tone: DesignTone = 'mixed';
+        let suggestedColorMode: AllowedColorMode = 'all';
+
+        if ((darkRatio >= 0.52 && lightRatio < 0.28) || (avgLuminance < 0.36 && lightRatio < 0.25)) {
+          tone = 'dark';
+          suggestedColorMode = 'light_fabrics';
+        } else if ((lightRatio >= 0.52 && darkRatio < 0.28) || (avgLuminance > 0.68 && darkRatio < 0.25)) {
+          tone = 'light';
+          suggestedColorMode = 'dark_fabrics';
+        }
+
+        resolve({ tone, avgLuminance, darkPercent, lightPercent, suggestedColorMode });
+      } catch {
+        resolve(fallback);
+      }
+    };
+    img.onerror = () => resolve(fallback);
+    img.src = sourceDataUrl;
+  });
+}
+
+export interface ColorCompatibilityResult {
+  allowed: boolean;
+  reason?: string;
+}
+
+/**
+ * Valida si un color de camisa es compatible con las restricciones configuradas o calculadas del diseño.
+ */
+export function isColorCompatibleWithDesign(
+  color: { id?: string; name?: string; hex: string },
+  design?: {
+    allowedColorMode?: AllowedColorMode;
+    allowedColorIds?: string[];
+    tone?: DesignTone;
+  } | null
+): ColorCompatibilityResult {
+  if (!design) return { allowed: true };
+  const mode: AllowedColorMode =
+    design.allowedColorMode ||
+    (design.tone === 'dark' ? 'light_fabrics' : design.tone === 'light' ? 'dark_fabrics' : 'all');
+
+  if (mode === 'all') return { allowed: true };
+
+  if (mode === 'custom') {
+    if (!design.allowedColorIds || design.allowedColorIds.length === 0) {
+      return { allowed: true };
+    }
+    if (color.id && design.allowedColorIds.includes(color.id)) {
+      return { allowed: true };
+    }
+    return { allowed: false, reason: 'Color no habilitado para este diseño' };
+  }
+
+  const darkFabric = isDarkFabricColor(color.hex);
+  if (mode === 'light_fabrics' && darkFabric) {
+    return { allowed: false, reason: 'Diseño oscuro · solo disponible en telas claras' };
+  }
+  if (mode === 'dark_fabrics' && !darkFabric) {
+    return { allowed: false, reason: 'Diseño claro · solo disponible en telas oscuras' };
+  }
+  return { allowed: true };
 }

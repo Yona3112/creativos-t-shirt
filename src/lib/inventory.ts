@@ -55,11 +55,17 @@ export function tierPrice(settings: Settings, brand: Brand | undefined, _totalQt
   return normalPrice(settings, brand);
 }
 
-/** Precios del carrito respetan precio unitario unificado (sin descuento automático por volumen). */
+/** Precios del carrito respetan precio unitario según tipo de prenda (Lisa L 300 vs Personalizada L 350). */
 export function repriceCart(lines: CartLine[], settings: Settings, brands: Brand[]): CartLine[] {
   return lines.map((l) => {
     if (l.manualPrice) return l;
-    const p = tierPrice(settings, brands.find((b) => b.id === l.brandId), l.qty);
+    const isPlainWork = typeof l.workType === 'string' && l.workType.toLowerCase().includes('lisa');
+    const isCustomLine = isPlainWork
+      ? false
+      : Boolean(l.workType || l.photoId || l.photo || l.designId || l.designName);
+    const p = isCustomLine
+      ? customPrice(settings)
+      : tierPrice(settings, brands.find((b) => b.id === l.brandId), l.qty);
     return p === l.unitPrice ? l : { ...l, unitPrice: p };
   });
 }

@@ -161,7 +161,20 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
   if (!s || typeof s !== 'object') return base;
   const settings = upgradeSettings({ ...DEFAULT_SETTINGS, ...(s.settings || {}) });
 
-  const rawOrders = Array.isArray(s.orders) ? s.orders : [];
+  const rawOrders = (Array.isArray(s.orders) ? s.orders : [])
+    .filter(Boolean)
+    .map((o) => {
+      if (!o || !Array.isArray(o.items)) return o;
+      let changed = false;
+      const cleanItems = o.items.map((it) => {
+        if (it && typeof it.photoUrl === 'string' && it.photoUrl.startsWith('data:')) {
+          changed = true;
+          return { ...it, photoUrl: null };
+        }
+        return it;
+      });
+      return changed ? { ...o, items: cleanItems } : o;
+    });
   const rawMovements = Array.isArray(s.movements) ? s.movements : [];
 
   // Identificar qué marcas tienen movimientos reales o pedidos para eliminar las marcas semilla basura (Next Apparel, Pacer, HN)
@@ -238,8 +251,12 @@ function upgradeSettings(st: Settings): Settings {
   if (!workTypes.some((w) => w.trim().toLowerCase() === 'dtf espalda')) workTypes = ['DTF Espalda', ...workTypes];
   let carriers = Array.isArray(st.carriers) ? st.carriers : DEFAULT_SETTINGS.carriers;
   if (!carriers.some((c) => c.trim().toLowerCase() === 'boxful')) carriers = ['Boxful', ...carriers];
+  let paymentMethods = Array.isArray(st.paymentMethods) ? st.paymentMethods : DEFAULT_SETTINGS.paymentMethods;
+  if (!paymentMethods.some((p) => p.toLowerCase().includes('pendiente'))) {
+    paymentMethods = ['Pago Pendiente en Tienda', ...paymentMethods];
+  }
   const lowStock = !st.lowStock || st.lowStock === 5 ? 10 : st.lowStock;
-  return { ...st, lowStock, workTypes, carriers, storeTheme: st.storeTheme || 'ranchero' };
+  return { ...st, lowStock, workTypes, carriers, paymentMethods, storeTheme: st.storeTheme || 'ranchero' };
 }
 
 /** Asigna códigos D-001, D-002… a los diseños que aún no tienen (orden estable por fecha). */

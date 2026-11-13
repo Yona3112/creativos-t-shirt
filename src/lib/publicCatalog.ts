@@ -24,6 +24,9 @@ export interface SharedCatalogDesignRef {
   featured?: boolean;
   photoId: string;
   placement: DecalPlacement;
+  tone?: 'dark' | 'light' | 'mixed';
+  allowedColorMode?: 'all' | 'light_fabrics' | 'dark_fabrics' | 'custom';
+  allowedColorIds?: string[];
 }
 
 export interface SharedCatalogPayload {
@@ -93,6 +96,9 @@ export interface CustomerWebOrderPayload {
   /** Miniatura ligera (DataURL) del diseño para verse al instante en Taller y Pedidos */
   designThumb?: string | null;
   campaign?: string | null;
+  /** Preferencia de pago cuando encarga desde la tienda pública */
+  paymentMethod?: string | null;
+  paymentPending?: boolean;
   placement: DecalPlacement;
   scale: number;
   /** Múltiples prendas con sus respectivos diseños cuando el cliente pide más de 1 */
@@ -157,6 +163,9 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
       featured: Boolean(d.featured),
       photoId: d.photoId,
       placement: (d.placement || 'back') as DecalPlacement,
+      tone: d.tone,
+      allowedColorMode: d.allowedColorMode,
+      allowedColorIds: d.allowedColorIds,
       createdAt: d.createdAt || 0
     }))
     .sort((a, b) => {
@@ -259,6 +268,8 @@ export function sanitizeWebOrder(raw: unknown): CustomerWebOrderPayload | null {
     photoId: str(o.photoId, 60) || null,
     designThumb: rawThumb,
     campaign: str(o.campaign, 40) || null,
+    paymentMethod: str(o.paymentMethod, 60) || null,
+    paymentPending: Boolean(o.paymentPending),
     placement,
     scale: num(o.scale, 0.3, 4, 2.0),
     items: rawItems && rawItems.length > 0 ? rawItems : undefined

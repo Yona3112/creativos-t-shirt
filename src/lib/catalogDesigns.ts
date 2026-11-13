@@ -3,10 +3,11 @@ import { notifyPhotos, useAppState, usePhotoVersion } from './store';
 import { addCatalogDesign, deleteCatalogDesign, updateCatalogDesign } from './actions';
 import { savePhoto } from './db';
 import { fetchSharedPhoto, uploadPhotoNow } from './sync';
-import { applyBackgroundRemoval, compressImage, isJpgFile } from './image';
+import { applyBackgroundRemoval, analyzeDesignTone, compressImage, isJpgFile } from './image';
 import { uid } from './ids';
 import type { CatalogQuickDesign, DecalPlacement } from '../components/Shirt';
 import type { SharedCatalogDesignRef } from './publicCatalog';
+import type { AllowedColorMode, DesignTone } from './types';
 
 export type { SharedCatalogDesignRef };
 
@@ -73,6 +74,9 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
             featured: ref.featured,
             photoId: ref.photoId,
             placement: ref.placement || 'back',
+            tone: ref.tone,
+            allowedColorMode: ref.allowedColorMode,
+            allowedColorIds: ref.allowedColorIds,
             clientVisible: true,
             createdAt: 0,
             updatedAt: 0
@@ -174,7 +178,10 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         photoId: d.photoId,
         imageUrl: urlMap[d.photoId] || MEM_PHOTO_CACHE.get(d.photoId) || null,
         placement: d.placement || 'back',
-        clientVisible: d.clientVisible !== false
+        clientVisible: d.clientVisible !== false,
+        tone: d.tone,
+        allowedColorMode: d.allowedColorMode,
+        allowedColorIds: d.allowedColorIds
       };
     });
   }, [rawList, urlMap, soldByDesign]);
@@ -193,6 +200,9 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     placement?: DecalPlacement;
     existingPhotoId?: string | null;
     skipPrompt?: boolean;
+    tone?: DesignTone;
+    allowedColorMode?: AllowedColorMode | 'auto';
+    allowedColorIds?: string[];
   }) => {
     const pId = opts.existingPhotoId || uid();
     MEM_PHOTO_CACHE.set(pId, opts.dataUrl);
@@ -200,6 +210,13 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     await uploadPhotoNow(pId, opts.dataUrl);
     notifyPhotos();
     setUrlMap((prev) => ({ ...prev, [pId]: opts.dataUrl }));
+    const analysis = opts.tone ? null : await analyzeDesignTone(opts.dataUrl);
+    const resolvedTone = opts.tone || analysis?.tone || 'mixed';
+    const resolvedColorMode: AllowedColorMode =
+      !opts.allowedColorMode || opts.allowedColorMode === 'auto'
+        ? analysis?.suggestedColorMode || (resolvedTone === 'dark' ? 'light_fabrics' : resolvedTone === 'light' ? 'dark_fabrics' : 'all')
+        : opts.allowedColorMode;
+
     const count = (state.catalogDesigns || []).filter((x) => !x.deleted).length + 1;
     const defaultName = opts.name?.trim() || `Diseño #${count}`;
     const defaultCode = opts.code?.trim().toUpperCase() || `D-${String(count).padStart(3, '0')}`;
@@ -217,7 +234,10 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       campaign: opts.campaign && opts.campaign !== 'all' ? opts.campaign : undefined,
       photoId: pId,
       clientVisible: opts.clientVisible ?? true,
-      placement: opts.placement || 'back'
+      placement: opts.placement || 'back',
+      tone: resolvedTone,
+      allowedColorMode: resolvedColorMode,
+      allowedColorIds: resolvedColorMode === 'custom' ? opts.allowedColorIds : undefined
     });
   };
 
@@ -230,6 +250,8 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       campaign?: string;
       clientVisible?: boolean;
       customName?: string;
+      allowedColorMode?: AllowedColorMode | 'auto';
+      allowedColorIds?: string[];
     }
   ): Promise<number> => {
     const list = Array.from(files);
@@ -242,6 +264,12 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       const autoRemoveForJpg = shouldRemove || isJpgFile(file);
       const raw = await compressImage(file, 1400, 0.92, false);
       const processed = autoRemoveForJpg ? await applyBackgroundRemoval(raw, true, tol) : raw;
+      const analysis = await analyzeDesignTone(processed);
+      const resolvedColorMode: AllowedColorMode =
+        !opts?.allowedColorMode || opts.allowedColorMode === 'auto'
+          ? analysis.suggestedColorMode
+          : opts.allowedColorMode;
+
       const pId = uid();
       MEM_PHOTO_CACHE.set(pId, processed);
       await savePhoto(pId, processed, 0);
@@ -261,7 +289,10 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         campaign: opts?.campaign && opts.campaign !== 'all' ? opts.campaign : undefined,
         photoId: pId,
         clientVisible: opts?.clientVisible ?? true,
-        placement: opts?.placement || 'back'
+        placement: opts?.placement || 'back',
+        tone: analysis.tone,
+        allowedColorMode: resolvedColorMode,
+        allowedColorIds: resolvedColorMode === 'custom' ? opts?.allowedColorIds : undefined
       });
       added++;
     }
@@ -284,6 +315,17 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
       }),
     setDesignCampaign: (id: string, campaign: string) =>
       updateCatalogDesign(id, { campaign: campaign === 'all' ? undefined : campaign }),
+    setDesignColors: (
+      id: string,
+      allowedColorMode: AllowedColorMode,
+      allowedColorIds?: string[],
+      tone?: DesignTone
+    ) =>
+      updateCatalogDesign(id, {
+        allowedColorMode,
+        allowedColorIds: allowedColorMode === 'custom' ? allowedColorIds : undefined,
+        ...(tone ? { tone } : {})
+      }),
     toggleFeatured: (id: string, nextFeatured: boolean) =>
       updateCatalogDesign(id, { featured: nextFeatured }),
     deleteDesign: (id: string) => deleteCatalogDesign(id)
