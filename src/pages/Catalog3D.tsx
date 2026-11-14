@@ -38,6 +38,10 @@ import {
   type SharedCatalogPayload
 } from '../lib/publicCatalog';
 
+const WIZARD_KEYS = ['color', 'design', 'size', 'data'] as const;
+const WIZARD_TITLES = ['Color y ubicación', 'Tu diseño', 'Talla', 'Tus datos'];
+const WIZARD_LAST = WIZARD_KEYS.length - 1;
+
 export interface CustomerCartItem {
   id: string;
   brandName: string;
@@ -985,6 +989,10 @@ export function CustomerCatalogView({
   const [paymentPending, setPaymentPending] = useState(false);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const deliverySectionRef = useRef<HTMLElement>(null);
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step]);
 
   const phoneDigitsOnly = customerPhone.replace(/\D/g, '');
   const isNameValid = customerName.trim().length >= 2;
@@ -1417,6 +1425,24 @@ export function CustomerCatalogView({
       </header>
 
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
+        {/* PROGRESO DEL ASISTENTE */}
+        <div className="px-1">
+          <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+            <span>Paso {step + 1} de {WIZARD_LAST + 1}</span>
+            <span className="text-slate-900">{WIZARD_TITLES[step]}</span>
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {WIZARD_TITLES.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                aria-label={`Ir al paso ${i + 1}`}
+                onClick={() => i <= step && setStep(i)}
+                className={`h-1.5 rounded-full transition-colors ${i <= step ? 'bg-slate-900' : 'bg-slate-200'}`}
+              />
+            ))}
+          </div>
+        </div>
         <InteractiveShirt3D
           hex={selectedColor?.hex || '#111827'}
           colorName={selectedColor?.name || ''}
@@ -1456,7 +1482,7 @@ export function CustomerCatalogView({
               setSelectedDesignName(cleanName ? `Archivo A3: ${cleanName.slice(0, 24)}` : 'Archivo personalizado A3');
               setSelectedDesignCode('CLIENTE-A3');
               setSelectedDesignPhotoId(customPid);
-              setPlacement('back');
+
               setScale(2.0);
               setOffsetX(0);
               setOffsetY(0);
@@ -1494,15 +1520,41 @@ export function CustomerCatalogView({
             setSelectedDesignName(d.name);
             setSelectedDesignCode(d.code || null);
             setSelectedDesignPhotoId(d.photoId);
-            setPlacement('back');
+
             setScale(2.0);
             setOffsetX(0);
             setOffsetY(0);
           }}
           autoMotion
+          wizardStep={WIZARD_KEYS[step]}
         />
 
+        {/* PASO 1: UBICACIÓN DEL DISEÑO */}
+        {step === 0 && (
+          <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+            <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">¿Dónde irá el diseño?</h2>
+            <p className="mb-3 text-xs text-slate-500">Elige el color de la camisa arriba y la ubicación aquí.</p>
+            <div className="grid grid-cols-2 gap-2">
+              {([['back', 'Espalda'], ['center', 'Frente']] as const).map(([k, lbl]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setPlacement(k)}
+                  className={`min-h-[52px] rounded-2xl border text-sm font-bold transition ${
+                    placement === k
+                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-800 hover:border-slate-400'
+                  }`}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* SELECCIÓN DE TALLA MINIMALISTA */}
+        {step === 2 && (
         <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold tracking-tight text-slate-900">Talla</h2>
@@ -1550,8 +1602,10 @@ export function CustomerCatalogView({
             })}
           </div>
         </section>
+        )}
 
         {/* DATOS DE ENTREGA Y CANTIDAD */}
+        {step === 3 && (
         <section
           ref={deliverySectionRef}
           className={`space-y-3 rounded-[24px] border bg-white p-4 shadow-sm transition ${
@@ -1654,84 +1708,63 @@ export function CustomerCatalogView({
               ⚡ Disponible para entrega inmediata en talla {size}.
             </div>
           )}
-
-          <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={handleAddToCart}
-              className="inline-flex min-h-[46px] w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]"
-            >
-              + Agregar al pedido
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSendOrderWhatsApp()}
-              className="inline-flex min-h-[46px] w-full items-center justify-center rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-[0.99]"
-            >
-              {!isDeliveryReady ? '🔒 ' : ''}
-              {customerCart.length > 0
-                ? `Confirmar y Pedir (${cartTotalQty}) · ${money(cartTotalPrice)}`
-                : `Confirmar y Pedir · ${money(total)}`}
-            </button>
-          </div>
         </section>
+        )}
       </div>
 
-      {/* BARRA INFERIOR FLOTANTE ESTILO APPLE (100% RESPONSIVE MÓVIL + SAFE AREA) */}
+      {/* BARRA INFERIOR DEL ASISTENTE (ATRÁS / SIGUIENTE / CONFIRMAR) */}
       <div
         className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.08] bg-white/95 px-3 py-2.5 shadow-[0_-8px_30px_rgba(0,0,0,0.08)] backdrop-blur-xl sm:px-4 sm:py-3"
         style={{ paddingBottom: 'max(0.65rem, env(safe-area-inset-bottom))' }}
       >
-        <div className="mx-auto flex max-w-2xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-          <div className="min-w-0 flex-1">
-            {customerCart.length > 0 ? (
-              <div className="flex items-center justify-between gap-2 sm:block">
-                <button
-                  type="button"
-                  onClick={() => setIsCartModalOpen(true)}
-                  className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
-                >
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
-                    {cartTotalQty}
-                  </span>
-                  <span className="truncate">Mi pedido ({cartTotalQty}) · Ver ▾</span>
-                </button>
-                <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
-                  {money(cartTotalPrice)}
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between gap-2 sm:block">
-                <div className="min-w-0 truncate text-xs font-medium text-slate-500">
-                  {selectedColor?.name} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
-                  {designUrl && selectedDesignName ? ` · ${selectedDesignName}` : ''}
-                </div>
-                <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
-                  {money(total)}
-                </div>
-              </div>
-            )}
+        <div className="mx-auto max-w-2xl space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 truncate text-xs font-medium text-slate-500">
+              {selectedColor?.name} · {placement === 'back' ? 'Espalda' : 'Frente'} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
+              {designUrl && selectedDesignName ? ` · ${selectedDesignName}` : ''}
+            </div>
+            <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
+              {money(customerCart.length > 0 ? cartTotalPrice : total)}
+            </div>
           </div>
-
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+          {step === WIZARD_LAST && (
             <button
               type="button"
-              onClick={handleAddToCart}
-              className="inline-flex min-h-[44px] w-full items-center justify-center whitespace-nowrap rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 active:scale-95 sm:w-auto sm:px-3.5"
+              onClick={() => {
+                handleAddToCart();
+                setStep(0);
+              }}
+              className="w-full text-center text-[11px] font-semibold text-slate-500 underline-offset-2 hover:text-slate-900 hover:underline"
             >
-              + Agregar
-              <span className="hidden sm:inline">&nbsp;al pedido</span>
+              + Agregar otra prenda a mi pedido
             </button>
+          )}
+          <div className="grid grid-cols-[auto_1fr] gap-2">
             <button
               type="button"
-              onClick={() => void handleSendOrderWhatsApp()}
-              className="inline-flex min-h-[44px] w-full items-center justify-center whitespace-nowrap rounded-full bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95 sm:w-auto sm:px-5"
+              onClick={() => setStep((s) => Math.max(0, s - 1))}
+              disabled={step === 0}
+              className="inline-flex min-h-[48px] items-center justify-center rounded-full border border-slate-300 bg-white px-5 text-sm font-bold text-slate-800 shadow-sm transition active:scale-95 disabled:opacity-30"
             >
-              {!isDeliveryReady ? '🔒 ' : ''}
-              {customerCart.length > 0
-                ? `Pedir (${cartTotalQty})`
-                : 'Pedir WhatsApp'}
+              ← Atrás
             </button>
+            {step < WIZARD_LAST ? (
+              <button
+                type="button"
+                onClick={() => setStep((s) => Math.min(WIZARD_LAST, s + 1))}
+                className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-slate-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
+              >
+                {step === 1 && !designUrl ? 'Seguir sin diseño →' : 'Siguiente →'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleSendOrderWhatsApp()}
+                className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-[#25D366] px-5 text-sm font-bold text-white shadow-md transition hover:bg-[#1ebe5b] active:scale-95"
+              >
+                {isDeliveryReady ? '✅ Confirmar pedido por WhatsApp' : '🔒 Completa tus datos'}
+              </button>
+            )}
           </div>
         </div>
       </div>

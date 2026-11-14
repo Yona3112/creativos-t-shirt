@@ -629,7 +629,8 @@ export function InteractiveShirt3D({
   boutiqueTheme = 'ranchero',
   onChangeBoutiqueTheme: _onChangeBoutiqueTheme,
   autoMotion = true,
-  stockBadge
+  stockBadge,
+  wizardStep
 }: {
   hex: string;
   colorName: string;
@@ -709,6 +710,8 @@ export function InteractiveShirt3D({
   onChangeBoutiqueTheme?: (theme: BoutiqueTheme) => void;
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
+  /** Modo asistente (tienda): limita qué controles se muestran por paso */
+  wizardStep?: 'color' | 'design' | 'size' | 'data' | null;
 }) {
   const [mode] = useState<MotionMode>('wind');
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
@@ -1109,7 +1112,7 @@ export function InteractiveShirt3D({
           </div>
 
           {/* Selector de Ubicación del Estampado + Ajuste tipo Slide */}
-          {designUrl && (
+          {designUrl && (!wizardStep || wizardStep === 'design') && (
             <div className="mt-1 space-y-2">
               <div className="flex flex-wrap items-center justify-center gap-1.5">
                 <div className="inline-flex items-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
@@ -1235,7 +1238,7 @@ export function InteractiveShirt3D({
           )}
 
           {/* Selector de Color minimalista tipo Apple (respeta contraste negro/blanco del diseño) */}
-          {colorOptions && colorOptions.length > 0 && onSelectColor && (() => {
+          {(!wizardStep || wizardStep === 'color') && colorOptions && colorOptions.length > 0 && onSelectColor && (() => {
             const hasRestricted = colorOptions.some(
               (c) => !isColorCompatibleWithDesign(c, activeCatalogDesign).allowed
             );
@@ -1297,6 +1300,7 @@ export function InteractiveShirt3D({
         </div>
 
         {/* GALERÍA DE DISEÑOS TIPO SLIDE ESTILO APPLE (CON MÁS VENDIDOS AL INICIO) */}
+        {(!wizardStep || wizardStep === 'design') && (
         <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -1498,6 +1502,7 @@ export function InteractiveShirt3D({
             })}
           </div>
         </div>
+        )}
 
         <WesternDesignModal
           isOpen={isWesternModalOpen}
