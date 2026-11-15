@@ -39,8 +39,17 @@ import {
 } from '../lib/publicCatalog';
 
 const WIZARD_KEYS = ['color', 'design', 'size', 'data'] as const;
-const WIZARD_TITLES = ['Color y ubicación', 'Tu diseño', 'Talla', 'Tus datos'];
+const WIZARD_TITLES = ['Color y lado', 'Diseño', 'Talla y cantidad', 'Finalizar'];
 const WIZARD_LAST = WIZARD_KEYS.length - 1;
+
+const SIZE_CHART: Array<{ size: string; chest: string; length: string }> = [
+  { size: 'XS', chest: '43 cm', length: '66 cm' },
+  { size: 'S', chest: '46 cm', length: '69 cm' },
+  { size: 'M', chest: '50 cm', length: '72 cm' },
+  { size: 'L', chest: '54 cm', length: '74 cm' },
+  { size: 'XL', chest: '58 cm', length: '77 cm' },
+  { size: 'XXL', chest: '62 cm', length: '80 cm' }
+];
 
 export interface CustomerCartItem {
   id: string;
@@ -990,6 +999,16 @@ export function CustomerCatalogView({
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const deliverySectionRef = useRef<HTMLElement>(null);
   const [step, setStep] = useState(0);
+  const [maxStepReached, setMaxStepReached] = useState(0);
+  const [showSizeGuide, setShowSizeGuide] = useState(false);
+  const [justAddedToCart, setJustAddedToCart] = useState(false);
+
+  const goToStep = (next: number) => {
+    const clamped = Math.max(0, Math.min(WIZARD_LAST, next));
+    setStep(clamped);
+    setMaxStepReached((prev) => Math.max(prev, clamped));
+  };
+
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [step]);
@@ -1075,6 +1094,7 @@ export function CustomerCatalogView({
 
   const handleSelectColor = (c: SharedCatalogColor) => {
     setSelectedColor(c);
+    setJustAddedToCart(false);
     if (getSizeStock(c, size) === 0) {
       const firstAvail = payload.sizes.find((sz) => getSizeStock(c, sz) > 0);
       if (firstAvail) setSize(firstAvail);
@@ -1101,50 +1121,65 @@ export function CustomerCatalogView({
   const unitPrice = payload.priceCustom || 35000;
   const total = qty * unitPrice;
 
+  const currentDraftItem: CustomerCartItem = {
+    id: '__draft__',
+    brandName: payload.brandName,
+    colorName: selectedColor?.name || 'Negro',
+    colorHex: selectedColor?.hex || '#111827',
+    size,
+    qty,
+    unitPrice,
+    designId: designUrl ? activeCatalogDesignId : null,
+    designName: designUrl ? selectedDesignName || 'Diseño personalizado' : null,
+    designCode: designUrl ? selectedDesignCode : null,
+    photoUrl: designUrl,
+    photoId: selectedDesignPhotoId,
+    placement,
+    scale
+  };
+
+  const mergeCartItems = (
+    base: CustomerCartItem[],
+    incoming: CustomerCartItem,
+    preserveIncomingId = false
+  ): CustomerCartItem[] => {
+    const idx = base.findIndex(
+      (it) =>
+        it.colorName === incoming.colorName &&
+        it.size === incoming.size &&
+        it.unitPrice === incoming.unitPrice &&
+        (it.designId || null) === (incoming.designId || null) &&
+        (it.designName || null) === (incoming.designName || null) &&
+        it.placement === incoming.placement
+    );
+    if (idx >= 0) {
+      const next = [...base];
+      next[idx] = { ...next[idx], qty: next[idx].qty + incoming.qty };
+      return next;
+    }
+    return [...base, preserveIncomingId ? incoming : { ...incoming, id: uid() }];
+  };
+
+  const effectiveOrderItems: CustomerCartItem[] =
+    customerCart.length === 0
+      ? [currentDraftItem]
+      : justAddedToCart
+      ? customerCart
+      : mergeCartItems(customerCart, currentDraftItem, true);
+
+  const effectiveTotalQty = effectiveOrderItems.reduce((sum, it) => sum + it.qty, 0);
+  const effectiveTotalPrice = effectiveOrderItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
+
   const cartTotalQty = customerCart.reduce((sum, it) => sum + it.qty, 0);
   const cartTotalPrice = customerCart.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
 
-  const handleAddToCart = () => {
-    const curDesignId = designUrl ? activeCatalogDesignId : null;
-    const curDesignName = designUrl ? selectedDesignName || 'Diseño estampado' : null;
-    const curDesignCode = designUrl ? selectedDesignCode : null;
-    const curPlacement = placement;
-
-    setCustomerCart((prev) => {
-      const idx = prev.findIndex(
-        (it) =>
-          it.colorName === selectedColor?.name &&
-          it.size === size &&
-          it.unitPrice === unitPrice &&
-          (it.designId || null) === curDesignId &&
-          (it.designName || null) === curDesignName &&
-          it.placement === curPlacement
-      );
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + qty };
-        return next;
-      }
-      return [
-        ...prev,
-        {
-          id: uid(),
-          brandName: payload.brandName,
-          colorName: selectedColor?.name || 'Negro',
-          colorHex: selectedColor?.hex || '#111827',
-          size,
-          qty,
-          unitPrice,
-          designId: curDesignId,
-          designName: curDesignName,
-          designCode: curDesignCode,
-          photoUrl: designUrl,
-          photoId: selectedDesignPhotoId,
-          placement: curPlacement,
-          scale
-        }
-      ];
-    });
+  const handleAddToCart = (startNextShirt = false) => {
+    const itemToSave: CustomerCartItem = {
+      ...currentDraftItem,
+      designName: designUrl ? selectedDesignName || 'Diseño estampado' : null
+    };
+    setCustomerCart((prev) => mergeCartItems(prev, itemToSave));
+    setJustAddedToCart(true);
 
     toast(
       `✓ +${qty} ${selectedColor?.name} (${size}) ${
@@ -1152,6 +1187,16 @@ export function CustomerCatalogView({
       } agregada al pedido`,
       'ok'
     );
+
+    if (startNextShirt) {
+      setDesignUrl(null);
+      setActiveCatalogDesignId(null);
+      setSelectedDesignName(null);
+      setSelectedDesignCode(null);
+      setSelectedDesignPhotoId(null);
+      setQty(1);
+      goToStep(0);
+    }
   };
 
   const handleUpdateCartQty = (id: string, delta: number) => {
@@ -1166,6 +1211,50 @@ export function CustomerCatalogView({
     setCustomerCart((prev) => prev.filter((it) => it.id !== id));
   };
 
+  const handleOrderItemQty = (id: string, delta: number) => {
+    if (id === '__draft__') {
+      if (delta < 0 && qty <= 1) {
+        if (customerCart.length > 0) setJustAddedToCart(true);
+        return;
+      }
+      setQty((q) => Math.max(1, q + delta));
+      setJustAddedToCart(false);
+      return;
+    }
+    const inCart = customerCart.find((c) => c.id === id);
+    const eff = effectiveOrderItems.find((c) => c.id === id);
+    if (
+      delta < 0 &&
+      !justAddedToCart &&
+      customerCart.length > 0 &&
+      inCart &&
+      eff &&
+      eff.qty > inCart.qty
+    ) {
+      if (qty <= 1) setJustAddedToCart(true);
+      else setQty((q) => Math.max(1, q - 1));
+      return;
+    }
+    if (delta < 0 && inCart && inCart.qty <= 1 && effectiveOrderItems.length <= 1) {
+      return;
+    }
+    handleUpdateCartQty(id, delta);
+  };
+
+  const handleRemoveOrderItem = (id: string) => {
+    if (effectiveOrderItems.length <= 1) return;
+    if (id === '__draft__') {
+      setJustAddedToCart(true);
+      return;
+    }
+    const inCart = customerCart.find((c) => c.id === id);
+    const eff = effectiveOrderItems.find((c) => c.id === id);
+    if (!justAddedToCart && customerCart.length > 0 && inCart && eff && eff.qty > inCart.qty) {
+      setJustAddedToCart(true);
+    }
+    handleRemoveFromCart(id);
+  };
+
   const handleSendOrderWhatsApp = async () => {
     const cleanName = customerName.trim().slice(0, 80);
     const cleanPhone = customerPhone.trim().slice(0, 24);
@@ -1178,35 +1267,21 @@ export function CustomerCatalogView({
           : cleanName.length < 2
           ? 'Ingresa tu nombre completo para confirmar el pedido'
           : 'Ingresa tu número de teléfono / WhatsApp válido (mín. 8 dígitos)';
+      goToStep(WIZARD_LAST);
       setDeliveryError(msg);
-      deliverySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => {
+        deliverySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 60);
       toast(msg, 'error');
       return;
     }
     setDeliveryError(null);
     const orderId = uid().slice(0, 12);
 
-    const hasMultiItems = customerCart.length > 0;
-    const finalCartItems: CustomerCartItem[] = hasMultiItems
-      ? customerCart
-      : [
-          {
-            id: uid(),
-            brandName: payload.brandName,
-            colorName: selectedColor?.name || 'Negro',
-            colorHex: selectedColor?.hex || '#111827',
-            size,
-            qty,
-            unitPrice,
-            designId: activeCatalogDesignId,
-            designName: designUrl ? selectedDesignName || 'Diseño seleccionado' : null,
-            designCode: designUrl ? selectedDesignCode : null,
-            photoUrl: designUrl,
-            photoId: selectedDesignPhotoId,
-            placement,
-            scale
-          }
-        ];
+    const finalCartItems: CustomerCartItem[] = effectiveOrderItems.map((it) => ({
+      ...it,
+      id: it.id === '__draft__' ? uid() : it.id
+    }));
 
     const finalTotal = finalCartItems.reduce((s, it) => s + it.qty * it.unitPrice, 0);
     const finalUnits = finalCartItems.reduce((s, it) => s + it.qty, 0);
@@ -1349,17 +1424,33 @@ export function CustomerCatalogView({
         designName:
           webOrderItems.length > 1
             ? `${webOrderItems.length} prendas variadas`
-            : firstItem.designName || 'Diseño seleccionado',
+            : firstItem.designName || 'Camisa Lisa',
         designCode: firstItem.designCode,
-        designUrl: firstItem.designThumb || designUrl,
+        designUrl: firstItem.designThumb || finalCartItems[0]?.photoUrl || null,
         placement: firstItem.placement,
-        stockNote: clientCampaign !== 'all' ? `Colección: ${clientCampaign}` : undefined
+        paymentLabel: paymentPending ? 'Pagar al recoger en tienda' : 'Transferencia / Anticipo',
+        stockNote: clientCampaign !== 'all' ? `Colección: ${clientCampaign}` : undefined,
+        items: webOrderItems.map((it, idx) => ({
+          brandName: it.brandName,
+          colorName: it.colorName,
+          colorHex: it.colorHex,
+          size: it.size,
+          qty: it.qty,
+          unitPrice: it.unitPrice,
+          designName: it.designName,
+          designCode: it.designCode,
+          designUrl: it.designThumb || finalCartItems[idx]?.photoUrl || null,
+          placement: it.placement
+        }))
       };
       const [canvas, pdfFile] = await Promise.all([
         renderCatalogOrderCardCanvas(cardInput),
         buildCatalogOrderPdfFile(cardInput)
       ]);
       const previewUrl = canvas.toDataURL('image/jpeg', 0.9);
+      // Limpiar el carrito al quedar confirmado para evitar pedidos repetidos por accidente
+      setCustomerCart([]);
+      setJustAddedToCart(true);
       setOrderSheetModal({
         orderId,
         previewUrl,
@@ -1427,107 +1518,183 @@ export function CustomerCatalogView({
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
         {/* PROGRESO DEL ASISTENTE */}
         <div className="px-1">
-          <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+          <div className="mb-2 flex items-center justify-between text-[11px] font-semibold text-slate-500">
             <span>Paso {step + 1} de {WIZARD_LAST + 1}</span>
-            <span className="text-slate-900">{WIZARD_TITLES[step]}</span>
+            <span className="font-bold text-slate-900">{WIZARD_TITLES[step]}</span>
           </div>
           <div className="grid grid-cols-4 gap-1.5">
-            {WIZARD_TITLES.map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                aria-label={`Ir al paso ${i + 1}`}
-                onClick={() => i <= step && setStep(i)}
-                className={`h-1.5 rounded-full transition-colors ${i <= step ? 'bg-slate-900' : 'bg-slate-200'}`}
-              />
-            ))}
+            {WIZARD_TITLES.map((title, i) => {
+              const unlocked = i <= maxStepReached;
+              const active = i === step;
+              return (
+                <button
+                  key={title}
+                  type="button"
+                  disabled={!unlocked}
+                  aria-label={`Ir al paso ${i + 1}: ${title}`}
+                  onClick={() => unlocked && goToStep(i)}
+                  className="group flex flex-col items-start gap-1 text-left disabled:cursor-default"
+                >
+                  <span
+                    className={`h-1.5 w-full rounded-full transition-colors ${
+                      i <= step
+                        ? 'bg-slate-900'
+                        : unlocked
+                        ? 'bg-slate-400'
+                        : 'bg-slate-200'
+                    }`}
+                  />
+                  <span
+                    className={`hidden truncate text-[10px] font-semibold sm:block ${
+                      active
+                        ? 'text-slate-900'
+                        : unlocked
+                        ? 'text-slate-500 group-hover:text-slate-800'
+                        : 'text-slate-300'
+                    }`}
+                  >
+                    {i + 1}. {title}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
-        <InteractiveShirt3D
-          hex={selectedColor?.hex || '#111827'}
-          colorName={selectedColor?.name || ''}
-          brandName={payload.brandName}
-          designUrl={designUrl}
-          placement={placement}
-          designScale={scale}
-          designOffsetX={offsetX}
-          designOffsetY={offsetY}
-          onDesignChange={(patch) => {
-            if (patch.placement !== undefined) setPlacement(patch.placement);
-            if (patch.scale !== undefined) setScale(patch.scale);
-            if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
-            if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
-            if (patch.designUrl !== undefined) {
-              setDesignUrl(patch.designUrl);
-            }
-            if (patch.designName !== undefined) setSelectedDesignName(patch.designName);
-            if (patch.photoId !== undefined) setSelectedDesignPhotoId(patch.photoId);
-          }}
-          onClearDesign={() => {
-            setDesignUrl(null);
-            setActiveCatalogDesignId(null);
-            setSelectedDesignName(null);
-            setSelectedDesignCode(null);
-            setSelectedDesignPhotoId(null);
-          }}
-          onUploadFile={async (file) => {
-            try {
-              const autoJpg = isJpgFile(file);
-              const raw = await compressImage(file, 1400, 0.92, false);
-              const processed = autoJpg ? await applyBackgroundRemoval(raw, true, 34) : raw;
-              const customPid = `photo_client_${uid()}`;
-              const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
-              setDesignUrl(processed);
+
+        {step <= 1 ? (
+          <InteractiveShirt3D
+            hex={selectedColor?.hex || '#111827'}
+            colorName={selectedColor?.name || ''}
+            brandName={payload.brandName}
+            designUrl={designUrl}
+            placement={placement}
+            designScale={scale}
+            designOffsetX={offsetX}
+            designOffsetY={offsetY}
+            onDesignChange={(patch) => {
+              if (patch.placement !== undefined) {
+                setPlacement(patch.placement);
+                setJustAddedToCart(false);
+              }
+              if (patch.scale !== undefined) setScale(patch.scale);
+              if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
+              if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
+              if (patch.designUrl !== undefined) {
+                setDesignUrl(patch.designUrl);
+                setJustAddedToCart(false);
+              }
+              if (patch.designName !== undefined) setSelectedDesignName(patch.designName);
+              if (patch.photoId !== undefined) setSelectedDesignPhotoId(patch.photoId);
+            }}
+            onClearDesign={() => {
+              setDesignUrl(null);
               setActiveCatalogDesignId(null);
-              setSelectedDesignName(cleanName ? `Archivo A3: ${cleanName.slice(0, 24)}` : 'Archivo personalizado A3');
-              setSelectedDesignCode('CLIENTE-A3');
-              setSelectedDesignPhotoId(customPid);
+              setSelectedDesignName(null);
+              setSelectedDesignCode(null);
+              setSelectedDesignPhotoId(null);
+              setJustAddedToCart(false);
+            }}
+            onUploadFile={async (file) => {
+              try {
+                const autoJpg = isJpgFile(file);
+                const raw = await compressImage(file, 1400, 0.92, false);
+                const processed = autoJpg ? await applyBackgroundRemoval(raw, true, 34) : raw;
+                const customPid = `photo_client_${uid()}`;
+                const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
+                setDesignUrl(processed);
+                setActiveCatalogDesignId(null);
+                setSelectedDesignName(cleanName ? `Personalizado: ${cleanName.slice(0, 24)}` : 'Imagen personalizada');
+                setSelectedDesignCode('CLIENTE');
+                setSelectedDesignPhotoId(customPid);
+                setJustAddedToCart(false);
+
+                setScale(2.0);
+                setOffsetX(0);
+                setOffsetY(0);
+                toast('Tu imagen se aplicó a la camisa');
+              } catch (e) {
+                toast((e as Error).message, 'error');
+              }
+            }}
+            boutiqueTheme={boutiqueTheme}
+            colorOptions={payload.colors.map((c) => {
+              const totalC = getColorTotalStock(c);
+              return {
+                id: resolveColorId(c) || c.id || c.name,
+                name: c.name,
+                hex: c.hex,
+                available: totalC > 0
+              };
+            })}
+            activeColorId={resolveColorId(selectedColor) || selectedColor?.id || selectedColor?.name}
+            onSelectColor={(cid) => {
+              const found = payload.colors.find(
+                (x) => (resolveColorId(x) || x.id || x.name) === cid || x.name === cid
+              );
+              if (found) handleSelectColor(found);
+            }}
+            catalogDesigns={clientDesigns}
+            activeCatalogDesignId={activeCatalogDesignId}
+            campaigns={availableCampaigns}
+            activeCampaign={clientCampaign}
+            onChangeActiveCampaign={setClientCampaign}
+            onSelectCatalogDesign={(d) => {
+              if (!d.imageUrl) return;
+              setDesignUrl(d.imageUrl);
+              setActiveCatalogDesignId(d.id);
+              setSelectedDesignName(d.name);
+              setSelectedDesignCode(d.code || null);
+              setSelectedDesignPhotoId(d.photoId);
+              setJustAddedToCart(false);
 
               setScale(2.0);
               setOffsetX(0);
               setOffsetY(0);
-              toast('Tu diseño personalizado A3 se aplicó a la camisa');
-            } catch (e) {
-              toast((e as Error).message, 'error');
-            }
-          }}
-          boutiqueTheme={boutiqueTheme}
-          colorOptions={payload.colors.map((c) => {
-            const totalC = getColorTotalStock(c);
-            return {
-              id: resolveColorId(c) || c.id || c.name,
-              name: c.name,
-              hex: c.hex,
-              available: totalC > 0
-            };
-          })}
-          activeColorId={resolveColorId(selectedColor) || selectedColor?.id || selectedColor?.name}
-          onSelectColor={(cid) => {
-            const found = payload.colors.find(
-              (x) => (resolveColorId(x) || x.id || x.name) === cid || x.name === cid
-            );
-            if (found) handleSelectColor(found);
-          }}
-          catalogDesigns={clientDesigns}
-          activeCatalogDesignId={activeCatalogDesignId}
-          campaigns={availableCampaigns}
-          activeCampaign={clientCampaign}
-          onChangeActiveCampaign={setClientCampaign}
-          onSelectCatalogDesign={(d) => {
-            if (!d.imageUrl) return;
-            setDesignUrl(d.imageUrl);
-            setActiveCatalogDesignId(d.id);
-            setSelectedDesignName(d.name);
-            setSelectedDesignCode(d.code || null);
-            setSelectedDesignPhotoId(d.photoId);
-
-            setScale(2.0);
-            setOffsetX(0);
-            setOffsetY(0);
-          }}
-          autoMotion
-          wizardStep={WIZARD_KEYS[step]}
-        />
+            }}
+            autoMotion
+            wizardStep={WIZARD_KEYS[step]}
+          />
+        ) : step === 2 ? (
+          <div className="flex items-center gap-3 rounded-[22px] border border-slate-200/80 bg-white p-3 shadow-sm">
+            <div
+              className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-black/10 p-1.5 shadow-inner"
+              style={{ backgroundColor: selectedColor?.hex || '#111827' }}
+            >
+              {designUrl ? (
+                <img
+                  src={designUrl}
+                  alt={selectedDesignName || 'Diseño'}
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <span className="text-2xl">👕</span>
+              )}
+              <span className="absolute inset-x-0 bottom-0 bg-black/65 py-0.5 text-center text-[9px] font-bold text-white">
+                {placement === 'back' ? 'Espalda' : 'Frente'}
+              </span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Tu camisa actual
+              </div>
+              <div className="truncate text-sm font-bold text-slate-900">
+                {selectedColor?.name || 'Color'} · {placement === 'back' ? 'Espalda' : 'Frente'}
+              </div>
+              <div className="truncate text-xs text-slate-500">
+                {designUrl
+                  ? selectedDesignName || 'Diseño seleccionado'
+                  : 'Camisa lisa (sin diseño)'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => goToStep(1)}
+              className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 active:scale-95"
+            >
+              Editar 3D
+            </button>
+          </div>
+        ) : null}
 
         {/* PASO 1: UBICACIÓN DEL DISEÑO */}
         {step === 0 && (
@@ -1539,7 +1706,10 @@ export function CustomerCatalogView({
                 <button
                   key={k}
                   type="button"
-                  onClick={() => setPlacement(k)}
+                  onClick={() => {
+                    setPlacement(k);
+                    setJustAddedToCart(false);
+                  }}
                   className={`min-h-[52px] rounded-2xl border text-sm font-bold transition ${
                     placement === k
                       ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
@@ -1553,162 +1723,361 @@ export function CustomerCatalogView({
           </section>
         )}
 
-        {/* SELECCIÓN DE TALLA MINIMALISTA */}
+        {/* PASO 3: SELECCIÓN DE TALLA, GUÍA Y CANTIDAD */}
         {step === 2 && (
-        <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold tracking-tight text-slate-900">Talla</h2>
-            <span
-              className={`text-xs font-medium ${
-                selectedSizeStock > 0 ? 'text-emerald-600' : 'text-amber-600'
-              }`}
-            >
-              {selectedSizeStock > 0 ? 'Disponible' : 'Bajo pedido'}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-            {payload.sizes.map((sz) => {
-              const st = getSizeStock(selectedColor, sz);
-              const isSel = sz === size;
-              return (
-                <button
-                  key={sz}
-                  type="button"
-                  onClick={() => setSize(sz)}
-                  className={`flex min-h-[54px] flex-col items-center justify-center rounded-2xl border transition ${
-                    isSel
-                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                      : st > 0
-                      ? 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
-                      : 'border-slate-100 bg-slate-50 text-slate-400'
-                  }`}
-                >
-                  <span className="text-sm font-bold">{sz}</span>
+          <div className="space-y-3">
+            <section className="space-y-4 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold tracking-tight text-slate-900">Talla</h2>
                   <span
-                    className={`text-[10px] font-medium ${
-                      isSel
-                        ? st > 0
-                          ? 'text-emerald-300'
-                          : 'text-white/70'
-                        : st > 0
-                        ? 'text-emerald-600'
-                        : 'text-slate-400'
+                    className={`text-xs font-medium ${
+                      selectedSizeStock > 0 ? 'text-emerald-600' : 'text-amber-600'
                     }`}
                   >
-                    {st > 0 ? 'En stock' : 'Encargo'}
+                    · {selectedSizeStock > 0 ? 'Disponible' : 'Bajo pedido'}
                   </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSizeGuide((v) => !v)}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-bold text-slate-700 transition hover:bg-slate-100"
+                >
+                  {showSizeGuide ? 'Ocultar medidas' : '📏 Ver guía de medidas'}
                 </button>
-              );
-            })}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                {payload.sizes.map((sz) => {
+                  const st = getSizeStock(selectedColor, sz);
+                  const isSel = sz === size;
+                  return (
+                    <button
+                      key={sz}
+                      type="button"
+                      onClick={() => {
+                        setSize(sz);
+                        setJustAddedToCart(false);
+                      }}
+                      className={`flex min-h-[54px] flex-col items-center justify-center rounded-2xl border transition ${
+                        isSel
+                          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                          : st > 0
+                          ? 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
+                          : 'border-slate-100 bg-slate-50 text-slate-400'
+                      }`}
+                    >
+                      <span className="text-sm font-bold">{sz}</span>
+                      <span
+                        className={`text-[10px] font-medium ${
+                          isSel
+                            ? st > 0
+                              ? 'text-emerald-300'
+                              : 'text-white/70'
+                            : st > 0
+                            ? 'text-emerald-600'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {st > 0 ? 'En stock' : 'Encargo'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {showSizeGuide && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800">Guía de medidas (Corte Unisex)</span>
+                    <span className="text-[11px] text-slate-500">Aprox. ±1.5 cm</span>
+                  </div>
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100/80 text-[11px] font-bold text-slate-600">
+                        <tr>
+                          <th className="px-3 py-1.5">Talla</th>
+                          <th className="px-3 py-1.5">Ancho de pecho</th>
+                          <th className="px-3 py-1.5">Largo</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                        {SIZE_CHART.map((row) => (
+                          <tr
+                            key={row.size}
+                            className={row.size === size ? 'bg-slate-900/5 font-bold text-slate-900' : ''}
+                          >
+                            <td className="px-3 py-1.5">{row.size}</td>
+                            <td className="px-3 py-1.5">{row.chest}</td>
+                            <td className="px-3 py-1.5">{row.length}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Tip: mide una camisa tuya sobre una mesa de axila a axila para comparar el ancho.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">Cantidad</div>
+                  <div className="text-[11px] text-slate-500">{money(unitPrice)} por prenda</div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-slate-900">
+                    <Stepper
+                      value={qty}
+                      min={1}
+                      onCommit={(v) => {
+                        setQty(v);
+                        setJustAddedToCart(false);
+                      }}
+                      ariaLabel="Cantidad"
+                    />
+                  </div>
+                  <div className="min-w-[76px] text-right text-sm font-extrabold text-slate-900">
+                    {money(total)}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div className="rounded-[22px] border border-dashed border-slate-300 bg-white/75 p-3 text-center">
+              <button
+                type="button"
+                onClick={() => handleAddToCart(true)}
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-4 text-xs font-bold text-slate-900 shadow-sm transition hover:border-slate-400 hover:bg-slate-100 active:scale-[0.99]"
+              >
+                + Agregar al pedido y elegir otra prenda
+              </button>
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                ¿Llevas otra talla, color o diseño? Agrégala aquí antes de finalizar.
+              </p>
+            </div>
           </div>
-        </section>
         )}
 
-        {/* DATOS DE ENTREGA Y CANTIDAD */}
+        {/* PASO 4: RESUMEN DEL PEDIDO Y DATOS DE ENTREGA */}
         {step === 3 && (
-        <section
-          ref={deliverySectionRef}
-          className={`space-y-3 rounded-[24px] border bg-white p-4 shadow-sm transition ${
-            deliveryError ? 'border-red-400 ring-2 ring-red-500/40' : 'border-slate-200/80'
-          }`}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-semibold tracking-tight text-slate-900">
-                Datos de entrega <span className="text-red-500">*</span>
-              </h2>
-              <p className="text-[11px] text-slate-500">Nombre y teléfono obligatorios para confirmar</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Cantidad</span>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-slate-900">
-                <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
+          <div className="space-y-3">
+            {/* RESUMEN VISIBLE DEL PEDIDO */}
+            <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold tracking-tight text-slate-900">
+                    Tu pedido ({effectiveTotalQty} {effectiveTotalQty === 1 ? 'prenda' : 'prendas'})
+                  </h2>
+                  <p className="text-[11px] text-slate-500">Revisa los detalles antes de confirmar</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (justAddedToCart) goToStep(0);
+                    else handleAddToCart(true);
+                  }}
+                  className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-bold text-slate-800 transition hover:bg-slate-100 active:scale-95"
+                >
+                  + Agregar otra
+                </button>
               </div>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-            <input
-              type="text"
-              maxLength={80}
-              value={customerName}
-              onChange={(e) => {
-                setCustomerName(e.target.value);
-                setDeliveryError(null);
-              }}
-              placeholder="Nombre completo *"
-              className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
-                deliveryError && !isNameValid
-                  ? 'border-red-400 bg-red-50/40 focus:border-red-500'
-                  : 'border-slate-200 focus:border-slate-900'
+              <ul className="divide-y divide-slate-100">
+                {effectiveOrderItems.map((it) => {
+                  const isBack = it.placement === 'back';
+                  return (
+                    <li key={it.id} className="flex items-center gap-3 py-2.5">
+                      <div
+                        className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-black/10 p-1 shadow-sm"
+                        style={{ backgroundColor: it.colorHex || '#111827' }}
+                      >
+                        {it.photoUrl ? (
+                          <img
+                            src={it.photoUrl}
+                            alt={it.designName || 'Diseño'}
+                            className="h-full w-full object-contain"
+                          />
+                        ) : (
+                          <span className="text-lg">👕</span>
+                        )}
+                        <span className="absolute inset-x-0 bottom-0 bg-black/65 text-center text-[8px] font-bold text-white">
+                          {isBack ? 'Espalda' : 'Frente'}
+                        </span>
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-xs font-bold text-slate-900">
+                            {it.colorName} · Talla {it.size}
+                          </span>
+                          {it.id === '__draft__' && (
+                            <button
+                              type="button"
+                              onClick={() => goToStep(1)}
+                              className="text-[11px] font-semibold text-slate-500 underline hover:text-slate-900"
+                            >
+                              Editar
+                            </button>
+                          )}
+                        </div>
+                        <div className="truncate text-[11px] text-slate-500">
+                          {it.designName
+                            ? `${it.designCode ? `[${it.designCode}] ` : ''}${it.designName}`
+                            : 'Camisa Lisa'}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOrderItemQty(it.id, -1)}
+                            aria-label="Restar unidad"
+                            className="flex h-6 w-6 items-center justify-center rounded-md bg-white text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-100"
+                          >
+                            −
+                          </button>
+                          <span className="px-1.5 text-xs font-extrabold text-slate-900">{it.qty}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleOrderItemQty(it.id, 1)}
+                            aria-label="Sumar unidad"
+                            className="flex h-6 w-6 items-center justify-center rounded-md bg-white text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-100"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <div className="min-w-[68px] text-right text-xs font-extrabold text-slate-900">
+                          {money(it.qty * it.unitPrice)}
+                        </div>
+                        {effectiveOrderItems.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveOrderItem(it.id)}
+                            className="p-1 text-xs font-bold text-rose-500 hover:text-rose-700"
+                            title="Quitar prenda"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <div className="flex items-center justify-between border-t border-slate-100 pt-2.5 text-sm">
+                <span className="font-semibold text-slate-600">Total del pedido</span>
+                <span className="text-lg font-extrabold text-slate-900">{money(effectiveTotalPrice)}</span>
+              </div>
+            </section>
+
+            {/* DATOS DE CONTACTO Y ENTREGA */}
+            <section
+              ref={deliverySectionRef}
+              className={`space-y-3 rounded-[24px] border bg-white p-4 shadow-sm transition ${
+                deliveryError ? 'border-red-400 ring-2 ring-red-500/40' : 'border-slate-200/80'
               }`}
-            />
-            <input
-              type="tel"
-              inputMode="tel"
-              maxLength={24}
-              value={customerPhone}
-              onChange={(e) => {
-                setCustomerPhone(e.target.value);
-                setDeliveryError(null);
-              }}
-              placeholder="Teléfono / WhatsApp (ej. 9999-9999) *"
-              className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
-                deliveryError && !isPhoneValid
-                  ? 'border-red-400 bg-red-50/40 focus:border-red-500'
-                  : 'border-slate-200 focus:border-slate-900'
-              }`}
-            />
-            <input
-              type="text"
-              maxLength={300}
-              value={customerAddress}
-              onChange={(e) => setCustomerAddress(e.target.value)}
-              placeholder="Dirección o ciudad (opcional)"
-              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
-            />
+            >
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight text-slate-900">
+                  Tus datos de contacto <span className="text-red-500">*</span>
+                </h2>
+                <p className="text-[11px] text-slate-500">Nombre y WhatsApp obligatorios para confirmar</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                <input
+                  type="text"
+                  autoComplete="name"
+                  maxLength={80}
+                  value={customerName}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value);
+                    setDeliveryError(null);
+                  }}
+                  placeholder="Nombre completo *"
+                  className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
+                    deliveryError && !isNameValid
+                      ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+                      : 'border-slate-200 focus:border-slate-900'
+                  }`}
+                />
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  maxLength={24}
+                  value={customerPhone}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value);
+                    setDeliveryError(null);
+                  }}
+                  placeholder="Teléfono / WhatsApp (ej. 9999-9999) *"
+                  className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
+                    deliveryError && !isPhoneValid
+                      ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+                      : 'border-slate-200 focus:border-slate-900'
+                  }`}
+                />
+                <input
+                  type="text"
+                  autoComplete="street-address"
+                  maxLength={300}
+                  value={customerAddress}
+                  onChange={(e) => setCustomerAddress(e.target.value)}
+                  placeholder="Dirección o ciudad (opcional)"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              {deliveryError && (
+                <div className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+                  🔒 {deliveryError}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-slate-500">Forma de pago preferida</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentPending(false)}
+                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                      !paymentPending
+                        ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    💳 Transferencia / Anticipo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentPending(true)}
+                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                      paymentPending
+                        ? 'border-amber-500 bg-amber-500 text-stone-950 shadow-sm'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    ⏳ Pagar al recoger en tienda
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-600">
+                📦 Confirmamos tiempo de producción y costo de envío por WhatsApp antes de despachar.
+              </div>
+
+              {customerCart.length === 0 && readyMadeMatch && (
+                <div className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+                  ⚡ Disponible para entrega inmediata en talla {size}.
+                </div>
+              )}
+            </section>
           </div>
-
-          {deliveryError && (
-            <div className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
-              🔒 {deliveryError}
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <div className="text-xs font-medium text-slate-500">Forma de pago preferida</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setPaymentPending(false)}
-                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                  !paymentPending
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                💳 Transferencia / Anticipo
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentPending(true)}
-                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                  paymentPending
-                    ? 'border-amber-500 bg-amber-500 text-stone-950 shadow-sm'
-                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                ⏳ Pagar al recoger en tienda
-              </button>
-            </div>
-          </div>
-
-          {readyMadeMatch && (
-            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
-              ⚡ Disponible para entrega inmediata en talla {size}.
-            </div>
-          )}
-        </section>
         )}
       </div>
 
@@ -1720,40 +2089,25 @@ export function CustomerCatalogView({
         <div className="mx-auto max-w-2xl space-y-2">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 truncate text-xs font-medium text-slate-500">
-              {selectedColor?.name} · {placement === 'back' ? 'Espalda' : 'Frente'} · Talla {size} · {qty} {qty === 1 ? 'ud' : 'uds'}
-              {designUrl && selectedDesignName ? ` · ${selectedDesignName}` : ''}
+              {effectiveOrderItems.length === 1
+                ? `${effectiveOrderItems[0].colorName} · ${
+                    effectiveOrderItems[0].placement === 'back' ? 'Espalda' : 'Frente'
+                  } · Talla ${effectiveOrderItems[0].size} · ${effectiveTotalQty} ${
+                    effectiveTotalQty === 1 ? 'ud' : 'uds'
+                  }${
+                    effectiveOrderItems[0].designName ? ` · ${effectiveOrderItems[0].designName}` : ''
+                  }`
+                : `${effectiveOrderItems.length} diseños/prendas · ${effectiveTotalQty} uds en tu pedido`}
             </div>
             <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
-              {money(customerCart.length > 0 ? cartTotalPrice : total)}
+              {money(effectiveTotalPrice)}
             </div>
           </div>
-          {step === WIZARD_LAST && (
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  handleAddToCart();
-                  setStep(0);
-                }}
-                className="inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3.5 py-1 text-xs font-bold text-slate-900 shadow-sm transition hover:border-slate-400 hover:bg-slate-200 active:scale-95"
-              >
-                + Agregar otra prenda a mi pedido
-              </button>
-              {customerCart.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setIsCartModalOpen(true)}
-                  className="inline-flex min-h-[34px] items-center justify-center rounded-full border border-slate-900/15 bg-slate-900/5 px-3 py-1 text-xs font-bold text-slate-800 transition hover:bg-slate-900/10 active:scale-95"
-                >
-                  🛒 Ver ({cartTotalQty})
-                </button>
-              )}
-            </div>
-          )}
+
           <div className="grid grid-cols-[auto_1fr] gap-2">
             <button
               type="button"
-              onClick={() => setStep((s) => Math.max(0, s - 1))}
+              onClick={() => goToStep(step - 1)}
               disabled={step === 0}
               className="inline-flex min-h-[48px] items-center justify-center rounded-full border border-slate-300 bg-white px-5 text-sm font-bold text-slate-800 shadow-sm transition active:scale-95 disabled:opacity-30"
             >
@@ -1762,7 +2116,7 @@ export function CustomerCatalogView({
             {step < WIZARD_LAST ? (
               <button
                 type="button"
-                onClick={() => setStep((s) => Math.min(WIZARD_LAST, s + 1))}
+                onClick={() => goToStep(step + 1)}
                 className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-slate-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
               >
                 {step === 1 && !designUrl ? 'Seguir sin diseño →' : 'Siguiente →'}
@@ -1773,7 +2127,7 @@ export function CustomerCatalogView({
                 onClick={() => void handleSendOrderWhatsApp()}
                 className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-[#25D366] px-5 text-sm font-bold text-white shadow-md transition hover:bg-[#1ebe5b] active:scale-95"
               >
-                {isDeliveryReady ? '✅ Confirmar pedido por WhatsApp' : '🔒 Completa tus datos'}
+                {isDeliveryReady ? '✅ Confirmar y Enviar a WhatsApp' : '🔒 Completa nombre y WhatsApp'}
               </button>
             )}
           </div>
@@ -1873,27 +2227,34 @@ export function CustomerCatalogView({
           {customerCart.length > 0 && (
             <div className="border-t border-slate-100 pt-3 space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="font-semibold text-slate-600">Total a pagar:</span>
+                <span className="font-semibold text-slate-600">Total acumulado:</span>
                 <span className="text-xl font-extrabold text-slate-900">{money(cartTotalPrice)}</span>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button
                   type="button"
-                  onClick={() => setIsCartModalOpen(false)}
+                  onClick={() => {
+                    setIsCartModalOpen(false);
+                    goToStep(0);
+                  }}
                   className="flex-1 rounded-full border border-slate-200 bg-slate-50 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
                 >
-                  + Agregar más diseños
+                  + Agregar otra prenda
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     setIsCartModalOpen(false);
-                    void handleSendOrderWhatsApp();
+                    if (isDeliveryReady) {
+                      void handleSendOrderWhatsApp();
+                    } else {
+                      goToStep(WIZARD_LAST);
+                    }
                   }}
                   className="flex-1 rounded-full bg-slate-900 py-2.5 text-xs font-bold text-white shadow-md hover:bg-slate-800"
                 >
-                  Pedir por WhatsApp ahora
+                  {isDeliveryReady ? 'Confirmar por WhatsApp' : 'Ir a finalizar →'}
                 </button>
               </div>
 
@@ -1918,14 +2279,13 @@ export function CustomerCatalogView({
       <Modal
         open={!!orderSheetModal}
         onClose={() => setOrderSheetModal(null)}
-        title="Ficha de Pedido Lista"
+        title="¡Pedido listo para enviar!"
       >
         {orderSheetModal && (
           <div className="space-y-3">
-            <p className="text-xs text-slate-600">
-              Tu pedido con la vista en miniatura del diseño se ha enviado al sistema del Taller.
-              También puedes compartir o descargar el <b>PDF con la fotito</b>:
-            </p>
+            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+              <strong>✅ Registrado en Taller.</strong> Toca el botón verde para enviarlo por WhatsApp. Si quieres una copia, guarda o comparte tu PDF abajo.
+            </div>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
               <img
                 src={orderSheetModal.previewUrl}
@@ -1933,42 +2293,44 @@ export function CustomerCatalogView({
                 className="w-full object-contain"
               />
             </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <button
-                type="button"
-                onClick={() => {
-                  const f = orderSheetModal.pdfFile;
-                  downloadBlob(f.name, f);
-                  toast(`PDF guardado (${f.name})`, 'ok');
-                }}
-                className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-900 shadow-sm hover:bg-slate-50"
-              >
-                💾 Guardar PDF
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const f = orderSheetModal.pdfFile;
-                  const res = await sharePdfFileNative(f, {
-                    title: f.name,
-                    text: `Pedido #${orderSheetModal.orderId.slice(0, 6).toUpperCase()}`
-                  });
-                  if (res === 'downloaded') {
-                    toast(`PDF descargado (${f.name}) — ya puedes enviarlo por WhatsApp`, 'ok');
-                  }
-                }}
-                className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-3.5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
-              >
-                📤 Enviar PDF
-              </button>
+            <div className="space-y-2">
               <a
                 href={orderSheetModal.whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-3.5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-500"
+                className="inline-flex min-h-[50px] w-full items-center justify-center rounded-full bg-[#25D366] px-4 py-3 text-sm font-bold text-white shadow-md transition hover:bg-[#1ebe5b] active:scale-[0.99]"
               >
-                💬 Abrir WhatsApp
+                💬 Enviar Pedido por WhatsApp
               </a>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const f = orderSheetModal.pdfFile;
+                    downloadBlob(f.name, f);
+                    toast(`PDF guardado (${f.name})`, 'ok');
+                  }}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  📥 Guardar PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const f = orderSheetModal.pdfFile;
+                    const res = await sharePdfFileNative(f, {
+                      title: f.name,
+                      text: `Pedido #${orderSheetModal.orderId.slice(0, 6).toUpperCase()}`
+                    });
+                    if (res === 'downloaded') {
+                      toast(`PDF descargado (${f.name}) — ya puedes enviarlo por WhatsApp`, 'ok');
+                    }
+                  }}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  📤 Compartir PDF
+                </button>
+              </div>
             </div>
           </div>
         )}

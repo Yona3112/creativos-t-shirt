@@ -725,6 +725,7 @@ export function InteractiveShirt3D({
   const adminCarouselRef = useRef<HTMLDivElement>(null);
   const [isWesternModalOpen, setIsWesternModalOpen] = useState(false);
   const [showPositionSliders, setShowPositionSliders] = useState(false);
+  const [colorSwitchNote, setColorSwitchNote] = useState<string | null>(null);
   const [uploadModalState, setUploadModalState] = useState<
     { mode: 'files'; files: File[] } | { mode: 'current' } | null
   >(null);
@@ -803,7 +804,10 @@ export function InteractiveShirt3D({
         const next = findCompatibleColor(d, false);
         if (next && next.id !== current.id) {
           onSelectColor(next.id);
+          setColorSwitchNote(`Color ajustado a ${next.name} para resaltar este diseño`);
         }
+      } else {
+        setColorSwitchNote(null);
       }
     }
     onSelectCatalogDesign?.(d);
@@ -995,7 +999,6 @@ export function InteractiveShirt3D({
 
   if (!isStoreOwner) {
     const isBackSide = placement === 'back';
-    const currentSlideDesign = currentSlideIdx >= 0 ? readySlideDesigns[currentSlideIdx] : null;
     return (
       <div className="relative select-none space-y-4">
         {onUploadFile && (
@@ -1032,7 +1035,7 @@ export function InteractiveShirt3D({
                     type="button"
                     onClick={() => {
                       setTargetAngleY(angle);
-                      if (designUrl && (sideKey === 'back' || sideKey === 'center')) {
+                      if (sideKey === 'back' || sideKey === 'center') {
                         onDesignChange?.({ placement: sideKey, offsetX: 0, offsetY: 0 });
                       }
                     }}
@@ -1074,7 +1077,13 @@ export function InteractiveShirt3D({
             />
             <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/60 blur-md" />
 
-            {readySlideDesigns.length > 1 && (
+            {(!wizardStep || wizardStep === 'color') && !designUrl && (
+              <div className="pointer-events-none absolute bottom-5 z-10 rounded-full bg-black/55 px-3 py-1 text-[11px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-md">
+                📍 Zona de diseño: {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
+              </div>
+            )}
+
+            {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
               <>
                 <button
                   type="button"
@@ -1111,50 +1120,29 @@ export function InteractiveShirt3D({
             />
           </div>
 
-          {/* Selector de Ubicación del Estampado + Ajuste tipo Slide */}
+          {/* Ajuste rápido de posición y quitar diseño */}
           {designUrl && (!wizardStep || wizardStep === 'design') && (
             <div className="mt-1 space-y-2">
               <div className="flex flex-wrap items-center justify-center gap-1.5">
                 <div className="inline-flex items-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
                   <button
                     type="button"
-                    onClick={() => {
-                      onDesignChange?.({ placement: 'back', offsetX: 0, offsetY: 0 });
-                      setTargetAngleY(180);
-                    }}
-                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
-                      isBackSide ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    Espalda
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onDesignChange?.({ placement: 'center', offsetX: 0, offsetY: 0 });
-                      setTargetAngleY(0);
-                    }}
-                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
-                      !isBackSide ? 'bg-white text-slate-950 shadow-sm' : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    Frente
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setShowPositionSliders((v) => !v)}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
                       showPositionSliders
                         ? 'bg-white text-slate-950 shadow-sm'
-                        : 'text-white/80 hover:text-white'
+                        : 'text-white/85 hover:text-white'
                     }`}
                   >
-                    Mover
+                    ⌖ Ajustar diseño
                   </button>
                   {onClearDesign && (
                     <button
                       type="button"
-                      onClick={onClearDesign}
+                      onClick={() => {
+                        setColorSwitchNote(null);
+                        onClearDesign();
+                      }}
                       className="rounded-full px-3 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200"
                     >
                       Quitar
@@ -1174,14 +1162,14 @@ export function InteractiveShirt3D({
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[11px] font-semibold text-slate-700">
-                        Desliza para mover o ajustar el diseño
+                        Ajusta altura, centrado o tamaño
                       </span>
                       <button
                         type="button"
                         onClick={() => onDesignChange({ offsetX: 0, offsetY: 0, scale: 2.0 })}
                         className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
                       >
-                        Centrar A3
+                        Centrar
                       </button>
                     </div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -1237,74 +1225,95 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Selector de Color minimalista tipo Apple (respeta contraste negro/blanco del diseño) */}
-          {(!wizardStep || wizardStep === 'color') && colorOptions && colorOptions.length > 0 && onSelectColor && (() => {
-            const hasRestricted = colorOptions.some(
-              (c) => !isColorCompatibleWithDesign(c, activeCatalogDesign).allowed
-            );
-            const restrictionLabel =
-              activeCatalogDesign?.allowedColorMode === 'light_fabrics' ||
-              (!activeCatalogDesign?.allowedColorMode && activeCatalogDesign?.tone === 'dark')
-                ? 'Diseño de tinta oscura · disponible solo en telas claras'
-                : activeCatalogDesign?.allowedColorMode === 'dark_fabrics' ||
-                  (!activeCatalogDesign?.allowedColorMode && activeCatalogDesign?.tone === 'light')
-                ? 'Diseño claro · disponible solo en telas oscuras'
-                : 'Colores seleccionados para este diseño';
+          {/* Selector de Color: completo en Paso 1 y rápido (compatibles) en Paso 2 */}
+          {(!wizardStep || wizardStep === 'color' || wizardStep === 'design') &&
+            colorOptions &&
+            colorOptions.length > 0 &&
+            onSelectColor &&
+            (() => {
+              const inDesignStep = wizardStep === 'design';
+              const shownColors = inDesignStep && activeCatalogDesign
+                ? colorOptions.filter((c) => isColorCompatibleWithDesign(c, activeCatalogDesign).allowed)
+                : colorOptions;
+              const hasRestricted = colorOptions.some(
+                (c) => !isColorCompatibleWithDesign(c, activeCatalogDesign).allowed
+              );
+              const restrictionLabel =
+                activeCatalogDesign?.allowedColorMode === 'light_fabrics' ||
+                (!activeCatalogDesign?.allowedColorMode && activeCatalogDesign?.tone === 'dark')
+                  ? 'Diseño oscuro · se ve mejor en telas claras'
+                  : activeCatalogDesign?.allowedColorMode === 'dark_fabrics' ||
+                    (!activeCatalogDesign?.allowedColorMode && activeCatalogDesign?.tone === 'light')
+                  ? 'Diseño claro · se ve mejor en telas oscuras'
+                  : 'Colores disponibles para este diseño';
 
-            return (
-              <div className="mt-4 flex flex-col items-center gap-2 rounded-2xl bg-white/95 px-4 py-3 shadow-sm backdrop-blur-md">
-                <div className="text-xs font-medium text-slate-500">
-                  Color — <strong className="font-semibold text-slate-900">{colorName}</strong>
-                </div>
-                <div className="flex flex-wrap items-center justify-center gap-2.5">
-                  {colorOptions.map((c) => {
-                    const active = activeColorId ? c.id === activeColorId : c.name === colorName;
-                    const compat = isColorCompatibleWithDesign(c, activeCatalogDesign);
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        disabled={!compat.allowed}
-                        onClick={() => compat.allowed && onSelectColor(c.id)}
-                        title={compat.allowed ? c.name : `${c.name} · ${compat.reason}`}
-                        aria-label={compat.allowed ? c.name : `${c.name} no disponible`}
-                        className={`relative h-8 w-8 rounded-full border transition-transform duration-150 ${
-                          !compat.allowed
-                            ? 'cursor-not-allowed border-slate-300 opacity-25'
-                            : active
-                            ? 'scale-110 border-slate-900 ring-2 ring-slate-900 ring-offset-2'
-                            : 'border-black/20 hover:scale-105'
-                        }`}
-                        style={{ backgroundColor: c.hex }}
-                      >
-                        {!compat.allowed && (
-                          <span
-                            className="pointer-events-none absolute inset-0 flex items-center justify-center"
-                            aria-hidden="true"
-                          >
-                            <span className="h-[1.5px] w-7 -rotate-45 rounded bg-slate-700/80" />
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-                {hasRestricted && activeCatalogDesign && (
-                  <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-600">
-                    <span>{restrictionLabel}</span>
+              return (
+                <div className="mt-3 flex flex-col items-center gap-1.5 rounded-2xl bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur-md">
+                  <div className="text-xs font-medium text-slate-500">
+                    {inDesignStep ? 'Color de camisa: ' : 'Color — '}
+                    <strong className="font-semibold text-slate-900">{colorName}</strong>
                   </div>
-                )}
-              </div>
-            );
-          })()}
+                  {colorSwitchNote && inDesignStep && (
+                    <div className="rounded-full bg-amber-50 px-3 py-0.5 text-[11px] font-semibold text-amber-800">
+                      ✨ {colorSwitchNote}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    {shownColors.map((c) => {
+                      const active = activeColorId ? c.id === activeColorId : c.name === colorName;
+                      const compat = isColorCompatibleWithDesign(c, activeCatalogDesign);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          disabled={!compat.allowed}
+                          onClick={() => {
+                            if (compat.allowed) {
+                              setColorSwitchNote(null);
+                              onSelectColor(c.id);
+                            }
+                          }}
+                          title={compat.allowed ? c.name : `${c.name} · ${compat.reason}`}
+                          aria-label={compat.allowed ? c.name : `${c.name} no disponible`}
+                          className={`relative rounded-full border transition-transform duration-150 ${
+                            inDesignStep ? 'h-6 w-6' : 'h-8 w-8'
+                          } ${
+                            !compat.allowed
+                              ? 'cursor-not-allowed border-slate-300 opacity-25'
+                              : active
+                              ? 'scale-110 border-slate-900 ring-2 ring-slate-900 ring-offset-2'
+                              : 'border-black/20 hover:scale-105'
+                          }`}
+                          style={{ backgroundColor: c.hex }}
+                        >
+                          {!compat.allowed && (
+                            <span
+                              className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                              aria-hidden="true"
+                            >
+                              <span className="h-[1.5px] w-7 -rotate-45 rounded bg-slate-700/80" />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!inDesignStep && hasRestricted && activeCatalogDesign && (
+                    <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-0.5 text-[11px] font-medium text-slate-600">
+                      <span>{restrictionLabel}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
         </div>
 
-        {/* GALERÍA DE DISEÑOS TIPO SLIDE ESTILO APPLE (CON MÁS VENDIDOS AL INICIO) */}
+        {/* GALERÍA DE DISEÑOS TIPO SLIDE ESTILO APPLE / SHOPIFY */}
         {(!wizardStep || wizardStep === 'design') && (
         <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
-              <h3 className="text-sm font-semibold tracking-tight text-slate-900">Diseños</h3>
+              <h3 className="text-sm font-semibold tracking-tight text-slate-900">Elige un diseño</h3>
               {campaigns && campaigns.length > 0 && onChangeActiveCampaign && (
                 <div className="ml-1 flex flex-wrap items-center gap-1">
                   <button
@@ -1336,99 +1345,40 @@ export function InteractiveShirt3D({
               )}
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
-              {filteredCatalogDesigns.length > 2 && (
-                <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => scrollCarousel(clientCarouselRef, -1)}
-                    className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-slate-700 hover:bg-white"
-                    aria-label="Deslizar a la izquierda"
-                  >
-                    ‹
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => scrollCarousel(clientCarouselRef, 1)}
-                    className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-slate-700 hover:bg-white"
-                    aria-label="Deslizar a la derecha"
-                  >
-                    ›
-                  </button>
-                </div>
-              )}
               {onUploadFile && (
                 <button
                   type="button"
                   onClick={() => uploadInputRef.current?.click()}
-                  className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
+                  className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 active:scale-95"
                 >
-                  + Subir archivo A3
+                  📤 Subir mi imagen
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => setIsWesternModalOpen(true)}
-                className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 transition hover:bg-slate-50 active:scale-95"
+                className="rounded-full border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 active:scale-95"
               >
-                + Texto / Logo
+                ✎ Texto
               </button>
               {designUrl && onClearDesign && (
                 <button
                   type="button"
-                  onClick={onClearDesign}
-                  className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
+                  onClick={() => {
+                    setColorSwitchNote(null);
+                    onClearDesign();
+                  }}
+                  className="rounded-full bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
                 >
-                  Sin diseño
+                  Camisa lisa
                 </button>
               )}
             </div>
           </div>
 
-          {/* Control rápido tipo Slide para cambiar diseño */}
-          {readySlideDesigns.length > 1 && (
-            <div className="mb-3 flex items-center gap-3 rounded-2xl bg-slate-50 px-3 py-2">
-              <button
-                type="button"
-                onClick={() => stepCatalogDesign(-1)}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
-              >
-                ‹
-              </button>
-              <div className="flex flex-1 flex-col gap-1">
-                <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                  <span className="truncate font-semibold text-slate-900">
-                    {currentSlideDesign ? currentSlideDesign.name : 'Desliza para elegir diseño'}
-                  </span>
-                  <span>
-                    {currentSlideIdx >= 0 ? currentSlideIdx + 1 : 0} / {readySlideDesigns.length}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={readySlideDesigns.length - 1}
-                  step={1}
-                  value={currentSlideIdx >= 0 ? currentSlideIdx : 0}
-                  onChange={(e) => {
-                    const idx = Number(e.target.value);
-                    const target = readySlideDesigns[idx];
-                    if (target && onSelectCatalogDesign) {
-                      setShowcaseActive(false);
-                      applyCatalogDesignWithColorGuard(target);
-                    }
-                  }}
-                  className="w-full accent-slate-900"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => stepCatalogDesign(1)}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
-              >
-                ›
-              </button>
-            </div>
-          )}
+          <p className="mb-2.5 text-[11px] text-slate-500">
+            Desliza horizontalmente para ver diseños · Si subes imagen propia, ideal PNG sin fondo
+          </p>
 
           <div
             ref={clientCarouselRef}
@@ -1458,6 +1408,7 @@ export function InteractiveShirt3D({
                   onClick={() => {
                     setShowcaseActive(false);
                     if (isSelected && onClearDesign) {
+                      setColorSwitchNote(null);
                       onClearDesign();
                       return;
                     }

@@ -255,6 +255,19 @@ export async function shareLabel(o: Order, settings: Settings): Promise<'shared'
   return res === 'downloaded' ? 'downloaded' : 'shared';
 }
 
+export interface CatalogOrderCardItem {
+  brandName: string;
+  colorName: string;
+  colorHex: string;
+  size: string;
+  qty: number;
+  unitPrice: number;
+  designName?: string | null;
+  designCode?: string | null;
+  designUrl?: string | null;
+  placement?: string;
+}
+
 export interface CatalogOrderCardInput {
   orderId: string;
   storeName: string;
@@ -273,17 +286,31 @@ export interface CatalogOrderCardInput {
   customerPhone?: string;
   customerAddress?: string;
   stockNote?: string;
+  paymentLabel?: string;
+  items?: CatalogOrderCardItem[];
 }
 
 /**
  * Dibuja la Ficha Visual del Pedido (estilo Orden de Taller) con la fotito del diseño,
  * el color de la camisa, talla, cantidad, datos del cliente y precio total.
+ * Si incluye múltiples prendas en `items`, dibuja cada prenda con su propia miniatura.
  */
 export async function renderCatalogOrderCardCanvas(
   input: CatalogOrderCardInput
 ): Promise<HTMLCanvasElement> {
+  const multiItems = input.items && input.items.length > 1 ? input.items : null;
+  const visibleRows = multiItems ? multiItems.slice(0, 6) : [];
+  const extraRows = multiItems && multiItems.length > 6 ? multiItems.length - 6 : 0;
+  const rowH = 98;
+  const multiBlockH = multiItems
+    ? visibleRows.length * rowH + (extraRows > 0 ? 34 : 0) + 18
+    : 296;
+
   const W = 720;
-  const H = 920;
+  const custY = 160 + multiBlockH + 14;
+  const custH = 210;
+  const totY = custY + custH + 26;
+  const H = totY + 136 + 56;
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -332,129 +359,204 @@ export async function renderCatalogOrderCardCanvas(
   ctx.textAlign = 'right';
   ctx.fillText(fmtDate(Date.now()), W - 56, 76);
   ctx.fillStyle = '#E2E8F0';
-  ctx.fillText(money(input.unitPrice), W - 56, 106);
+  ctx.fillText(
+    multiItems ? `${input.qty} prendas` : money(input.unitPrice),
+    W - 56,
+    106
+  );
   ctx.textAlign = 'left';
 
-  // Sección de Vista Previa (Fotito del Diseño sobre el color de camisa)
-  const boxX = 56;
-  const boxY = 160;
-  const boxW = 280;
-  const boxH = 280;
+  if (multiItems) {
+    let rowY = 160;
+    for (let idx = 0; idx < visibleRows.length; idx++) {
+      const it = visibleRows[idx];
+      ctx.fillStyle = '#F8FAFC';
+      roundRect(56, rowY, W - 112, 86, 18);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#E2E8F0';
+      ctx.stroke();
 
-  ctx.fillStyle = input.colorHex || '#1A1A1C';
-  roundRect(boxX, boxY, boxW, boxH, 24);
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#CBD5E1';
-  ctx.stroke();
+      // Miniatura de diseño sobre color de tela
+      const tx = 68;
+      const ty = rowY + 11;
+      const ts = 64;
+      ctx.fillStyle = it.colorHex || '#1A1A1C';
+      roundRect(tx, ty, ts, ts, 12);
+      ctx.fill();
+      ctx.strokeStyle = '#CBD5E1';
+      ctx.stroke();
 
-  if (input.designUrl) {
-    const img = await loadImageSafe(input.designUrl);
-    if (img) {
-      const pad = 28;
-      const availW = boxW - pad * 2;
-      const availH = boxH - pad * 2;
-      const scale = Math.min(availW / (img.naturalWidth || 1), availH / (img.naturalHeight || 1));
-      const dw = (img.naturalWidth || 1) * scale;
-      const dh = (img.naturalHeight || 1) * scale;
-      const dx = boxX + (boxW - dw) / 2;
-      const dy = boxY + (boxH - dh) / 2;
-      ctx.drawImage(img, dx, dy, dw, dh);
+      if (it.designUrl) {
+        const img = await loadImageSafe(it.designUrl);
+        if (img) {
+          const pad = 7;
+          const sc = Math.min((ts - pad * 2) / (img.naturalWidth || 1), (ts - pad * 2) / (img.naturalHeight || 1));
+          const dw = (img.naturalWidth || 1) * sc;
+          const dh = (img.naturalHeight || 1) * sc;
+          ctx.drawImage(img, tx + (ts - dw) / 2, ty + (ts - dh) / 2, dw, dh);
+        }
+      } else {
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('LISA', tx + ts / 2, ty + ts / 2 + 4);
+        ctx.textAlign = 'left';
+      }
+
+      const sideText = it.designUrl ? (it.placement === 'back' ? 'Espalda' : 'Frente') : 'Lisa';
+      const titleLine = it.designName
+        ? `${it.designCode ? `[${it.designCode}] ` : ''}${it.designName}`
+        : 'Camisa Lisa';
+      ctx.fillStyle = '#0F172A';
+      ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(titleLine.slice(0, 30), 148, rowY + 36);
+
+      ctx.fillStyle = '#475569';
+      ctx.font = '600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(`${it.colorName} · Talla ${it.size} · ${sideText}`, 148, rowY + 62);
+
+      // Píldora cantidad + subtotal derecha
+      ctx.fillStyle = '#0F172A';
+      ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${it.qty} × ${money(it.unitPrice)}`, W - 76, rowY + 36);
+      ctx.fillStyle = '#059669';
+      ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(money(it.qty * it.unitPrice), W - 76, rowY + 62);
+      ctx.textAlign = 'left';
+
+      rowY += rowH;
+    }
+
+    if (extraRows > 0) {
+      ctx.fillStyle = '#475569';
+      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`+ ${extraRows} prenda(s) adicional(es) en el detalle de WhatsApp`, W / 2, rowY + 14);
+      ctx.textAlign = 'left';
     }
   } else {
-    ctx.fillStyle = '#94A3B8';
-    ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('CAMISA LISA', boxX + boxW / 2, boxY + boxH / 2 + 6);
-    ctx.textAlign = 'left';
-  }
+    // Sección de Vista Previa única (Fotito del Diseño sobre el color de camisa)
+    const boxX = 56;
+    const boxY = 160;
+    const boxW = 280;
+    const boxH = 280;
 
-  // Etiqueta sobre la fotito indicando el lado
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-  roundRect(boxX + 14, boxY + boxH - 42, boxW - 28, 30, 10);
-  ctx.fill();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.textAlign = 'center';
-  const sideText = input.designUrl
-    ? input.placement === 'back'
-      ? 'ESPALDA · A3'
-      : 'FRENTE · A3'
-    : 'SIN DISEÑO';
-  ctx.fillText(sideText, boxX + boxW / 2, boxY + boxH - 22);
-  ctx.textAlign = 'left';
+    ctx.fillStyle = input.colorHex || '#1A1A1C';
+    roundRect(boxX, boxY, boxW, boxH, 24);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.stroke();
 
-  // Columna derecha: Especificaciones de Taller (Talla, Color, Cantidad, Diseño)
-  const rightX = 364;
-  let ry = 182;
+    if (input.designUrl) {
+      const img = await loadImageSafe(input.designUrl);
+      if (img) {
+        const pad = 28;
+        const availW = boxW - pad * 2;
+        const availH = boxH - pad * 2;
+        const scale = Math.min(availW / (img.naturalWidth || 1), availH / (img.naturalHeight || 1));
+        const dw = (img.naturalWidth || 1) * scale;
+        const dh = (img.naturalHeight || 1) * scale;
+        const dx = boxX + (boxW - dw) / 2;
+        const dy = boxY + (boxH - dh) / 2;
+        ctx.drawImage(img, dx, dy, dw, dh);
+      }
+    } else {
+      ctx.fillStyle = '#94A3B8';
+      ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CAMISA LISA', boxX + boxW / 2, boxY + boxH / 2 + 6);
+      ctx.textAlign = 'left';
+    }
 
-  // Píldora gigante de TALLA y CANTIDAD
-  ctx.fillStyle = '#0F172A';
-  roundRect(rightX, ry - 22, 140, 56, 14);
-  ctx.fill();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(`TALLA ${input.size}`, rightX + 70, ry + 14);
-
-  ctx.fillStyle = '#EFF6FF';
-  roundRect(rightX + 152, ry - 22, 148, 56, 14);
-  ctx.fill();
-  ctx.fillStyle = '#1E3A8A';
-  ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText(`CANT: ${input.qty}`, rightX + 226, ry + 14);
-  ctx.textAlign = 'left';
-
-  ry += 66;
-  ctx.fillStyle = '#64748B';
-  ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText('COLOR Y MARCA', rightX, ry);
-
-  ry += 26;
-  ctx.beginPath();
-  ctx.arc(rightX + 12, ry - 7, 11, 0, Math.PI * 2);
-  ctx.fillStyle = input.colorHex || '#1A1A1C';
-  ctx.fill();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = '#94A3B8';
-  ctx.stroke();
-
-  ctx.fillStyle = '#0F172A';
-  ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText(`${input.colorName}`, rightX + 32, ry);
-
-  ry += 24;
-  ctx.fillStyle = '#475569';
-  ctx.font = '600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText(input.brandName, rightX, ry);
-
-  ry += 38;
-  ctx.fillStyle = '#64748B';
-  ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText('DISEÑO SOLICITADO', rightX, ry);
-
-  ry += 24;
-  ctx.fillStyle = '#0F172A';
-  ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  const designTitle = input.designUrl
-    ? `${input.designCode ? `[${input.designCode}] ` : ''}${input.designName || 'Diseño'}`
-    : 'L 300.00 (Sin diseño)';
-  for (const ln of wrapText(designTitle, 26).slice(0, 2)) {
-    ctx.fillText(ln, rightX, ry);
-    ry += 22;
-  }
-
-  if (input.stockNote) {
-    ry += 8;
-    ctx.fillStyle = '#059669';
+    // Etiqueta sobre la fotito indicando el lado
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    roundRect(boxX + 14, boxY + boxH - 42, boxW - 28, 30, 10);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    ctx.fillText(input.stockNote.slice(0, 36), rightX, ry);
+    ctx.textAlign = 'center';
+    const sideText = input.designUrl
+      ? input.placement === 'back'
+        ? 'ESPALDA'
+        : 'FRENTE'
+      : 'SIN DISEÑO';
+    ctx.fillText(sideText, boxX + boxW / 2, boxY + boxH - 22);
+    ctx.textAlign = 'left';
+
+    // Columna derecha: Especificaciones de Taller (Talla, Color, Cantidad, Diseño)
+    const rightX = 364;
+    let ry = 182;
+
+    // Píldora gigante de TALLA y CANTIDAD
+    ctx.fillStyle = '#0F172A';
+    roundRect(rightX, ry - 22, 140, 56, 14);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`TALLA ${input.size}`, rightX + 70, ry + 14);
+
+    ctx.fillStyle = '#EFF6FF';
+    roundRect(rightX + 152, ry - 22, 148, 56, 14);
+    ctx.fill();
+    ctx.fillStyle = '#1E3A8A';
+    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText(`CANT: ${input.qty}`, rightX + 226, ry + 14);
+    ctx.textAlign = 'left';
+
+    ry += 66;
+    ctx.fillStyle = '#64748B';
+    ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText('COLOR Y MARCA', rightX, ry);
+
+    ry += 26;
+    ctx.beginPath();
+    ctx.arc(rightX + 12, ry - 7, 11, 0, Math.PI * 2);
+    ctx.fillStyle = input.colorHex || '#1A1A1C';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#94A3B8';
+    ctx.stroke();
+
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText(`${input.colorName}`, rightX + 32, ry);
+
+    ry += 24;
+    ctx.fillStyle = '#475569';
+    ctx.font = '600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText(input.brandName, rightX, ry);
+
+    ry += 38;
+    ctx.fillStyle = '#64748B';
+    ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText('DISEÑO SOLICITADO', rightX, ry);
+
+    ry += 24;
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    const designTitle = input.designUrl
+      ? `${input.designCode ? `[${input.designCode}] ` : ''}${input.designName || 'Diseño'}`
+      : 'Camisa Lisa (Sin diseño)';
+    for (const ln of wrapText(designTitle, 26).slice(0, 2)) {
+      ctx.fillText(ln, rightX, ry);
+      ry += 22;
+    }
+
+    if (input.stockNote) {
+      ry += 8;
+      ctx.fillStyle = '#059669';
+      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(input.stockNote.slice(0, 36), rightX, ry);
+    }
   }
 
   // Bloque de Datos del Cliente
-  const custY = 472;
   ctx.fillStyle = '#F8FAFC';
-  roundRect(56, custY, W - 112, 210, 20);
+  roundRect(56, custY, W - 112, custH, 20);
   ctx.fill();
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = '#E2E8F0';
@@ -482,8 +584,14 @@ export async function renderCatalogOrderCardCanvas(
     cy += 22;
   }
 
+  if (input.paymentLabel) {
+    cy += 4;
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText(`Pago: ${input.paymentLabel}`, 80, cy);
+  }
+
   // Barra inferior de Total
-  const totY = 712;
   ctx.fillStyle = '#0F172A';
   roundRect(56, totY, W - 112, 136, 22);
   ctx.fill();
@@ -494,7 +602,11 @@ export async function renderCatalogOrderCardCanvas(
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '600 19px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx.fillText(`${input.qty} × ${money(input.unitPrice)}`, 84, totY + 84);
+  ctx.fillText(
+    multiItems ? `${input.qty} prendas variadas` : `${input.qty} × ${money(input.unitPrice)}`,
+    84,
+    totY + 84
+  );
 
   ctx.fillStyle = '#38BDF8';
   ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
@@ -604,7 +716,8 @@ export function packCanvasesToPdfFile(
 export async function buildCatalogOrderPdfFile(input: CatalogOrderCardInput): Promise<File> {
   const canvas = await renderCatalogOrderCardCanvas(input);
   const shortId = input.orderId.slice(0, 6).toUpperCase();
-  return packCanvasesToPdfFile([canvas], `Pedido-${shortId}.pdf`, 360, 460);
+  const pageH = Math.round(360 * (canvas.height / canvas.width));
+  return packCanvasesToPdfFile([canvas], `Pedido-${shortId}.pdf`, 360, pageH);
 }
 
 function wrapCanvasTextByWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
