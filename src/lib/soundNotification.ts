@@ -102,7 +102,7 @@ export function notifyIncomingOrder(opts: {
       const body = `${opts.customerName} acaba de pedir ${opts.qty} camisa(s) ${opts.colorName} (Talla ${opts.size}) · ${opts.totalText}`;
       new Notification(title, {
         body,
-        icon: '/favicon.ico',
+        icon: '/pwa-192x192-v3.png',
         tag: 'cgs-web-order'
       });
     } catch {}
@@ -131,7 +131,7 @@ export function notifyLowStockColor(opts: {
       const body = `Quedan ${opts.totalStock} unidades de ${opts.brandName} · ${opts.colorName} (${opts.sizesText}).`;
       new Notification(title, {
         body,
-        icon: '/favicon.ico',
+        icon: '/pwa-192x192-v3.png',
         tag: `cgs-low-stock-${opts.brandName}-${opts.colorName}`
       });
     } catch {}

@@ -1728,16 +1728,27 @@ export function CustomerCatalogView({
             </div>
           </div>
           {step === WIZARD_LAST && (
-            <button
-              type="button"
-              onClick={() => {
-                handleAddToCart();
-                setStep(0);
-              }}
-              className="w-full text-center text-[11px] font-semibold text-slate-500 underline-offset-2 hover:text-slate-900 hover:underline"
-            >
-              + Agregar otra prenda a mi pedido
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  handleAddToCart();
+                  setStep(0);
+                }}
+                className="inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3.5 py-1 text-xs font-bold text-slate-900 shadow-sm transition hover:border-slate-400 hover:bg-slate-200 active:scale-95"
+              >
+                + Agregar otra prenda a mi pedido
+              </button>
+              {customerCart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsCartModalOpen(true)}
+                  className="inline-flex min-h-[34px] items-center justify-center rounded-full border border-slate-900/15 bg-slate-900/5 px-3 py-1 text-xs font-bold text-slate-800 transition hover:bg-slate-900/10 active:scale-95"
+                >
+                  🛒 Ver ({cartTotalQty})
+                </button>
+              )}
+            </div>
           )}
           <div className="grid grid-cols-[auto_1fr] gap-2">
             <button

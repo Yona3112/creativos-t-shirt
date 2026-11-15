@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.png', 'apple-touch-icon.png', 'pwa-maskable-512x512.png', 'shirt_baked.glb'],
+      includeAssets: ['favicon-v3.png', 'apple-touch-icon-v3.png', 'pwa-maskable-512x512-v3.png', 'shirt_baked.glb'],
       manifest: {
         name: 'T Shirt Creativos — Gift Shop',
         short_name: 'T Shirt Creativos',
@@ -20,9 +20,9 @@ export default defineConfig({
         background_color: '#000000',
         theme_color: '#000000',
         icons: [
-          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: 'pwa-maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+          { src: 'pwa-192x192-v3.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-512x512-v3.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-maskable-512x512-v3.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
         ]
       },
       workbox: {
