@@ -55,14 +55,23 @@ export function tierPrice(settings: Settings, brand: Brand | undefined, _totalQt
   return normalPrice(settings, brand);
 }
 
-/** Precios del carrito respetan precio unitario según tipo de prenda (Lisa L 300 vs Personalizada L 350). */
+export function isCustomOrderSpec(spec: {
+  workType?: string | null;
+  photo?: string | null;
+  photoId?: string | null;
+  designId?: string | null;
+  designName?: string | null;
+}): boolean {
+  const isPlain = typeof spec.workType === 'string' && spec.workType.toLowerCase().includes('lisa');
+  if (isPlain) return false;
+  return Boolean(spec.photo || spec.photoId || spec.designId || spec.designName || spec.workType);
+}
+
+/** Precios del carrito respetan precio unitario según tipo de prenda (Lisa vs Personalizada). */
 export function repriceCart(lines: CartLine[], settings: Settings, brands: Brand[]): CartLine[] {
   return lines.map((l) => {
     if (l.manualPrice) return l;
-    const isPlainWork = typeof l.workType === 'string' && l.workType.toLowerCase().includes('lisa');
-    const isCustomLine = isPlainWork
-      ? false
-      : Boolean(l.workType || l.photoId || l.photo || l.designId || l.designName);
+    const isCustomLine = isCustomOrderSpec(l);
     const p = isCustomLine
       ? customPrice(settings)
       : tierPrice(settings, brands.find((b) => b.id === l.brandId), l.qty);

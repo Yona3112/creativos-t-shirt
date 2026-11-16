@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Order, OrderStatus, Settings } from '../lib/types';
 import { notifyPhotos, useAppState } from '../lib/store';
 import { folioLabel, uid } from '../lib/ids';
 import { fromCents, money, toCents } from '../lib/money';
 import { dayKey, fmtDateTime } from '../lib/time';
-import { deleteOrder, markPaid, orderStockReturnCount, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL } from '../lib/actions';
+import { deleteOrder, markPaid, orderStockReturnCount, patchOrder, setOrderStatus, STATUS_FLOW, STATUS_LABEL, updateOrderDetails } from '../lib/actions';
 import { printDailyOrdersReport } from '../lib/printReports';
 import { shareLabel } from '../lib/pdf';
 import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
@@ -14,22 +14,30 @@ import { uploadPhotoNow } from '../lib/sync';
 import { copyText } from '../lib/csv';
 import { buildBoxfulClipboardSummary, createBoxfulShipment, getBoxfulConfig } from '../lib/boxful';
 import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
-import { ColorDot, Confirm, Empty, Modal, PhotoViewer, toast, usePhoto } from '../components/ui';
+import { ColorDot, Confirm, Empty, Modal, PhotoViewer, StatusBadge, toast, usePhoto } from '../components/ui';
 
-const STATUS_STYLE: Record<OrderStatus, string> = {
-  borrador: 'bg-slate-200 text-slate-800',
-  en_produccion: 'bg-amber-100 text-amber-900',
-  enviado: 'bg-sky-100 text-sky-900',
-  entregado: 'bg-emerald-100 text-emerald-900',
-  cancelado: 'bg-red-100 text-red-800'
-};
+export { StatusBadge };
 
-export function StatusBadge({ status }: { status: OrderStatus }) {
-  return (
-    <span className={`rounded-full px-2.5 py-0.5 text-xs font-extrabold ${STATUS_STYLE[status]}`}>
-      {STATUS_LABEL[status]}
-    </span>
-  );
+type OrderFilter = 'all' | 'por_cobrar' | OrderStatus;
+const VALID_FILTERS = new Set<OrderFilter>(['all', 'por_cobrar', ...STATUS_FLOW, 'cancelado']);
+
+function readInitialOrderFilter(): OrderFilter {
+  try {
+    const v = sessionStorage.getItem('cgs_orders_filter') as OrderFilter | null;
+    sessionStorage.removeItem('cgs_orders_filter');
+    if (v && VALID_FILTERS.has(v)) return v;
+  } catch {}
+  return 'all';
+}
+
+function readInitialOrderQuery(): string {
+  try {
+    const q = sessionStorage.getItem('cgs_orders_query') || '';
+    sessionStorage.removeItem('cgs_orders_query');
+    return q;
+  } catch {
+    return '';
+  }
 }
 
 export default function Orders() {
@@ -37,20 +45,33 @@ export default function Orders() {
   const { settings } = state;
   const today = dayKey();
 
-  const [filter, setFilter] = useState<'all' | OrderStatus>('all');
-  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<OrderFilter>(readInitialOrderFilter);
+  const [query, setQuery] = useState(readInitialOrderQuery);
   const [printDate, setPrintDate] = useState(today);
   const [onlySelectedDay, setOnlySelectedDay] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(25);
   const [viewer, setViewer] = useState<string | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<Order | null>(null);
   const [pdfModal, setPdfModal] = useState<{ orders: Order[]; title: string } | null>(null);
 
+  useEffect(() => {
+    setVisibleCount(25);
+  }, [filter, query, onlySelectedDay, printDate]);
+
+  const receivableCount = useMemo(
+    () =>
+      state.orders.filter(
+        (o) => !o.deleted && o.status !== 'cancelado' && o.status !== 'borrador' && o.balance > 0
+      ).length,
+    [state.orders]
+  );
+
   const dayOrders = useMemo(
     () =>
       state.orders
-        .filter((o) => !o.deleted && o.status !== 'cancelado' && dayKey(o.createdAt) === printDate)
+        .filter((o) => !o.deleted && o.status !== 'cancelado' && o.status !== 'borrador' && dayKey(o.createdAt) === printDate)
         .sort((a, b) => a.folio - b.folio),
     [state.orders, printDate]
   );
@@ -60,7 +81,13 @@ export default function Orders() {
     return state.orders
       .filter((o) => !o.deleted)
       .filter((o) => (onlySelectedDay ? dayKey(o.createdAt) === printDate : true))
-      .filter((o) => (filter === 'all' ? true : o.status === filter))
+      .filter((o) => {
+        if (filter === 'all') return true;
+        if (filter === 'por_cobrar') {
+          return o.status !== 'cancelado' && o.status !== 'borrador' && o.balance > 0;
+        }
+        return o.status === filter;
+      })
       .filter((o) => {
         if (!q) return true;
         return (
@@ -70,11 +97,21 @@ export default function Orders() {
           o.shipTo.phone.toLowerCase().includes(q) ||
           o.trackingNumber.toLowerCase().includes(q) ||
           (o.designCode || '').toLowerCase().includes(q) ||
-          (o.designName || '').toLowerCase().includes(q)
+          (o.designName || '').toLowerCase().includes(q) ||
+          o.items.some(
+            (it) =>
+              (it.designCode || '').toLowerCase().includes(q) ||
+              (it.designName || '').toLowerCase().includes(q) ||
+              (it.colorName || '').toLowerCase().includes(q) ||
+              (it.brandName || '').toLowerCase().includes(q) ||
+              (it.size || '').toLowerCase() === q
+          )
         );
       })
       .sort((a, b) => b.folio - a.folio);
   }, [state.orders, onlySelectedDay, printDate, filter, query]);
+
+  const visibleOrders = useMemo(() => orders.slice(0, visibleCount), [orders, visibleCount]);
 
   return (
     <div className="space-y-4">
@@ -147,20 +184,50 @@ export default function Orders() {
           </div>
         </div>
 
-        <input
-          className="input"
-          placeholder="Buscar por folio, cliente, teléfono o guía..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className="flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="Buscar por folio, cliente, diseño, color, talla o guía..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              className="btn-ghost shrink-0 px-3 text-xs"
+              title="Limpiar búsqueda"
+            >
+              ✕ Limpiar
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap gap-1.5">
-          {(['all', ...STATUS_FLOW, 'cancelado'] as const).map((st) => (
+          <button
+            className={`chip px-3 text-sm ${filter === 'all' ? 'chip-on' : 'chip-off'}`}
+            onClick={() => setFilter('all')}
+          >
+            Todos
+          </button>
+          <button
+            className={`chip px-3 text-sm ${
+              filter === 'por_cobrar'
+                ? 'bg-rose-600 text-white shadow'
+                : receivableCount > 0
+                ? 'border border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100'
+                : 'chip-off'
+            }`}
+            onClick={() => setFilter('por_cobrar')}
+          >
+            💸 Por cobrar ({receivableCount})
+          </button>
+          {([...STATUS_FLOW, 'cancelado'] as const).map((st) => (
             <button
               key={st}
               className={`chip px-3 text-sm ${filter === st ? 'chip-on' : 'chip-off'}`}
               onClick={() => setFilter(st)}
             >
-              {st === 'all' ? 'Todos' : STATUS_LABEL[st]}
+              {STATUS_LABEL[st]}
             </button>
           ))}
         </div>
@@ -170,7 +237,7 @@ export default function Orders() {
         <Empty icon="📦" text="Sin pedidos" />
       ) : (
         <div className="space-y-3">
-          {orders.map((o) => (
+          {visibleOrders.map((o) => (
             <OrderCard
               key={o.id}
               order={o}
@@ -187,6 +254,15 @@ export default function Orders() {
               }
             />
           ))}
+          {orders.length > visibleOrders.length && (
+            <button
+              type="button"
+              onClick={() => setVisibleCount((c) => c + 25)}
+              className="btn-soft w-full py-3 text-sm font-extrabold"
+            >
+              Mostrar más pedidos ({orders.length - visibleOrders.length} restantes)
+            </button>
+          )}
         </div>
       )}
 
@@ -214,7 +290,11 @@ export default function Orders() {
               })()
             : ''
         }
-        confirmLabel="Sí, eliminar y devolver stock"
+        confirmLabel={
+          confirmDeleteOrder && orderStockReturnCount(confirmDeleteOrder) > 0
+            ? 'Sí, eliminar y devolver stock'
+            : 'Sí, eliminar pedido'
+        }
         danger
         onConfirm={() => {
           if (confirmDeleteOrder) {
@@ -354,6 +434,12 @@ function OrderCard({
   const [busyPdf, setBusyPdf] = useState(false);
   const [busyBoxful, setBusyBoxful] = useState(false);
 
+  useEffect(() => {
+    setCarrier(order.carrier || settings.carriers[0] || '');
+    setTracking(order.trackingNumber || '');
+    setTrackingUrl(order.trackingUrl || '');
+  }, [order.id, order.carrier, order.trackingNumber, order.trackingUrl, settings.carriers]);
+
   const saveTracking = (nextCarrier = carrier, nextTracking = tracking, nextUrl = trackingUrl) => {
     patchOrder(order.id, {
       carrier: nextCarrier,
@@ -410,7 +496,6 @@ function OrderCard({
 
   const handleQuickSendGuideWsp = async () => {
     saveTracking();
-    patchOrder(order.id, { whatsappSentAt: Date.now() });
     const msg = fillTemplate(
       order.status === 'enviado' || tracking.trim() || guidePhoto ? settings.waShipped : settings.waReady,
       {
@@ -422,7 +507,7 @@ function OrderCard({
       settings
     );
 
-    // Si hay foto de la guía subida y el dispositivo soporta compartir archivos nativos (móvil), ofrecer compartir imagen + texto
+    // Si hay foto de la guía subida y el dispositivo soporta compartir archivos nativos (móvil), compartir imagen + texto
     if (guidePhoto && navigator.share) {
       try {
         const blob = await (await fetch(guidePhoto)).blob();
@@ -433,6 +518,7 @@ function OrderCard({
             text: msg,
             files: [file]
           });
+          patchOrder(order.id, { whatsappSentAt: Date.now() });
           return;
         }
       } catch {
@@ -440,6 +526,13 @@ function OrderCard({
       }
     }
 
+    const phoneDigits = (order.shipTo.phone || '').replace(/\D/g, '');
+    if (phoneDigits.length < 8) {
+      toast('Agrega un teléfono válido al pedido para abrir WhatsApp directo', 'info');
+      return;
+    }
+
+    patchOrder(order.id, { whatsappSentAt: Date.now() });
     const href = whatsappUrl(order.shipTo.phone, msg);
     window.open(href, '_blank', 'noopener,noreferrer');
   };
@@ -473,18 +566,7 @@ function OrderCard({
     }
   };
 
-  const updatedOrder: Order = {
-    ...order,
-    carrier,
-    trackingNumber: tracking.trim(),
-    trackingUrl: trackingUrl.trim()
-  };
-  const waTpl =
-    order.status === 'enviado' || tracking.trim() ? settings.waShipped : settings.waReady;
-  const waHref = whatsappUrl(
-    order.shipTo.phone,
-    fillTemplate(waTpl, updatedOrder, settings)
-  );
+  const hasGuideOrTracking = Boolean(guidePhoto || tracking.trim() || order.status === 'enviado');
 
   return (
     <article className="card space-y-3">
@@ -593,7 +675,7 @@ function OrderCard({
         </ul>
       </div>
 
-      {/* Transportista, Subida de Guía, Boxful y Botón Pequeño Enviar por WSP */}
+      {/* Transportista, Subida de Guía y Boxful */}
       {order.status !== 'cancelado' && (
         <div className="space-y-2.5 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -629,39 +711,24 @@ function OrderCard({
               >
                 📦 {busyBoxful ? 'Boxful...' : 'Boxful'}
               </button>
-              <button
-                type="button"
-                onClick={() => void handleQuickSendGuideWsp()}
-                className="inline-flex items-center gap-1 rounded-lg bg-[#25D366] px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#1ebe5b]"
-                title="Enviar guía y datos de rastreo al cliente por WhatsApp"
-              >
-                💬 Enviar por WSP
-              </button>
             </div>
           </div>
 
           {guidePhoto && (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-2">
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => onZoom(guidePhoto)}
-                  className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-emerald-300 bg-white"
-                >
-                  <img src={guidePhoto} alt="Guía de envío" className="h-full w-full object-cover" />
-                </button>
-                <div className="text-xs">
-                  <div className="font-extrabold text-emerald-950">✓ Guía de envío adjunta</div>
-                  <div className="text-emerald-700">Toca la miniatura para ver en pantalla completa</div>
-                </div>
-              </div>
+            <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/70 p-2">
               <button
                 type="button"
-                onClick={() => void handleQuickSendGuideWsp()}
-                className="rounded-lg bg-[#25D366] px-2.5 py-1.5 text-xs font-extrabold text-white shadow-sm hover:bg-[#1ebe5b]"
+                onClick={() => onZoom(guidePhoto)}
+                className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-emerald-300 bg-white"
               >
-                💬 Enviar por WSP
+                <img src={guidePhoto} alt="Guía de envío" className="h-full w-full object-cover" />
               </button>
+              <div className="text-xs">
+                <div className="font-extrabold text-emerald-950">✓ Guía de envío adjunta</div>
+                <div className="text-emerald-700">
+                  Se adjunta automáticamente al tocar &quot;WhatsApp Guía&quot; (toca la foto para ampliar)
+                </div>
+              </div>
             </div>
           )}
 
@@ -734,7 +801,7 @@ function OrderCard({
         </div>
       )}
 
-      {/* Acciones de PDF taller, etiqueta y WhatsApp */}
+      {/* Acciones de PDF taller, etiqueta y WhatsApp unificado */}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <button type="button" className="btn-primary" onClick={onOpenWorkshopPdf}>
           🧾 Orden Taller PDF
@@ -742,15 +809,19 @@ function OrderCard({
         <button className="btn-soft" onClick={handlePdf} disabled={busyPdf}>
           📄 {busyPdf ? 'Generando...' : `Etiqueta PDF`}
         </button>
-        <a
+        <button
+          type="button"
           className="btn bg-[#25D366] text-white hover:bg-[#1ebe5b]"
-          href={waHref}
-          target="_blank"
-          rel="noreferrer"
-          onClick={() => patchOrder(order.id, { whatsappSentAt: Date.now() })}
+          onClick={() => void handleQuickSendGuideWsp()}
+          title="Enviar guía / aviso al cliente por WhatsApp (incluye foto de guía si el dispositivo lo soporta)"
         >
-          💬 WhatsApp Guía
-        </a>
+          <span>💬 {hasGuideOrTracking ? 'WhatsApp Guía' : 'WhatsApp Cliente'}</span>
+          {order.whatsappSentAt && (
+            <span className="ml-1 rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] font-bold">
+              ✓
+            </span>
+          )}
+        </button>
       </div>
     </article>
   );
@@ -779,11 +850,14 @@ function EditOrderModal({
     order.items.map((it) => ({
       ...it,
       priceInput: String(fromCents(it.unitPrice)),
-      qtyInput: String(it.qty)
+      qtyInput: String(it.qty),
+      designCodeInput: it.designCode || (order.items.length === 1 ? order.designCode || '' : ''),
+      designNameInput: it.designName || (order.items.length === 1 ? order.designName || '' : '')
     }))
   );
 
   const handleSave = () => {
+    const isSingleItem = items.length === 1;
     const nextItems = items.map((it) => ({
       id: it.id,
       brandId: it.brandId,
@@ -798,18 +872,26 @@ function EditOrderModal({
       colorHex: it.colorHex,
       sku: it.sku,
       designId: it.designId || null,
-      designName: it.designName || null,
-      designCode: it.designCode || null,
+      designName: isSingleItem
+        ? (designName.trim() || it.designNameInput.trim() || null)
+        : (it.designNameInput.trim() || null),
+      designCode: isSingleItem
+        ? (designCode.trim().toUpperCase() || it.designCodeInput.trim().toUpperCase() || null)
+        : (it.designCodeInput.trim().toUpperCase() || null),
       photoId: it.photoId || null,
       photoUrl: null,
       placement: it.placement || null
     }));
+    const itemDesignNames = Array.from(
+      new Set(nextItems.map((i) => i.designName).filter((x): x is string => Boolean(x)))
+    );
+    const firstItemCode = nextItems.find((i) => i.designCode)?.designCode || null;
     const subtotal = nextItems.reduce((sum, i) => sum + i.qty * i.unitPrice, 0);
     const shipCents = toCents(shipping);
     const total = subtotal + shipCents;
     const depCents = Math.min(total, Math.max(0, toCents(deposit)));
 
-    patchOrder(order.id, {
+    updateOrderDetails(order.id, {
       shipTo: {
         name: name.trim(),
         phone: phone.trim(),
@@ -817,8 +899,12 @@ function EditOrderModal({
       },
       workType,
       paymentMethod,
-      designName: designName.trim() || null,
-      designCode: designCode.trim().toUpperCase() || null,
+      designName: isSingleItem
+        ? (designName.trim() || null)
+        : (itemDesignNames.length > 0 ? itemDesignNames.join(' + ') : designName.trim() || null),
+      designCode: isSingleItem
+        ? (designCode.trim().toUpperCase() || null)
+        : (designCode.trim().toUpperCase() || firstItemCode),
       notes: notes.trim(),
       items: nextItems,
       subtotal,
@@ -892,61 +978,95 @@ function EditOrderModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <div>
-            <label className="label">Código diseño</label>
-            <input
-              className="input uppercase"
-              value={designCode}
-              onChange={(e) => setDesignCode(e.target.value.toUpperCase())}
-              placeholder="D-001"
-            />
+        {items.length <= 1 && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div>
+              <label className="label">Código diseño</label>
+              <input
+                className="input uppercase"
+                value={designCode}
+                onChange={(e) => setDesignCode(e.target.value.toUpperCase())}
+                placeholder="D-001"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Nombre del diseño</label>
+              <input
+                className="input"
+                value={designName}
+                onChange={(e) => setDesignName(e.target.value)}
+                placeholder="Diseño personalizado"
+              />
+            </div>
           </div>
-          <div className="sm:col-span-2">
-            <label className="label">Nombre del diseño</label>
-            <input
-              className="input"
-              value={designName}
-              onChange={(e) => setDesignName(e.target.value)}
-              placeholder="Diseño personalizado"
-            />
-          </div>
-        </div>
+        )}
 
         {/* Prendas del pedido */}
         <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-xs font-extrabold uppercase text-slate-600">Prendas y Precios Unitarios</div>
+          <div className="text-xs font-extrabold uppercase text-slate-600">
+            {items.length > 1 ? 'Prendas, Precios y Diseños' : 'Prendas y Precios Unitarios'}
+          </div>
           {items.map((it, idx) => (
-            <div key={it.id} className="grid grid-cols-12 items-center gap-2 text-xs">
-              <div className="col-span-5 font-bold text-slate-800">
-                {it.brandName} · {it.colorName} ({it.size})
+            <div key={it.id} className="space-y-1.5 rounded-lg border border-slate-200/80 bg-white/80 p-2 text-xs">
+              <div className="grid grid-cols-12 items-center gap-2">
+                <div className="col-span-5 font-bold text-slate-800">
+                  {it.brandName} · {it.colorName} ({it.size})
+                </div>
+                <div className="col-span-3">
+                  <label className="block text-[10px] text-slate-500">Cant.</label>
+                  <input
+                    type="number"
+                    min={1}
+                    className="input h-9 px-2"
+                    value={it.qtyInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qtyInput: v } : x)));
+                    }}
+                  />
+                </div>
+                <div className="col-span-4">
+                  <label className="block text-[10px] text-slate-500">Precio (L)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input h-9 px-2"
+                    value={it.priceInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, priceInput: v } : x)));
+                    }}
+                  />
+                </div>
               </div>
-              <div className="col-span-3">
-                <label className="block text-[10px] text-slate-500">Cant.</label>
-                <input
-                  type="number"
-                  min={1}
-                  className="input h-9 px-2"
-                  value={it.qtyInput}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, qtyInput: v } : x)));
-                  }}
-                />
-              </div>
-              <div className="col-span-4">
-                <label className="block text-[10px] text-slate-500">Precio (L)</label>
-                <input
-                  type="number"
-                  min={0}
-                  className="input h-9 px-2"
-                  value={it.priceInput}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, priceInput: v } : x)));
-                  }}
-                />
-              </div>
+              {items.length > 1 && (
+                <div className="grid grid-cols-12 gap-2">
+                  <div className="col-span-4">
+                    <input
+                      className="input h-8 px-2 text-[11px] uppercase"
+                      value={it.designCodeInput}
+                      onChange={(e) => {
+                        const v = e.target.value.toUpperCase();
+                        setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, designCodeInput: v } : x)));
+                      }}
+                      placeholder="Código (opc.)"
+                      aria-label={`Código diseño prenda ${idx + 1}`}
+                    />
+                  </div>
+                  <div className="col-span-8">
+                    <input
+                      className="input h-8 px-2 text-[11px]"
+                      value={it.designNameInput}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, designNameInput: v } : x)));
+                      }}
+                      placeholder="Diseño de esta prenda (vacío = Lisa)"
+                      aria-label={`Nombre diseño prenda ${idx + 1}`}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

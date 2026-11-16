@@ -34,5 +34,17 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024
       }
     })
-  ]
+  ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          firebase: ['firebase/app', 'firebase/firestore'],
+          supabase: ['@supabase/supabase-js'],
+          motion: ['motion/react'],
+          dexie: ['dexie']
+        }
+      }
+    }
+  }
 });

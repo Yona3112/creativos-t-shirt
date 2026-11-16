@@ -277,7 +277,7 @@ function upgradeSettings(st: Settings): Settings {
   if (!paymentMethods.some((p) => p.toLowerCase().includes('pendiente'))) {
     paymentMethods = ['Pago Pendiente en Tienda', ...paymentMethods];
   }
-  const lowStock = !st.lowStock || st.lowStock === 5 ? 10 : st.lowStock;
+  const lowStock = !st.lowStock || st.lowStock <= 0 ? 10 : st.lowStock;
   return { ...st, lowStock, workTypes, carriers, paymentMethods, storeTheme: st.storeTheme || 'ranchero' };
 }
 

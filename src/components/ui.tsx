@@ -3,6 +3,31 @@ import { motion, AnimatePresence } from 'motion/react';
 import { centsToInput, toCents } from '../lib/money';
 import { getPhoto } from '../lib/db';
 import { usePhotoVersion } from '../lib/store';
+import type { OrderStatus } from '../lib/types';
+
+const ORDER_STATUS_STYLE: Record<OrderStatus, string> = {
+  borrador: 'bg-slate-200 text-slate-800',
+  en_produccion: 'bg-amber-100 text-amber-900',
+  enviado: 'bg-sky-100 text-sky-900',
+  entregado: 'bg-emerald-100 text-emerald-900',
+  cancelado: 'bg-red-100 text-red-800'
+};
+
+const ORDER_STATUS_TEXT: Record<OrderStatus, string> = {
+  borrador: 'Borrador',
+  en_produccion: 'En producción',
+  enviado: 'Enviado',
+  entregado: 'Entregado',
+  cancelado: 'Cancelado'
+};
+
+export function StatusBadge({ status }: { status: OrderStatus }) {
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-xs font-extrabold ${ORDER_STATUS_STYLE[status]}`}>
+      {ORDER_STATUS_TEXT[status]}
+    </span>
+  );
+}
 
 /* ------------------------------- Toasts ------------------------------ */
 

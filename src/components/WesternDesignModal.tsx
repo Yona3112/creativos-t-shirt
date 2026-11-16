@@ -3,20 +3,26 @@ import {
   generateWesternTextDecal,
   generateCreativosLogoDecal
 } from '../lib/westernTextGenerator';
+import { useAppState } from '../lib/store';
+import { money } from '../lib/money';
 
 interface WesternDesignModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApply: (dataUrl: string, designName: string, placement: 'back' | 'center') => void;
   initialPlacement?: 'back' | 'center';
+  customPriceCents?: number;
 }
 
 export function WesternDesignModal({
   isOpen,
   onClose,
   onApply,
-  initialPlacement = 'back'
+  initialPlacement = 'back',
+  customPriceCents
 }: WesternDesignModalProps) {
+  const { settings } = useAppState();
+  const displayPrice = money(customPriceCents || settings.priceCustom || 35000);
   const [tab, setTab] = useState<'western' | 'logo'>('western');
 
   // Opciones de Texto Western
@@ -25,6 +31,10 @@ export function WesternDesignModal({
   const [westernStyle, setWesternStyle] = useState<'arch' | 'slab' | 'vintage'>('arch');
   const [textColor, setTextColor] = useState('#FFFFFF');
   const [placement, setPlacement] = useState<'back' | 'center'>(initialPlacement);
+
+  useEffect(() => {
+    if (isOpen) setPlacement(initialPlacement);
+  }, [isOpen, initialPlacement]);
 
   // Opciones de Logo Creativos
   const [logoPhone, setLogoPhone] = useState('9831-0305');
@@ -100,7 +110,7 @@ export function WesternDesignModal({
                 Personalizar: Texto Western o Logo
               </h3>
               <p className="text-[11px] font-medium text-slate-400">
-                Se coloca en calidad A3 en tu camisa · L 350.00
+                Se coloca en calidad A3 en tu camisa · {displayPrice}
               </p>
             </div>
           </div>
@@ -324,7 +334,7 @@ export function WesternDesignModal({
         <div className="flex items-center justify-between border-t border-slate-800 bg-slate-950 p-4">
           <div className="text-left">
             <span className="block text-[11px] text-slate-400">Precio Estampada:</span>
-            <span className="text-base font-black text-amber-400">Personalizada · L 350.00</span>
+            <span className="text-base font-black text-amber-400">Personalizada · {displayPrice}</span>
           </div>
           <button
             type="button"

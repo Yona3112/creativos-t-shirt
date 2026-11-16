@@ -6,9 +6,8 @@ import { money } from '../lib/money';
 import { lowColorStockList, orderUnits } from '../lib/inventory';
 import { printInventoryReport } from '../lib/printReports';
 import { folioLabel } from '../lib/ids';
-import { ColorDot, Empty, toast } from '../components/ui';
+import { ColorDot, Empty, StatusBadge, toast } from '../components/ui';
 import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
-import { StatusBadge } from './Orders';
 
 export default function Home({ navigate }: { navigate: (s: Section) => void }) {
   const state = useAppState();
@@ -19,18 +18,21 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
   const todaysOrders = useMemo(
     () =>
       state.orders
-        .filter((o) => !o.deleted && o.status !== 'cancelado' && dayKey(o.createdAt) === today)
+        .filter((o) => !o.deleted && o.status !== 'cancelado' && o.status !== 'borrador' && dayKey(o.createdAt) === today)
         .sort((a, b) => a.folio - b.folio),
     [state.orders, today]
   );
 
   const kpi = useMemo(() => {
     const live = state.orders.filter((o) => !o.deleted && o.status !== 'cancelado');
+    const receivableOrders = live.filter((o) => o.status !== 'borrador' && o.balance > 0);
     return {
       sold: todaysOrders.reduce((s, o) => s + o.total, 0),
       units: todaysOrders.reduce((s, o) => s + orderUnits(o), 0),
       production: live.filter((o) => o.status === 'en_produccion').length,
-      shipped: live.filter((o) => o.status === 'enviado').length
+      shipped: live.filter((o) => o.status === 'enviado').length,
+      receivableCount: receivableOrders.length,
+      receivableTotal: receivableOrders.reduce((s, o) => s + o.balance, 0)
     };
   }, [state.orders, todaysOrders]);
 
@@ -96,6 +98,30 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
         <Kpi label="Enviados" value={String(kpi.shipped)} tone="text-sky-700" onClick={() => navigate('pedidos')} />
       </div>
 
+      {kpi.receivableCount > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            sessionStorage.setItem('cgs_orders_filter', 'por_cobrar');
+            navigate('pedidos');
+          }}
+          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-left shadow-sm transition hover:bg-rose-100/80"
+        >
+          <div>
+            <div className="text-xs font-extrabold uppercase tracking-wide text-rose-800">
+              💸 Cuentas por Cobrar ({kpi.receivableCount} pedido{kpi.receivableCount === 1 ? '' : 's'})
+            </div>
+            <div className="text-xs font-semibold text-rose-700">
+              Toca para ver pedidos con saldo pendiente o contra entrega
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-black text-rose-700">{money(kpi.receivableTotal)}</span>
+            <span className="text-xs font-bold text-rose-600">Ver →</span>
+          </div>
+        </button>
+      )}
+
       <section>
         <h2 className="section-title">Pedidos Recientes</h2>
         {recent.length === 0 ? (
@@ -103,7 +129,14 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
         ) : (
           <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
             {recent.map((o) => (
-              <button key={o.id} className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2 text-left" onClick={() => navigate('pedidos')}>
+              <button
+                key={o.id}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-slate-50"
+                onClick={() => {
+                  sessionStorage.setItem('cgs_orders_query', folioLabel(o.folio));
+                  navigate('pedidos');
+                }}
+              >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-bold">{folioLabel(o.folio)}</span>

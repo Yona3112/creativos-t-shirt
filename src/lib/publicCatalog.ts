@@ -132,23 +132,45 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
       }
     }
   }
-  // Calcular unidades vendidas por diseño en pedidos reales
+  // Calcular unidades vendidas por diseño en pedidos reales (prenda por prenda)
   const soldByDesign = new Map<string, number>();
-  for (const o of state.orders || []) {
-    if (o.deleted || o.status === 'cancelado') continue;
-    const units = (o.items || []).reduce((s, it) => s + (it.qty || 0), 0) || 1;
-    if (o.designId) {
-      soldByDesign.set(o.designId, (soldByDesign.get(o.designId) || 0) + units);
-    } else if (o.designCode || o.designName) {
-      const match = (state.catalogDesigns || []).find(
+  const activeCatalogDesigns = (state.catalogDesigns || []).filter((d) => !d.deleted);
+  const addSoldDesign = (dId?: string | null, dCode?: string | null, dName?: string | null, qty = 1) => {
+    if (qty <= 0) return;
+    if (dId && activeCatalogDesigns.some((d) => d.id === dId)) {
+      soldByDesign.set(dId, (soldByDesign.get(dId) || 0) + qty);
+      return;
+    }
+    if (dCode || dName) {
+      const match = activeCatalogDesigns.find(
         (d) =>
-          !d.deleted &&
-          ((o.designCode && d.code && d.code.toLowerCase() === o.designCode.toLowerCase()) ||
-            (o.designName && d.name.toLowerCase() === o.designName.toLowerCase()))
+          (dCode && d.code && d.code.toLowerCase() === dCode.toLowerCase()) ||
+          (dName && d.name.toLowerCase() === dName.toLowerCase())
       );
       if (match) {
-        soldByDesign.set(match.id, (soldByDesign.get(match.id) || 0) + units);
+        soldByDesign.set(match.id, (soldByDesign.get(match.id) || 0) + qty);
       }
+    }
+  };
+
+  for (const o of state.orders || []) {
+    if (o.deleted || o.status === 'cancelado' || o.status === 'borrador') continue;
+    if (o.items && o.items.length > 0) {
+      const anyItemHasDesign = o.items.some((x) =>
+        Boolean(x.designId || x.designCode || x.designName || x.photoId)
+      );
+      for (const it of o.items) {
+        const itemHasOwnDesign = Boolean(it.designId || it.designCode || it.designName || it.photoId);
+        if (anyItemHasDesign && !itemHasOwnDesign) continue; // Prenda lisa dentro de pedido mixto
+        addSoldDesign(
+          it.designId || (!anyItemHasDesign ? o.designId : null),
+          it.designCode || (!anyItemHasDesign ? o.designCode : null),
+          it.designName || (!anyItemHasDesign ? o.designName : null),
+          it.qty || 1
+        );
+      }
+    } else {
+      addSoldDesign(o.designId, o.designCode, o.designName, 1);
     }
   }
 

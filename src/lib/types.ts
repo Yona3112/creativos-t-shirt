@@ -263,7 +263,6 @@ export type Section =
   | 'catalogo'
   | 'taller'
   | 'inventario'
-  | 'marcas'
   | 'pedidos'
   | 'clientes'
   | 'reportes'

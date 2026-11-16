@@ -675,6 +675,7 @@ export function InteractiveShirt3D({
       | {
           campaign?: string;
           name?: string;
+          code?: string;
           allowedColorMode?: AllowedColorMode | 'auto';
           allowedColorIds?: string[];
           tone?: DesignTone;
@@ -733,6 +734,12 @@ export function InteractiveShirt3D({
     activeCampaign && activeCampaign !== 'all' ? activeCampaign : 'Ranchero'
   );
   const [uploadCustomName, setUploadCustomName] = useState<string>('');
+  const [uploadCustomCode, setUploadCustomCode] = useState<string>('');
+  const [editingDesignModal, setEditingDesignModal] = useState<{
+    id: string;
+    name: string;
+    code: string;
+  } | null>(null);
   const [uploadColorMode, setUploadColorMode] = useState<AllowedColorMode | 'auto'>('auto');
   const [uploadCustomColorIds, setUploadCustomColorIds] = useState<string[]>([]);
   const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
@@ -828,6 +835,7 @@ export function InteractiveShirt3D({
 
     if (nextState.mode === 'files') {
       const first = nextState.files[0];
+      setUploadCustomCode('');
       setUploadCustomName(
         nextState.files.length === 1 && first
           ? first.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().slice(0, 32)
@@ -878,6 +886,7 @@ export function InteractiveShirt3D({
       })();
     } else {
       setUploadCustomName('');
+      setUploadCustomCode('');
       setUploadPreviewUrl(designUrl || null);
       setUploadColorMode('all');
       setUploadCustomColorIds((colorOptions || []).map((c) => c.id));
@@ -1455,7 +1464,7 @@ export function InteractiveShirt3D({
         </div>
         )}
 
-        <WesternDesignModal
+      <WesternDesignModal
           isOpen={isWesternModalOpen}
           onClose={() => setIsWesternModalOpen(false)}
           onApply={handleApplyWesternDesign}
@@ -2353,17 +2362,13 @@ export function InteractiveShirt3D({
                           {onRenameCatalogDesign && (
                             <button
                               type="button"
-                              onClick={() => {
-                                const nextName = window.prompt('Nombre del diseño:', d.name);
-                                if (nextName === null) return;
-                                const nextCode = window.prompt('Código del diseño:', d.code || '');
-                                if (nextCode === null) return;
-                                onRenameCatalogDesign(
-                                  d.id,
-                                  nextName.trim() || d.name,
-                                  nextCode.trim().toUpperCase()
-                                );
-                              }}
+                              onClick={() =>
+                                setEditingDesignModal({
+                                  id: d.id,
+                                  name: d.name,
+                                  code: d.code || ''
+                                })
+                              }
                               className="flex-1 rounded-lg bg-slate-100 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
                             >
                               Editar
@@ -2486,21 +2491,37 @@ export function InteractiveShirt3D({
                 </div>
               )}
 
-              {/* Nombre del diseño (cuando es 1 archivo o diseño actual al subir) */}
+              {/* Nombre y Código del diseño (cuando es 1 archivo o diseño actual al subir) */}
               {!editColorsDesign &&
                 ((uploadModalState?.mode === 'files' && uploadModalState.files.length === 1) ||
                   uploadModalState?.mode === 'current') && (
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">
-                      Nombre del diseño
-                    </label>
-                    <input
-                      type="text"
-                      value={uploadCustomName}
-                      onChange={(e) => setUploadCustomName(e.target.value)}
-                      placeholder="Ej. Rancho Honduras Dorado"
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 outline-none focus:border-slate-900 focus:bg-white"
-                    />
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div className={uploadModalState?.mode === 'current' ? 'sm:col-span-2' : 'sm:col-span-3'}>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        Nombre del diseño
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadCustomName}
+                        onChange={(e) => setUploadCustomName(e.target.value)}
+                        placeholder="Ej. Rancho Honduras Dorado"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 outline-none focus:border-slate-900 focus:bg-white"
+                      />
+                    </div>
+                    {uploadModalState?.mode === 'current' && (
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">
+                          Código (opc.)
+                        </label>
+                        <input
+                          type="text"
+                          value={uploadCustomCode}
+                          onChange={(e) => setUploadCustomCode(e.target.value.toUpperCase())}
+                          placeholder="Ej. D-001"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-900 outline-none focus:border-slate-900 focus:bg-white"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2748,6 +2769,7 @@ export function InteractiveShirt3D({
                       onSaveCurrentToCatalog?.({
                         campaign: camp,
                         name: uploadCustomName.trim() || undefined,
+                        code: uploadCustomCode.trim().toUpperCase() || undefined,
                         allowedColorMode: finalMode,
                         allowedColorIds:
                           finalMode === 'custom' ? uploadCustomColorIds : undefined,
@@ -2760,6 +2782,83 @@ export function InteractiveShirt3D({
                   {editColorsDesign ? 'Guardar colores' : 'Subir y Hacer Visible'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingDesignModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          onClick={() => setEditingDesignModal(null)}
+        >
+          <div
+            className="w-full max-w-sm space-y-3 rounded-[24px] border border-slate-200 bg-white p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900">Editar diseño del catálogo</h3>
+              <button
+                type="button"
+                onClick={() => setEditingDesignModal(null)}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600 hover:bg-slate-200"
+              >
+                ✕
+              </button>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">Nombre del diseño</label>
+              <input
+                type="text"
+                autoFocus
+                value={editingDesignModal.name}
+                onChange={(e) =>
+                  setEditingDesignModal((prev) => (prev ? { ...prev, name: e.target.value } : null))
+                }
+                placeholder="Nombre del diseño"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:border-slate-900 focus:bg-white"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">Código</label>
+              <input
+                type="text"
+                value={editingDesignModal.code}
+                onChange={(e) =>
+                  setEditingDesignModal((prev) =>
+                    prev ? { ...prev, code: e.target.value.toUpperCase() } : null
+                  )
+                }
+                placeholder="Ej. D-001"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm font-semibold uppercase text-slate-900 outline-none focus:border-slate-900 focus:bg-white"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setEditingDesignModal(null)}
+                className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = editingDesignModal;
+                  if (!target) return;
+                  const cleanName = target.name.trim();
+                  if (!cleanName) return;
+                  onRenameCatalogDesign?.(
+                    target.id,
+                    cleanName,
+                    target.code.trim().toUpperCase()
+                  );
+                  setEditingDesignModal(null);
+                }}
+                className="rounded-full bg-slate-900 px-5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+              >
+                Guardar cambios
+              </button>
             </div>
           </div>
         </div>

@@ -25,7 +25,7 @@ import {
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
-import { Modal, Stepper, toast } from '../components/ui';
+import { Confirm, Modal, Stepper, toast } from '../components/ui';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
 import {
   buildPublicCatalog,
@@ -157,6 +157,8 @@ export default function Catalog3D() {
   const [autoMotion] = useState(true);
   const [colorModal, setColorModal] = useState(false);
   const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string } | null>(null);
+  const [showCampaignModal, setShowCampaignModal] = useState(false);
+  const [newCampaignName, setNewCampaignName] = useState('');
   const [previewClient, setPreviewClient] = useState<SharedCatalogPayload | null>(null);
 
   const {
@@ -173,12 +175,18 @@ export default function Catalog3D() {
   } = useCatalogDesigns();
 
   const handleAddCampaign = () => {
-    const name = window.prompt('Nombre de la nueva campaña (ej. Ranchero, Turístico, Cristiana, Deportiva):');
-    if (!name || !name.trim()) return;
-    const clean = name.trim();
+    setNewCampaignName('');
+    setShowCampaignModal(true);
+  };
+
+  const confirmAddCampaign = () => {
+    const clean = newCampaignName.trim();
+    if (!clean) return toast('Escribe el nombre de la campaña', 'error');
     const next = Array.from(new Set([...campaigns, clean]));
     updateSettings({ campaigns: next, activeCampaign: clean });
     setActiveCampaign(clean);
+    setShowCampaignModal(false);
+    setNewCampaignName('');
     toast(`Campaña "${clean}" creada`, 'ok');
   };
 
@@ -621,6 +629,7 @@ export default function Catalog3D() {
             void saveCurrentToCatalog({
               dataUrl: designUrl,
               name: opts.name,
+              code: opts.code,
               placement,
               campaign: targetCamp,
               existingPhotoId: photoId,
@@ -894,6 +903,34 @@ export default function Catalog3D() {
           </div>
         )}
       </Modal>
+
+      <Modal
+        open={showCampaignModal}
+        onClose={() => setShowCampaignModal(false)}
+        title="Nueva campaña del catálogo"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-ghost" onClick={() => setShowCampaignModal(false)}>
+              Cancelar
+            </button>
+            <button type="button" className="btn-primary" onClick={confirmAddCampaign}>
+              Crear campaña
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-2">
+          <label className="label">Nombre de la campaña</label>
+          <input
+            autoFocus
+            className="input"
+            value={newCampaignName}
+            onChange={(e) => setNewCampaignName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && confirmAddCampaign()}
+            placeholder="Ej. Ranchero, Turístico, Cristiana, Deportiva..."
+          />
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -951,25 +988,45 @@ export function CustomerCatalogView({
           b.name.toLowerCase() === base.brandName.toLowerCase()
       ) || liveBrands[0];
 
+    const hasAuthoritativeBase = Boolean(cloudPayload || onExitPreview);
     const liveBrandColors = matchedBrand ? brandColors(state, matchedBrand.id) : [];
-    const resolvedColors =
-      cloudPayload || onExitPreview
-        ? base.colors
-        : liveBrandColors.length > 0
-        ? liveBrandColors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
-        : base.colors;
+    const resolvedColors = hasAuthoritativeBase
+      ? base.colors
+      : liveBrandColors.length > 0
+      ? liveBrandColors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
+      : base.colors;
+    const storeVisibleSizes =
+      state.settings.storeSizes && state.settings.storeSizes.length > 0
+        ? state.settings.sizes.filter((sz) => state.settings.storeSizes!.includes(sz))
+        : state.settings.sizes;
+    const resolvedSizes = hasAuthoritativeBase
+      ? base.sizes
+      : storeVisibleSizes.length > 0
+      ? storeVisibleSizes
+      : base.sizes;
 
     return {
       ...base,
-      storeName: state.settings.storeName || base.storeName,
-      storePhone: state.settings.storePhone || base.storePhone,
-      brandId: matchedBrand?.id || base.brandId,
-      brandName: matchedBrand?.name || base.brandName,
+      storeName: hasAuthoritativeBase ? base.storeName : state.settings.storeName || base.storeName,
+      storePhone: hasAuthoritativeBase ? base.storePhone : state.settings.storePhone || base.storePhone,
+      brandId: hasAuthoritativeBase ? base.brandId : matchedBrand?.id || base.brandId,
+      brandName: hasAuthoritativeBase ? base.brandName : matchedBrand?.name || base.brandName,
       colors: resolvedColors.length > 0 ? resolvedColors : base.colors,
-      sizes: state.settings.sizes.length > 0 ? state.settings.sizes : base.sizes,
-      priceNormal: matchedBrand ? normalPrice(state.settings, matchedBrand) : base.priceNormal,
-      priceWholesale: state.settings.priceWholesale || base.priceWholesale,
-      wholesaleMin: state.settings.wholesaleMin || base.wholesaleMin,
+      sizes: resolvedSizes.length > 0 ? resolvedSizes : base.sizes,
+      priceNormal: hasAuthoritativeBase
+        ? base.priceNormal
+        : matchedBrand
+        ? normalPrice(state.settings, matchedBrand)
+        : base.priceNormal,
+      priceCustom: hasAuthoritativeBase
+        ? base.priceCustom
+        : state.settings.priceCustom || base.priceCustom,
+      priceWholesale: hasAuthoritativeBase
+        ? base.priceWholesale
+        : state.settings.priceWholesale || base.priceWholesale,
+      wholesaleMin: hasAuthoritativeBase
+        ? base.wholesaleMin
+        : state.settings.wholesaleMin || base.wholesaleMin,
       activeCampaign: initialPayload.activeCampaign || base.activeCampaign
     };
   }, [cloudPayload, initialPayload, onExitPreview, state]);
@@ -1002,6 +1059,7 @@ export function CustomerCatalogView({
   const [maxStepReached, setMaxStepReached] = useState(0);
   const [showSizeGuide, setShowSizeGuide] = useState(false);
   const [justAddedToCart, setJustAddedToCart] = useState(false);
+  const [confirmClearCart, setConfirmClearCart] = useState(false);
 
   const goToStep = (next: number) => {
     const clamped = Math.max(0, Math.min(WIZARD_LAST, next));
@@ -2260,12 +2318,7 @@ export function CustomerCatalogView({
 
               <button
                 type="button"
-                onClick={() => {
-                  if (window.confirm('¿Deseas vaciar todas las prendas del pedido?')) {
-                    setCustomerCart([]);
-                    setIsCartModalOpen(false);
-                  }
-                }}
+                onClick={() => setConfirmClearCart(true)}
                 className="w-full text-center text-[11px] font-semibold text-slate-400 hover:text-rose-600"
               >
                 Vaciar lista de pedido
@@ -2276,6 +2329,20 @@ export function CustomerCatalogView({
       </Modal>
 
       {/* MODAL DE FICHA VISUAL / PDF CON FOTITO DEL DISEÑO */}
+      <Confirm
+        open={confirmClearCart}
+        onClose={() => setConfirmClearCart(false)}
+        title="Vaciar lista de pedido"
+        text="¿Deseas quitar todas las prendas agregadas a tu pedido?"
+        confirmLabel="Sí, vaciar lista"
+        danger
+        onConfirm={() => {
+          setCustomerCart([]);
+          setIsCartModalOpen(false);
+          setConfirmClearCart(false);
+        }}
+      />
+
       <Modal
         open={!!orderSheetModal}
         onClose={() => setOrderSheetModal(null)}

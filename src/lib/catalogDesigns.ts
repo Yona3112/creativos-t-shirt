@@ -218,16 +218,8 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         : opts.allowedColorMode;
 
     const count = (state.catalogDesigns || []).filter((x) => !x.deleted).length + 1;
-    const defaultName = opts.name?.trim() || `Diseño #${count}`;
-    const defaultCode = opts.code?.trim().toUpperCase() || `D-${String(count).padStart(3, '0')}`;
-    let finalName = defaultName;
-    let finalCode = defaultCode;
-    if (!opts.skipPrompt && !opts.name) {
-      const promptedName = window.prompt('Nombre del diseño (para identificar en pedidos y reportes):', defaultName);
-      if (promptedName !== null && promptedName.trim()) finalName = promptedName.trim();
-      const promptedCode = window.prompt('Código del diseño (ej. D-001, TORO-01):', defaultCode);
-      if (promptedCode !== null && promptedCode.trim()) finalCode = promptedCode.trim().toUpperCase();
-    }
+    const finalName = opts.name?.trim() || `Diseño #${count}`;
+    const finalCode = opts.code?.trim().toUpperCase() || `D-${String(count).padStart(3, '0')}`;
     return addCatalogDesign({
       name: finalName,
       code: finalCode,

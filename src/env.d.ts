@@ -36,6 +36,8 @@ declare module 'react' {
     subscribe: (onStoreChange: () => void) => () => void,
     getSnapshot: () => T
   ): T;
+  export function lazy<T extends (props: any) => any>(factory: () => Promise<{ default: T }>): T;
+  export const Suspense: any;
   export const StrictMode: any;
   const React: {
     StrictMode: any;

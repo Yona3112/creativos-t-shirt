@@ -5,7 +5,23 @@ import { purgeGarbageData, updateSettings } from '../lib/actions';
 import { activeBrands, brandColors, skuOf, vkey } from '../lib/inventory';
 import { downloadText, toCSV } from '../lib/csv';
 import { dayKey } from '../lib/time';
-import { MoneyInput, toast } from '../components/ui';
+import { Confirm, MoneyInput, toast } from '../components/ui';
+import { authenticateBoxful, getBoxfulConfig, saveBoxfulConfig } from '../lib/boxful';
+
+function isValidBackupPayload(raw: unknown): raw is AppState {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const obj = raw as Record<string, unknown>;
+  return (
+    Array.isArray(obj.brands) &&
+    Array.isArray(obj.colors) &&
+    Array.isArray(obj.orders) &&
+    Array.isArray(obj.customers) &&
+    Array.isArray(obj.movements) &&
+    Boolean(obj.settings) &&
+    typeof obj.settings === 'object' &&
+    !Array.isArray(obj.settings)
+  );
+}
 
 const DEFAULT_CAMPAIGNS = ['Ranchero', 'Turístico', 'Cristiana'];
 
@@ -23,7 +39,59 @@ export default function SettingsPage() {
   const [newSize, setNewSize] = useState('');
   const [newCarrier, setNewCarrier] = useState('');
   const [newPaymentMethod, setNewPaymentMethod] = useState('');
+  const [pendingBackup, setPendingBackup] = useState<{
+    fileName: string;
+    state: AppState;
+  } | null>(null);
+  const initialBoxful = getBoxfulConfig();
+  const [boxfulEnv, setBoxfulEnv] = useState<'prod' | 'dev'>(initialBoxful?.env || 'prod');
+  const [boxfulEmail, setBoxfulEmail] = useState(initialBoxful?.email || '');
+  const [boxfulPass, setBoxfulPass] = useState('');
+  const [boxfulCourierId, setBoxfulCourierId] = useState(initialBoxful?.courierId || '');
+  const [boxfulConnected, setBoxfulConnected] = useState(Boolean(initialBoxful?.accessToken));
+  const [busyBoxful, setBusyBoxful] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const connectBoxful = async () => {
+    if (!boxfulEmail.trim()) return toast('Escribe tu correo de Boxful', 'error');
+    if (!boxfulPass && !getBoxfulConfig()?.accessToken) {
+      return toast('Escribe tu contraseña de Boxful para generar el token de acceso', 'error');
+    }
+    setBusyBoxful(true);
+    try {
+      const existing = getBoxfulConfig();
+      const nextCfg = {
+        env: boxfulEnv,
+        email: boxfulEmail.trim(),
+        password: boxfulPass || undefined,
+        accessToken: boxfulPass ? undefined : existing?.accessToken,
+        courierId: boxfulCourierId.trim() || undefined
+      };
+      const token = await authenticateBoxful(nextCfg);
+      if (!boxfulPass) {
+        saveBoxfulConfig({
+          env: nextCfg.env,
+          email: nextCfg.email,
+          accessToken: token,
+          courierId: nextCfg.courierId
+        });
+      }
+      setBoxfulPass('');
+      setBoxfulConnected(true);
+      toast('📦 Boxful conectado en este dispositivo (sin guardar contraseña)');
+    } catch (e) {
+      toast((e as Error).message || 'No se pudo autenticar con Boxful', 'error');
+    } finally {
+      setBusyBoxful(false);
+    }
+  };
+
+  const disconnectBoxful = () => {
+    saveBoxfulConfig(null);
+    setBoxfulPass('');
+    setBoxfulConnected(false);
+    toast('Boxful desconectado (modo asistido activo en Pedidos)');
+  };
 
   const addCampaign = () => {
     const clean = newCampaign.trim();
@@ -87,9 +155,12 @@ export default function SettingsPage() {
     if (!file) return;
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as AppState;
-      replaceState(parsed);
-      toast('Respaldo restaurado correctamente');
+      const parsed: unknown = JSON.parse(text);
+      if (!isValidBackupPayload(parsed)) {
+        toast('El archivo no es un respaldo válido de Creativos Gift', 'error');
+        return;
+      }
+      setPendingBackup({ fileName: file.name, state: parsed });
     } catch (e) {
       toast(`Archivo inválido: ${(e as Error).message}`, 'error');
     } finally {
@@ -430,7 +501,10 @@ export default function SettingsPage() {
             Mensajes Automáticos de WhatsApp
           </h2>
           <p className="text-xs text-slate-500">
-            Plantillas para notificar al cliente desde Pedidos
+            Plantillas para notificar al cliente desde Pedidos · Variables:{' '}
+            <span className="font-mono text-[11px] text-slate-700">
+              {'{cliente}'} {'{folio}'} {'{transportista}'} {'{guia}'} {'{rastreo}'} {'{total}'} {'{saldo}'} {'{unidades}'}
+            </span>
           </p>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -457,7 +531,101 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* 5. Mantenimiento y Respaldo */}
+      {/* 5. Envíos Automáticos con Boxful */}
+      <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900">
+              Envíos Automáticos (Boxful)
+            </h2>
+            <p className="text-xs text-slate-500">
+              Credenciales guardadas solo en este navegador (se almacena el token temporal, no tu contraseña). Si no conectas API, Pedidos usará el modo asistido 1-clic.
+            </p>
+          </div>
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+              boxfulConnected
+                ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${boxfulConnected ? 'bg-emerald-500' : 'bg-slate-400'}`}
+            />
+            {boxfulConnected ? 'API conectada' : 'Modo asistido'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Ambiente</label>
+            <select
+              className="input"
+              value={boxfulEnv}
+              onChange={(e) => setBoxfulEnv(e.target.value === 'dev' ? 'dev' : 'prod')}
+            >
+              <option value="prod">Producción (HN/SV)</option>
+              <option value="dev">Pruebas (Sandbox)</option>
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Correo Boxful</label>
+            <input
+              type="email"
+              className="input"
+              placeholder="correo@negocio.com"
+              value={boxfulEmail}
+              onChange={(e) => setBoxfulEmail(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Courier ID (opc.)
+            </label>
+            <input
+              className="input font-mono"
+              placeholder="Opcional"
+              value={boxfulCourierId}
+              onChange={(e) => setBoxfulCourierId(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-[220px] flex-1">
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Contraseña Boxful {boxfulConnected ? '(solo si deseas renovar token)' : ''}
+            </label>
+            <input
+              type="password"
+              autoComplete="new-password"
+              className="input"
+              placeholder={boxfulConnected ? '•••••••• (token activo en este dispositivo)' : 'Tu contraseña de Boxful'}
+              value={boxfulPass}
+              onChange={(e) => setBoxfulPass(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={busyBoxful}
+            onClick={() => void connectBoxful()}
+            className="rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+          >
+            {busyBoxful ? 'Conectando...' : boxfulConnected ? 'Actualizar conexión' : 'Conectar Boxful'}
+          </button>
+          {boxfulConnected && (
+            <button
+              type="button"
+              onClick={disconnectBoxful}
+              className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+            >
+              Desconectar
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* 6. Mantenimiento y Respaldo */}
       <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -524,6 +692,25 @@ export default function SettingsPage() {
           </button>
         </div>
       </section>
+
+      <Confirm
+        open={Boolean(pendingBackup)}
+        onClose={() => setPendingBackup(null)}
+        title="Restaurar respaldo"
+        text={
+          pendingBackup
+            ? `¿Reemplazar los datos actuales con "${pendingBackup.fileName}"? Contiene ${pendingBackup.state.orders.filter((o) => !o.deleted).length} pedidos, ${pendingBackup.state.customers.filter((c) => !c.deleted).length} clientes y ${pendingBackup.state.brands.filter((b) => !b.deleted).length} marcas.`
+            : ''
+        }
+        confirmLabel="Sí, restaurar respaldo"
+        danger
+        onConfirm={() => {
+          if (!pendingBackup) return;
+          replaceState(pendingBackup.state);
+          toast('Respaldo restaurado correctamente');
+          setPendingBackup(null);
+        }}
+      />
     </div>
   );
 }

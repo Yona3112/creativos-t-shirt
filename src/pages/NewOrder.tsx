@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CartLine, Customer, Order, Section } from '../lib/types';
 import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
-import { activeBrands, brandColors, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
+import { activeBrands, brandColors, isCustomOrderSpec, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K, isJpgFile } from '../lib/image';
@@ -53,6 +53,7 @@ function emptyDraft(): Draft {
     s.paymentMethods.find((p) => !p.toLowerCase().includes('pendiente')) ||
     s.paymentMethods[0] ||
     'Efectivo';
+  const plainWork = s.workTypes.find((w) => w.toLowerCase().includes('lisa')) || 'Camisa Lisa';
   return {
     lines: [],
     photo: null,
@@ -68,13 +69,14 @@ function emptyDraft(): Draft {
     shipping: s.shipping,
     paymentMethod: nonPendingMethod,
     paymentMode: 'full',
-    workType: s.workTypes.find((w) => w.toLowerCase().includes('espalda')) || s.workTypes[0] || 'DTF Frontal',
+    workType: plainWork,
     deposit: null,
     notes: ''
   };
 }
 
 function loadDraft(): Draft {
+  const base = emptyDraft();
   try {
     const raw = localStorage.getItem(LS_CART);
     if (raw) {
@@ -83,12 +85,16 @@ function loadDraft(): Draft {
         parsed.designScale = 2.0;
         parsed.designOffsetY = 0;
       }
-      return { ...emptyDraft(), ...parsed };
+      const merged = { ...base, ...parsed };
+      if (!merged.photo && !merged.designName && !merged.designId && merged.lines.length === 0) {
+        merged.workType = base.workType;
+      }
+      return merged;
     }
   } catch {
     /* ignorar */
   }
-  return emptyDraft();
+  return base;
 }
 
 export default function NewOrder({ navigate }: { navigate: (s: Section) => void }) {
@@ -103,7 +109,21 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     try {
       localStorage.setItem(LS_CART, JSON.stringify(draft));
     } catch {
-      /* foto muy grande para localStorage: se mantiene en memoria */
+      try {
+        const compactDraft: Draft = {
+          ...draft,
+          rawPhoto: null,
+          photo: draft.photo && draft.photo.length > 150000 ? null : draft.photo,
+          lines: draft.lines.map((l) => ({
+            ...l,
+            rawPhoto: null,
+            photo: l.photo && l.photo.length > 150000 ? null : l.photo
+          }))
+        };
+        localStorage.setItem(LS_CART, JSON.stringify(compactDraft));
+      } catch {
+        /* foto muy grande para localStorage: se mantiene en memoria */
+      }
     }
   }, [draft]);
 
@@ -140,10 +160,27 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const lines = useMemo(() => repriceCart(draft.lines, settings, state.brands), [draft.lines, settings, state.brands]);
   const cartQty = lines.reduce((s, l) => s + l.qty, 0);
   const projectedQty = cartQty + qty;
-  const isLisaExplicit = Boolean(draft.workType && draft.workType.toLowerCase().includes('lisa'));
-  const isCustomWork = isLisaExplicit
-    ? false
-    : Boolean(draft.photo || draft.designName || draft.workType);
+  const plainWorkTypeDefault =
+    settings.workTypes.find((w) => w.toLowerCase().includes('lisa')) || 'Camisa Lisa';
+  const customWorkTypeDefault =
+    settings.workTypes.find((w) => w.toLowerCase().includes('espalda')) ||
+    settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) ||
+    'DTF Espalda';
+  const isCustomWork = isCustomOrderSpec({
+    workType: draft.workType,
+    photo: draft.photo,
+    designId: draft.designId,
+    designName: draft.designName
+  });
+  const clearDraftDesign = () =>
+    set({
+      photo: null,
+      rawPhoto: null,
+      designId: null,
+      designName: null,
+      designCode: null,
+      workType: plainWorkTypeDefault
+    });
   const autoPrice = isCustomWork
     ? (settings.priceCustom || 35000)
     : tierPrice(settings, brand, projectedQty);
@@ -175,7 +212,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     if (!brand || !color) return toast('Elige marca y color', 'error');
     if (qty < 1) return;
     const isManual = manualPrice !== null;
-    const hasDesignForLine = isCustomWork && Boolean(draft.photo);
+    const hasDesignForLine = isCustomWork && Boolean(draft.photo || draft.designId || draft.designName);
     const curDesignId = hasDesignForLine ? draft.designId || null : null;
     const curDesignName = hasDesignForLine ? draft.designName || 'Diseño personalizado' : null;
     const curDesignCode = hasDesignForLine ? draft.designCode || null : null;
@@ -255,11 +292,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     setDesignColors,
     deleteDesign
   } = useCatalogDesigns();
-
-  const customWorkTypeDefault =
-    settings.workTypes.find((w) => w.toLowerCase().includes('espalda')) ||
-    settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) ||
-    'DTF Espalda';
 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
@@ -344,6 +376,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [consumidorNote, setConsumidorNote] = useState('');
   const [customerError, setCustomerError] = useState<string | null>(null);
   const customerSectionRef = useRef<HTMLDivElement>(null);
+  const [posStep, setPosStep] = useState<'armar' | 'cobrar'>('armar');
+  const goToStep = (step: 'armar' | 'cobrar') => {
+    setPosStep(step);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const [latestWebOrder, setLatestWebOrder] = useState<CustomerWebOrderPayload | null>(null);
   const [importingWebOrder, setImportingWebOrder] = useState(false);
 
@@ -431,13 +468,22 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           }
 
           if (matchedB && matchedC) {
+            const lineHasDesign = Boolean(it.designId || it.designName || it.photoId || it.designThumb || itemPhoto);
+            const lineIsBack = (it.placement || 'back') === 'back';
+            const lineWorkType = lineHasDesign
+              ? (settings.workTypes.find((w) =>
+                  lineIsBack
+                    ? w.toLowerCase().includes('espalda')
+                    : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+                ) || customWorkTypeDefault)
+              : plainWorkTypeDefault;
             importedLines.push({
               id: uid(),
               brandId: matchedB.id,
               colorId: matchedC.id,
               size: it.size || 'M',
               qty: Math.max(1, it.qty || 1),
-              unitPrice: it.unitPrice || tierPrice(settings, matchedB, it.qty || 1),
+              unitPrice: it.unitPrice || (lineHasDesign ? (settings.priceCustom || 35000) : tierPrice(settings, matchedB, it.qty || 1)),
               manualPrice: false,
               designId: it.designId || null,
               designName: it.designName || null,
@@ -445,22 +491,27 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               photoId: it.photoId || null,
               photo: itemPhoto,
               rawPhoto: itemPhoto,
-              placement: it.placement || 'back',
+              placement: lineHasDesign ? (it.placement || 'back') : null,
               scale: it.scale || 2.0,
               offsetX: 0,
-              offsetY: 0
+              offsetY: 0,
+              workType: lineWorkType
             });
           }
         }
 
+        const anyImportedDesign = importedLines.some((l) =>
+          Boolean(l.photo || l.designId || l.designName || l.photoId)
+        );
         const isBack = firstPlacement === 'back';
         const sideExplicit = isBack ? 'Espalda' : 'Frente';
-        const matchedWorkType =
-          settings.workTypes.find((w) =>
-            isBack
-              ? w.toLowerCase().includes('espalda')
-              : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
-          ) || settings.workTypes[0] || 'DTF Frontal';
+        const matchedWorkType = anyImportedDesign
+          ? (settings.workTypes.find((w) =>
+              isBack
+                ? w.toLowerCase().includes('espalda')
+                : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+            ) || customWorkTypeDefault)
+          : plainWorkTypeDefault;
 
         const noteParts = [
           webOrder.customerAddress ? `Nota/Dirección cliente: ${webOrder.customerAddress}` : '',
@@ -511,6 +562,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           /* ignorar */
         }
         setLatestWebOrder(null);
+        setPosStep('cobrar');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
         toast(`✅ Pedido de ${webOrder.customerName || 'Cliente'} (${importedLines.length} prendas) cargado`);
       } catch (e) {
         toast((e as Error).message || 'No se pudo cargar el pedido web', 'error');
@@ -518,8 +571,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         setImportingWebOrder(false);
       }
     },
-    [brands, colors, settings, state]
+    [brands, colors, customWorkTypeDefault, plainWorkTypeDefault, settings, state]
   );
+
+  const importWebOrderRef = useRef(importCustomerWebOrder);
+  importWebOrderRef.current = importCustomerWebOrder;
 
   // Cargar pedido automáticamente si viene del link #pedido=<id> o mostrar banner del último pedido web
   useEffect(() => {
@@ -535,7 +591,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             const parsed = sanitizeWebOrder(JSON.parse(raw));
             if (parsed) {
               history.replaceState({ section: 'vender' }, '', location.pathname);
-              await importCustomerWebOrder(parsed);
+              await importWebOrderRef.current(parsed);
               return;
             }
           } catch {
@@ -559,10 +615,16 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       }
     };
     void checkWebOrder();
+    const onHash = () => {
+      if (readWebOrderImportHash()) {
+        void checkWebOrder();
+      }
+    };
+    window.addEventListener('hashchange', onHash);
     return () => {
       cancelled = true;
+      window.removeEventListener('hashchange', onHash);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const matches = useMemo(() => {
@@ -600,8 +662,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const confirm = async (status: 'en_produccion' | 'borrador') => {
     if (!lines.length) return toast('Agrega al menos una camisa', 'error');
     if (status !== 'borrador' && !customerCheck.ok) {
+      setPosStep('cobrar');
       setCustomerError(customerCheck.reason);
-      customerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => customerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 40);
       toast(customerCheck.reason, 'error');
       return;
     }
@@ -679,7 +742,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       designCode: draft.designCode || null,
       placement: linesWithPhotos.find((l) => l.placement)?.placement || draft.placement || 'back'
     });
-    const keep = { paymentMethod: draft.paymentMethod, workType: draft.workType };
+    const keep = { paymentMethod: draft.paymentMethod };
     setDraft({ ...emptyDraft(), ...keep });
     setQc({ name: '', phone: '', address: '' });
     setExistingPhone('');
@@ -687,6 +750,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     setCustomerError(null);
     setQ('');
     setCustMode('buscar');
+    setPosStep('armar');
     setDone(order);
   };
 
@@ -719,11 +783,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                   {latestWebOrder.customerName || 'Cliente'} {latestWebOrder.customerPhone ? `· ${latestWebOrder.customerPhone}` : ''}
                 </div>
                 <div className="text-xs font-semibold text-amber-100/90">
-                  {latestWebOrder.qty}× {latestWebOrder.brandName} · Color {latestWebOrder.colorName} · Talla {latestWebOrder.size} ·{' '}
+                  {latestWebOrder.items && latestWebOrder.items.length > 1
+                    ? `${latestWebOrder.items.reduce((s, it) => s + it.qty, 0)} prendas (${latestWebOrder.items.length} variantes)`
+                    : `${latestWebOrder.qty}× ${latestWebOrder.brandName} · Color ${latestWebOrder.colorName} · Talla ${latestWebOrder.size}`}{' '}
+                  ·{' '}
                   <span className="rounded bg-amber-400 px-1.5 py-0.5 font-black text-stone-950">
                     {latestWebOrder.designName
                       ? `${latestWebOrder.designName} en ${latestWebOrder.placement === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}`
-                      : 'L 300.00'}
+                      : money(latestWebOrder.unitPrice || normalForBrand)}
                   </span>
                 </div>
               </div>
@@ -757,6 +824,50 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </section>
       )}
 
+      {/* Barra de navegación 2 pasos estilo Shopify POS */}
+      <div className="sticky top-[68px] z-30 -mx-1 rounded-2xl border border-slate-200/90 bg-white/95 p-1.5 shadow-sm backdrop-blur-md">
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => goToStep('armar')}
+            className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-extrabold transition ${
+              posStep === 'armar'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <span>1 · Armar Prendas</span>
+            {cartQty > 0 && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-black ${
+                  posStep === 'armar' ? 'bg-white text-slate-900' : 'bg-brand-100 text-brand-900'
+                }`}
+              >
+                {cartQty}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => goToStep('cobrar')}
+            className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition ${
+              posStep === 'cobrar'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : lines.length > 0
+                ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+            }`}
+          >
+            <span>2 · Cliente y Pago</span>
+            {lines.length > 0 && (
+              <span className="font-mono text-[11px] opacity-90">· {money(total)}</span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {posStep === 'armar' && (
+        <div className="space-y-4">
       {/* 1. Marca */}
       <section className="card">
         <h2 className="section-title">1 · Marca</h2>
@@ -791,7 +902,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               set(next);
             }}
             onUploadFile={(file) => void onPhoto(file)}
-            onClearDesign={() => set({ photo: null, rawPhoto: null, designId: null, designName: null, designCode: null })}
+            onClearDesign={clearDraftDesign}
             removeBg={draft.removeBg ?? false}
             onToggleRemoveBg={(next) => void toggleRemoveBg(next)}
             onAiRemoveBg={() => void handleAiBgNewOrder()}
@@ -981,9 +1092,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </div>
       </section>
 
-      {/* 5. Precio y 6. Cantidad */}
+      {/* 4. Precio y 5. Cantidad */}
       <section className="card space-y-3">
-        <h2 className="section-title">5 · Precio</h2>
+        <h2 className="section-title">4 · Precio</h2>
         <div className="grid grid-cols-2 gap-2">
           <div
             role="button"
@@ -993,13 +1104,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             }`}
             onClick={() => {
               setManualPrice(null);
-              set({ workType: 'Camisa Lisa' });
+              clearDraftDesign();
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 setManualPrice(null);
-                set({ workType: 'Camisa Lisa' });
+                clearDraftDesign();
               }
             }}
           >
@@ -1069,7 +1180,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             )}
           </div>
         </div>
-        <h2 className="section-title pt-1">6 · Cantidad</h2>
+        <h2 className="section-title pt-1">5 · Cantidad</h2>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
           <div className="text-right">
@@ -1080,17 +1191,49 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         <button className="btn-primary w-full text-lg" onClick={addLine} disabled={!brand || !color}>
           ➕ Agregar al Pedido
         </button>
-      </section>
 
-      {/* Resumen */}
+        {lines.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/90 p-3">
+            <div>
+              <div className="text-xs font-extrabold text-emerald-950">
+                🛒 {cartQty} {cartQty === 1 ? 'prenda lista' : 'prendas listas'} · {money(subtotal)}
+              </div>
+              <div className="text-[11px] font-medium text-emerald-800">
+                {lines.map((l) => `${l.qty}× ${state.colors.find((c) => c.id === l.colorId)?.name || ''} ${l.size}`).join(' · ')}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => goToStep('cobrar')}
+              className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.99] sm:w-auto"
+            >
+              Continuar a Cliente y Pago →
+            </button>
+          </div>
+        )}
+      </section>
+        </div>
+      )}
+
+      {/* Paso 2: Resumen, Cliente y Cobro */}
+      {posStep === 'cobrar' && (
       <section className="card space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="section-title mb-0">Resumen del pedido</h2>
-          {lines.length > 0 && (
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-              {cartQty} {cartQty === 1 ? 'unidad' : 'unidades'}
-            </span>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h2 className="section-title mb-0">Resumen del pedido</h2>
+            {lines.length > 0 && (
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                {cartQty} {cartQty === 1 ? 'unidad' : 'unidades'}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => goToStep('armar')}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-extrabold text-slate-800 hover:bg-slate-100"
+          >
+            ← + Agregar otra prenda
+          </button>
         </div>
 
         {draft.photo && (
@@ -1131,7 +1274,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               </button>
               <button
                 type="button"
-                onClick={() => set({ photo: null, rawPhoto: null })}
+                onClick={clearDraftDesign}
                 className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-extrabold text-rose-600 hover:bg-rose-100"
               >
                 🚫 Quitar
@@ -1609,13 +1752,17 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           </button>
           <button
             className="btn-ghost text-red-600"
-            onClick={() => setDraft({ ...emptyDraft(), paymentMethod: draft.paymentMethod, workType: draft.workType })}
+            onClick={() => {
+              setDraft({ ...emptyDraft(), paymentMethod: draft.paymentMethod });
+              setPosStep('armar');
+            }}
             disabled={!lines.length && !draft.photo}
           >
             Vaciar
           </button>
         </div>
       </section>
+      )}
 
       <NewColorModal open={colorModal} onClose={() => setColorModal(false)} brandId={brandId} onAdded={(n) => setPendingColorName(n)} />
       <PhotoViewer src={viewer} onClose={() => setViewer(null)} />

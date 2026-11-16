@@ -64,8 +64,9 @@ export async function authenticateBoxful(cfg: BoxfulConfig): Promise<string> {
   if (!token) {
     throw new Error('Boxful no devolvió un accessToken válido');
   }
-  // Guardar token actualizado sin persistir la contraseña en texto plano si se desea
-  saveBoxfulConfig({ ...cfg, accessToken: token });
+  // Guardar token actualizado sin conservar la contraseña en texto plano
+  const { password: _discardPassword, ...safeCfg } = cfg;
+  saveBoxfulConfig({ ...safeCfg, accessToken: token });
   return token;
 }
 

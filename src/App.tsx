@@ -1,24 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Section } from './lib/types';
 import { useAppState, useReady, useStock } from './lib/store';
-import { lowColorStockList } from './lib/inventory';
+import { lowColorStockList, vkey } from './lib/inventory';
 import { Drawer, Header, SECTIONS } from './components/Shell';
 import { toast, Toasts } from './components/ui';
 import { subscribeLatestWebOrderFirebase } from './lib/firebaseSync';
 import { notifyIncomingOrder, notifyLowStockColor, requestNotificationPermission } from './lib/soundNotification';
 import type { CustomerWebOrderPayload } from './lib/publicCatalog';
-import Home from './pages/Home';
-import NewOrder from './pages/NewOrder';
 import Catalog3D, { CustomerCatalogView, readSharedCatalogHash, readWebOrderImportHash } from './pages/Catalog3D';
-import Workshop from './pages/Workshop';
-import Inventory from './pages/Inventory';
-import Brands from './pages/Brands';
-import Orders from './pages/Orders';
-import Customers from './pages/Customers';
-import Reports from './pages/Reports';
-import SettingsPage from './pages/Settings';
+
+const Home = lazy(() => import('./pages/Home'));
+const NewOrder = lazy(() => import('./pages/NewOrder'));
+const Workshop = lazy(() => import('./pages/Workshop'));
+const Inventory = lazy(() => import('./pages/Inventory'));
+const Orders = lazy(() => import('./pages/Orders'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Reports = lazy(() => import('./pages/Reports'));
+const SettingsPage = lazy(() => import('./pages/Settings'));
 
 const VALID = new Set(SECTIONS.map((s) => s.id));
+
+function summarizeIncomingOrder(order: CustomerWebOrderPayload) {
+  const hasItems = Boolean(order.items && order.items.length > 0);
+  const qty = hasItems ? order.items!.reduce((s, it) => s + it.qty, 0) : order.qty;
+  const total = hasItems
+    ? order.items!.reduce((s, it) => s + it.qty * it.unitPrice, 0)
+    : order.qty * order.unitPrice;
+  const isMulti = Boolean(order.items && order.items.length > 1);
+  const label = isMulti
+    ? `${qty} prendas (${order.items!.length} diseños/tallas)`
+    : `${qty}x Camisa ${order.colorName} (${order.size})${order.designName ? ` · Diseño: ${order.designName}` : ''}`;
+  const isCustom =
+    Boolean(order.designId || order.designName) ||
+    Boolean(order.items?.some((it) => it.designId || it.designName));
+  return { qty, total, isMulti, label, isCustom };
+}
 
 function initialSection(): Section {
   if (readWebOrderImportHash()) return 'vender';
@@ -54,7 +70,7 @@ export default function App() {
         let total = 0;
         const sizeParts: string[] = [];
         for (const sz of state.settings.sizes) {
-          const val = stockInfo.stock.get(`${b.id}:${c.id}:${sz}`) || 0;
+          const val = stockInfo.stock.get(vkey(b.id, c.id, sz)) || 0;
           total += val;
           if (val > 0) sizeParts.push(`${sz}:${val}`);
         }
@@ -106,16 +122,22 @@ export default function App() {
 
       // Si el pedido fue generado en los últimos 15 minutos
       if (order.createdAt >= mountTime.current - 900000) {
+        const meta = summarizeIncomingOrder(order);
         setIncomingOrder(order);
         notifyIncomingOrder({
           customerName: order.customerName,
-          qty: order.qty,
+          qty: meta.qty,
           colorName: order.colorName,
           size: order.size,
-          totalText: `L ${(order.qty * order.unitPrice) / 100}`,
-          isCustom: !!order.designId || !!order.designName
+          totalText: `L ${(meta.total / 100).toFixed(2)}`,
+          isCustom: meta.isCustom
         });
-        toast(`🔔 ¡Nuevo Pedido de ${order.customerName}! (${order.qty}x ${order.colorName} ${order.size})`, 'ok');
+        toast(
+          meta.isMulti
+            ? `🔔 ¡Nuevo Pedido de ${order.customerName}! (${meta.qty} prendas)`
+            : `🔔 ¡Nuevo Pedido de ${order.customerName}! (${meta.qty}x ${order.colorName} ${order.size})`,
+          'ok'
+        );
       }
     });
 
@@ -210,8 +232,7 @@ export default function App() {
                   ¡Nuevo Pedido Entrante del Catálogo!
                 </div>
                 <div className="text-sm font-extrabold text-slate-900">
-                  {incomingOrder.customerName} · {incomingOrder.qty}x Camisa {incomingOrder.colorName} ({incomingOrder.size})
-                  {incomingOrder.designName ? ` · Diseño: ${incomingOrder.designName}` : ''}
+                  {incomingOrder.customerName} · {summarizeIncomingOrder(incomingOrder).label}
                 </div>
               </div>
             </div>
@@ -240,16 +261,17 @@ export default function App() {
       )}
 
       <main className="safe-bottom mx-auto max-w-5xl px-3 pt-3">
-        {section === 'inicio' && <Home navigate={navigate} />}
-        {section === 'vender' && <NewOrder navigate={navigate} />}
-        {section === 'catalogo' && <Catalog3D />}
-        {section === 'taller' && <Workshop />}
-        {section === 'inventario' && <Inventory />}
-        {section === 'marcas' && <Brands />}
-        {section === 'pedidos' && <Orders />}
-        {section === 'clientes' && <Customers />}
-        {section === 'reportes' && <Reports />}
-        {section === 'ajustes' && <SettingsPage />}
+        <Suspense fallback={<div className="flex h-64 items-center justify-center text-2xl">⏳</div>}>
+          {section === 'inicio' && <Home navigate={navigate} />}
+          {section === 'vender' && <NewOrder navigate={navigate} />}
+          {section === 'catalogo' && <Catalog3D />}
+          {section === 'taller' && <Workshop />}
+          {section === 'inventario' && <Inventory />}
+          {section === 'pedidos' && <Orders />}
+          {section === 'clientes' && <Customers navigate={navigate} />}
+          {section === 'reportes' && <Reports />}
+          {section === 'ajustes' && <SettingsPage />}
+        </Suspense>
       </main>
       <Toasts />
     </div>

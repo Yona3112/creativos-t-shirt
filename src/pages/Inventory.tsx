@@ -11,19 +11,21 @@ import {
   deleteColor,
   purgeGarbageData,
   removeReadyMadeShirt,
+  sellReadyMadeShirt,
   setStockAbsolute,
   updateBrand,
   updateColor,
   updateReadyMadeShirt,
   voidStockEntry
 } from '../lib/actions';
+import { folioLabel } from '../lib/ids';
 import { fromCents, money, toCents } from '../lib/money';
-import { dayKey, fmtDateTime } from '../lib/time';
+import { dayKey, fmtDateTime, startOfDayTs } from '../lib/time';
 import { Confirm, Empty, Modal, Stepper, toast } from '../components/ui';
 import { ColorSwatchPicker } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
 import { BASE_COLORS, QUICK_PALETTE } from '../lib/seed';
-import type { Brand, Color, ReadyMadeShirt } from '../lib/types';
+import type { Brand, Color, ReadyMadeShirt, StockEntry } from '../lib/types';
 
 export default function Inventory() {
   const state = useAppState();
@@ -55,25 +57,30 @@ export default function Inventory() {
     [state.stockEntries]
   );
 
-  // Resumen del día seleccionado: Lo que había vs Lo que ingresó ese día vs Ventas vs Lo que hay
+  // Resumen del día seleccionado: saldo real antes del día + entradas/salidas exactas del día
   const dailyComparison = useMemo(() => {
+    const dayStart = startOfDayTs(entryDay);
+    const dayEnd = dayStart + 86400000 - 1;
+    const beforeByKey = new Map<string, number>();
     const inByKey = new Map<string, number>();
     const outByKey = new Map<string, number>();
-    const adjByKey = new Map<string, number>();
 
     for (const m of state.movements) {
-      if (dayKey(m.at) !== entryDay) continue;
-      if (m.reason === 'compra' || m.reason === 'devolucion' || m.reason === 'cancelacion') {
-        inByKey.set(m.key, (inByKey.get(m.key) || 0) + m.delta);
-      } else if (m.reason === 'venta' || m.reason === 'merma') {
-        outByKey.set(m.key, (outByKey.get(m.key) || 0) + Math.abs(m.delta));
-      } else if (m.reason === 'ajuste') {
-        adjByKey.set(m.key, (adjByKey.get(m.key) || 0) + m.delta);
+      if (m.at < dayStart) {
+        beforeByKey.set(m.key, (beforeByKey.get(m.key) || 0) + m.delta);
+      } else if (m.at <= dayEnd) {
+        if (m.delta > 0) {
+          inByKey.set(m.key, (inByKey.get(m.key) || 0) + m.delta);
+        } else if (m.delta < 0) {
+          outByKey.set(m.key, (outByKey.get(m.key) || 0) + Math.abs(m.delta));
+        }
       }
     }
 
-    return { inByKey, outByKey, adjByKey };
+    return { beforeByKey, inByKey, outByKey };
   }, [state.movements, entryDay]);
+
+  const [confirmVoidEntry, setConfirmVoidEntry] = useState<StockEntry | null>(null);
 
   // Modales de Color (Crear / Editar / Eliminar)
   const [showNewColor, setShowNewColor] = useState(false);
@@ -106,6 +113,14 @@ export default function Inventory() {
   const [rmPrice, setRmPrice] = useState('350');
   const [rmQty, setRmQty] = useState('1');
   const [rmNotes, setRmNotes] = useState('');
+
+  // Modal de Venta directa de Prenda Ya Estampada
+  const [sellingReady, setSellingReady] = useState<ReadyMadeShirt | null>(null);
+  const [sellRmQty, setSellRmQty] = useState(1);
+  const [sellRmPrice, setSellRmPrice] = useState('');
+  const [sellRmCustomer, setSellRmCustomer] = useState('Consumidor Final');
+  const [sellRmPhone, setSellRmPhone] = useState('');
+  const [sellRmPayment, setSellRmPayment] = useState('');
 
   const colorNames = useMemo(() => {
     const names = new Set<string>();
@@ -281,6 +296,52 @@ export default function Inventory() {
       toast('Prenda ya estampada agregada al stock', 'ok');
     }
     setShowReadyModal(false);
+  };
+
+  const openSellReadyModal = (r: ReadyMadeShirt) => {
+    setSellingReady(r);
+    setSellRmQty(1);
+    setSellRmPrice(String(fromCents(r.price)));
+    setSellRmCustomer('Consumidor Final');
+    setSellRmPhone('');
+    setSellRmPayment(settings.paymentMethods[0] || 'Efectivo');
+  };
+
+  const handleConfirmSellReady = () => {
+    if (!sellingReady) return;
+    const customer = sellRmCustomer.trim() || 'Consumidor Final';
+    const isConsumidorFinal =
+      customer.toLowerCase().includes('consumidor final') ||
+      customer.toLowerCase() === 'mostrador';
+    const rawDigits = sellRmPhone.replace(/\D/g, '');
+    const localDigits = rawDigits.startsWith('504') && rawDigits.length >= 11 ? rawDigits.slice(3) : rawDigits;
+    if (!isConsumidorFinal && localDigits.length < 8) {
+      return toast('Ingresa un teléfono de al menos 8 dígitos o usa "Consumidor Final"', 'error');
+    }
+    const normalizedPhone =
+      localDigits.length >= 8
+        ? rawDigits.startsWith('504') || localDigits.length === 8
+          ? `+504 ${localDigits}`
+          : `+${rawDigits}`
+        : '';
+
+    const unitPrice = toCents(sellRmPrice);
+    if (unitPrice <= 0) {
+      return toast('Ingresa un precio de venta mayor a 0', 'error');
+    }
+
+    const order = sellReadyMadeShirt({
+      readyMadeId: sellingReady.id,
+      qty: sellRmQty,
+      unitPrice,
+      customerName: customer,
+      customerPhone: normalizedPhone,
+      paymentMethod: sellRmPayment || settings.paymentMethods[0] || 'Efectivo'
+    });
+    setSellingReady(null);
+    if (order) {
+      toast(`Venta registrada · ${folioLabel(order.folio)} (${money(order.total)})`, 'ok');
+    }
   };
 
   const selectedBrandObj = brandFilter !== 'all' ? brands.find((b) => b.id === brandFilter) : null;
@@ -746,7 +807,9 @@ export default function Inventory() {
                         <th className="px-3 py-2.5 text-right">Había (Antes)</th>
                         <th className="px-3 py-2.5 text-right">+ Ingresó ({entryDay})</th>
                         <th className="px-3 py-2.5 text-right">− Salidas</th>
-                        <th className="px-3 py-2.5 text-right">= Hay en Sistema</th>
+                        <th className="px-3 py-2.5 text-right">
+                          {entryDay === dayKey() ? '= Hay en Sistema' : `= Cierre (${entryDay})`}
+                        </th>
                         <th className="px-3 py-2.5 text-center">Conteo Físico</th>
                         <th className="px-3 py-2.5 text-center">Cuadre</th>
                       </tr>
@@ -756,10 +819,10 @@ export default function Inventory() {
                         visibleSizes.map((sz) => {
                           const k = vkey(brand.id, color.id, sz);
                           const currentVal = stock.get(k) || 0;
+                          const hadBefore = Math.max(0, dailyComparison.beforeByKey.get(k) || 0);
                           const inToday = dailyComparison.inByKey.get(k) || 0;
                           const outToday = dailyComparison.outByKey.get(k) || 0;
-                          const adjToday = dailyComparison.adjByKey.get(k) || 0;
-                          const hadBefore = Math.max(0, currentVal - inToday + outToday - adjToday);
+                          const endOfDayVal = Math.max(0, hadBefore + inToday - outToday);
 
                           const rawCount = countDraft[k];
                           const countedVal =
@@ -794,7 +857,18 @@ export default function Inventory() {
                                 {outToday > 0 ? `−${outToday}` : '0'}
                               </td>
                               <td className="px-3 py-2 text-right font-extrabold text-slate-900">
-                                {currentVal}
+                                {entryDay === dayKey() ? (
+                                  currentVal
+                                ) : (
+                                  <span>
+                                    {endOfDayVal}
+                                    {endOfDayVal !== currentVal && (
+                                      <span className="ml-1 text-[10px] font-medium text-slate-400">
+                                        (hoy {currentVal})
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
                               </td>
                               <td className="px-3 py-2 text-center">
                                 <input
@@ -888,16 +962,7 @@ export default function Inventory() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => {
-                                  if (
-                                    window.confirm(
-                                      `¿Anular el registro ${code}? Se revertirán sus unidades en el inventario.`
-                                    )
-                                  ) {
-                                    voidStockEntry(entry.id);
-                                    toast(`Registro ${code} anulado`, 'ok');
-                                  }
-                                }}
+                                onClick={() => setConfirmVoidEntry(entry)}
                                 className="rounded-xl bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-100"
                               >
                                 Anular
@@ -996,6 +1061,17 @@ export default function Inventory() {
                       <button
                         type="button"
                         onClick={() => {
+                          removeReadyMadeShirt(r.id, 1);
+                          toast(`1 ud de ${r.designName} (${r.size}) dada de baja`, 'info');
+                        }}
+                        className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100"
+                        title="Descontar 1 unidad sin registrar venta"
+                      >
+                        −1 Baja
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
                           removeReadyMadeShirt(r.id, r.qty);
                           toast('Prenda descartada del inventario');
                         }}
@@ -1007,13 +1083,10 @@ export default function Inventory() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        removeReadyMadeShirt(r.id, 1);
-                        toast(`1 ud de ${r.designName} (${r.size}) descontada por venta`, 'ok');
-                      }}
-                      className="rounded-xl bg-slate-900 px-3.5 py-1.5 text-xs font-extrabold text-white shadow hover:bg-slate-800"
+                      onClick={() => openSellReadyModal(r)}
+                      className="rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-extrabold text-white shadow hover:bg-emerald-700"
                     >
-                      ✓ Vendida (-1)
+                      ⚡ Registrar Venta
                     </button>
                   </div>
                 </div>
@@ -1189,7 +1262,7 @@ export default function Inventory() {
                         )}
                       </div>
                       <div className="text-xs font-semibold text-slate-500">
-                        {money(normalPrice(settings, brand))} · Mayorista {money(settings.priceWholesale)}
+                        Base lisa: {money(normalPrice(settings, brand))} · Estampada: {money(settings.priceCustom || 35000)}
                       </div>
                     </div>
                   </div>
@@ -1638,6 +1711,147 @@ export default function Inventory() {
           </div>
         </div>
       </Modal>
+
+      <Modal
+        open={!!sellingReady}
+        onClose={() => setSellingReady(null)}
+        title="⚡ Registrar Venta · Prenda Ya Estampada"
+      >
+        {sellingReady && (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/15"
+                  style={{ backgroundColor: sellingReady.colorHex }}
+                >
+                  <span>👕</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-black text-slate-900">
+                    {sellingReady.brandName} · {sellingReady.colorName} · Talla {sellingReady.size}
+                  </div>
+                  <div className="truncate text-xs font-bold text-slate-600">{sellingReady.designName}</div>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-extrabold text-emerald-800">
+                  Stock: {sellingReady.qty}
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Crea el pedido pagado y entregado en Reportes sin descontar camisas lisas del inventario regular.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {sellingReady.qty > 1 && (
+                <div>
+                  <label className="label">Cantidad (máx. {sellingReady.qty})</label>
+                  <Stepper
+                    value={sellRmQty}
+                    min={1}
+                    onCommit={(n) => setSellRmQty(Math.min(sellingReady.qty, Math.max(1, n)))}
+                    ariaLabel="Cantidad a vender"
+                  />
+                </div>
+              )}
+              <div className={sellingReady.qty > 1 ? '' : 'sm:col-span-2'}>
+                <label className="label">Precio unitario (L)</label>
+                <input
+                  type="number"
+                  min={1}
+                  step="0.01"
+                  className="input font-bold"
+                  value={sellRmPrice}
+                  onChange={(e) => setSellRmPrice(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-2xl border border-slate-200 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <label className="label mb-0">Cliente</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSellRmCustomer('Consumidor Final');
+                    setSellRmPhone('');
+                  }}
+                  className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-extrabold text-white hover:bg-slate-800"
+                >
+                  Consumidor Final
+                </button>
+              </div>
+              <input
+                className="input"
+                placeholder="Nombre del cliente o Consumidor Final"
+                value={sellRmCustomer}
+                onChange={(e) => setSellRmCustomer(e.target.value)}
+              />
+              <div>
+                <label className="label">Teléfono (opcional si es Consumidor Final)</label>
+                <input
+                  className="input"
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="Ej. +504 9999-9999"
+                  value={sellRmPhone}
+                  onChange={(e) => setSellRmPhone(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Método de pago</label>
+              <select
+                className="input"
+                value={sellRmPayment}
+                onChange={(e) => setSellRmPayment(e.target.value)}
+              >
+                {settings.paymentMethods.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center justify-between rounded-2xl bg-emerald-50 px-4 py-3">
+              <span className="text-xs font-extrabold uppercase text-emerald-900">Total a registrar</span>
+              <span className="text-lg font-black text-emerald-800">
+                {money(sellRmQty * toCents(sellRmPrice))}
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" className="btn-ghost" onClick={() => setSellingReady(null)}>
+                Cancelar
+              </button>
+              <button type="button" className="btn-primary bg-emerald-600 hover:bg-emerald-700" onClick={handleConfirmSellReady}>
+                Confirmar Venta
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Confirm
+        open={!!confirmVoidEntry}
+        onClose={() => setConfirmVoidEntry(null)}
+        title="Anular lote de inventario"
+        text={
+          confirmVoidEntry
+            ? `¿Anular el registro ${confirmVoidEntry.folio}? Se revertirán sus unidades del inventario.`
+            : ''
+        }
+        confirmLabel="Sí, anular registro"
+        danger
+        onConfirm={() => {
+          if (!confirmVoidEntry) return;
+          voidStockEntry(confirmVoidEntry.id);
+          toast(`Registro ${confirmVoidEntry.folio} anulado`, 'ok');
+          setConfirmVoidEntry(null);
+        }}
+      />
     </div>
   );
 }

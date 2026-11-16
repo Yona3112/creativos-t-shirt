@@ -105,6 +105,9 @@ export function createStockCount(counts: { key: string; counted: number }[], not
       const after = Math.floor(c.counted);
       return { key: c.key, qty: after - before, before, after };
     });
+    if (lines.every((l) => l.qty === 0)) {
+      return s;
+    }
     const entry: StockEntry = {
       id,
       folio: nextEntryFolio(s, 'cuadre'),
@@ -524,6 +527,72 @@ export function patchOrder(id: string, patch: Partial<Order>): void {
   }));
 }
 
+export function updateOrderDetails(
+  id: string,
+  patch: Partial<Order> & { items: Order['items'] }
+): void {
+  const t = now();
+  update((s) => {
+    const existing = s.orders.find((o) => o.id === id);
+    if (!existing) return s;
+    const activeStockOrder = existing.status !== 'cancelado' && existing.status !== 'borrador';
+    const movements = [...s.movements];
+    let reconciledItems = patch.items;
+
+    if (activeStockOrder) {
+      reconciledItems = patch.items.map((nextIt, idx) => {
+        const prevIt = existing.items.find((x) => x.id === nextIt.id) || existing.items[idx];
+        const prevFrom = Math.max(0, prevIt?.fromStock || 0);
+        const key = vkey(nextIt.brandId, nextIt.colorId, nextIt.size);
+
+        if (nextIt.qty < prevFrom) {
+          const ret = prevFrom - nextIt.qty;
+          movements.push({
+            id: `edit-ret-${id}-${nextIt.id}-${t}-${idx}`,
+            key,
+            delta: ret,
+            reason: 'ajuste',
+            orderId: id,
+            note: 'Edición de cantidad en pedido',
+            at: t
+          });
+          return { ...nextIt, fromStock: nextIt.qty };
+        }
+
+        if (nextIt.qty > prevFrom) {
+          const { stock } = computeStock({ ...s, movements });
+          const avail = Math.max(0, stock.get(key) || 0);
+          const take = Math.min(avail, nextIt.qty - prevFrom);
+          if (take > 0) {
+            movements.push({
+              id: `edit-add-${id}-${nextIt.id}-${t}-${idx}`,
+              key,
+              delta: -take,
+              reason: 'venta',
+              orderId: id,
+              note: 'Aumento de cantidad en pedido',
+              at: t
+            });
+          }
+          return { ...nextIt, fromStock: prevFrom + take };
+        }
+
+        return { ...nextIt, fromStock: prevFrom };
+      });
+    }
+
+    return {
+      ...s,
+      movements,
+      orders: s.orders.map((o) =>
+        o.id === id
+          ? { ...o, ...patch, items: reconciledItems, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) }
+          : o
+      )
+    };
+  });
+}
+
 export function deleteOrder(id: string): void {
   const t = now();
   update((s) => {
@@ -541,6 +610,7 @@ export function deleteOrder(id: string): void {
 }
 
 export function orderStockReturnCount(order: Order): number {
+  if (order.status === 'cancelado' || order.status === 'borrador') return 0;
   return order.items.reduce((sum, it) => sum + Math.max(0, it.fromStock || 0), 0);
 }
 
@@ -563,23 +633,45 @@ export function setOrderStatus(
   const o = getState().orders.find((x) => x.id === id);
   if (!o) return 'Pedido no encontrado';
   if (o.status === 'cancelado') return 'El pedido está cancelado';
+  if (o.status === 'borrador' && status !== 'borrador' && status !== 'cancelado') {
+    const nameStr = (o.shipTo?.name || '').trim();
+    const lowerName = nameStr.toLowerCase();
+    const isConsumidorFinal = lowerName.includes('consumidor final') || lowerName === 'mostrador';
+    const rawDigits = (o.shipTo?.phone || '').replace(/\D/g, '');
+    const localDigits = rawDigits.startsWith('504') && rawDigits.length >= 11 ? rawDigits.slice(3) : rawDigits;
+    if (!nameStr || (!isConsumidorFinal && localDigits.length < 8)) {
+      return 'Candado: edita el pedido y registra nombre + teléfono (mín. 8 dígitos) o "Consumidor Final" antes de pasarlo a producción';
+    }
+  }
   if (status === 'entregado' && !o.trackingNumber.trim()) return 'Registra el número de guía antes de marcar como entregado';
   update((s) => {
     const t = now();
+    const currentOrder = s.orders.find((x) => x.id === id) || o;
     const movements = [...s.movements];
     let readyMadeStock = [...(s.readyMadeStock || [])];
-    let items = o.items;
+    let items = currentOrder.items;
     if (status === 'cancelado') {
       if (options?.returnAsReadyMade) {
         // La camisa ya fue estampada (ej. devolución contra entrega).
         // NO regresa a camisas en blanco para evitar falsas existencias de camisas lisas.
         // Se añade como Prenda Ya Estampada lista para entrega inmediata.
-        for (const it of o.items) {
-          const dName = o.designName || `${it.brandName} ${it.colorName}` || 'Diseño Personalizado';
-          const pId = o.photoId || null;
+        const anyItemHasDesign = currentOrder.items.some((x) =>
+          Boolean(x.designName || x.photoId || x.designId)
+        );
+        for (const it of currentOrder.items) {
+          const isPlainMixedItem = anyItemHasDesign && !it.designName && !it.photoId && !it.designId;
+          const dName = isPlainMixedItem
+            ? `${it.brandName} ${it.colorName} (Lisa)`
+            : it.designName ||
+              currentOrder.designName ||
+              `${it.brandName} ${it.colorName}` ||
+              'Diseño Personalizado';
+          const dCode = isPlainMixedItem ? 'LISA' : it.designCode || currentOrder.designCode || null;
+          const pId = isPlainMixedItem ? null : it.photoId || currentOrder.photoId || null;
+          const place = isPlainMixedItem ? null : it.placement || currentOrder.placement || 'back';
           readyMadeStock.unshift({
             id: `rms_${t}_${uid().slice(0, 4)}`,
-            orderId: o.id,
+            orderId: currentOrder.id,
             brandId: it.brandId,
             brandName: it.brandName,
             colorId: it.colorId,
@@ -587,36 +679,52 @@ export function setOrderStatus(
             colorHex: it.colorHex,
             size: it.size,
             designName: dName,
-            designCode: o.designCode || null,
+            designCode: dCode,
             photoId: pId,
-            placement: o.placement || 'back',
+            placement: place,
             price: it.unitPrice,
             qty: it.qty,
             createdAt: t,
-            notes: `Devolución contra entrega (Folio #${o.folio})`
+            notes: `Devolución contra entrega (Folio #${currentOrder.folio})`
           });
         }
       } else {
         // Camisa lisa o sin estampar: regresa a inventario regular de camisas en blanco
-        for (const it of o.items) {
+        for (const it of currentOrder.items) {
           if (it.fromStock > 0) {
             movements.push({
-              id: `cancel-${o.id}-${it.id}`,
+              id: `cancel-${currentOrder.id}-${it.id}`,
               key: vkey(it.brandId, it.colorId, it.size),
               delta: it.fromStock,
               reason: 'cancelacion',
-              orderId: o.id,
+              orderId: currentOrder.id,
               at: t
             });
           }
         }
       }
+    } else if (status === 'borrador' && currentOrder.status !== 'borrador') {
+      // Si un pedido activo se regresa a borrador, devolvemos las camisas reservadas en blanco al inventario
+      for (const it of currentOrder.items) {
+        if (it.fromStock > 0) {
+          movements.push({
+            id: `draft-ret-${currentOrder.id}-${it.id}-${t}`,
+            key: vkey(it.brandId, it.colorId, it.size),
+            delta: it.fromStock,
+            reason: 'ajuste',
+            orderId: currentOrder.id,
+            note: 'Pedido regresado a borrador',
+            at: t
+          });
+        }
+      }
+      items = currentOrder.items.map((it) => ({ ...it, fromStock: 0 }));
     } else if (status !== 'borrador') {
       // Unidades que se vendieron "bajo pedido": al llegar inventario y avanzar el pedido,
       // se descuentan del stock para que el inventario no quede inflado.
       const { stock } = computeStock({ ...s, movements });
       const used = new Map<string, number>();
-      items = o.items.map((it) => {
+      items = currentOrder.items.map((it) => {
         const pending = it.qty - (it.fromStock || 0);
         if (pending <= 0) return it;
         const key = vkey(it.brandId, it.colorId, it.size);
@@ -625,11 +733,11 @@ export function setOrderStatus(
         if (take <= 0) return it;
         used.set(key, (used.get(key) || 0) + take);
         movements.push({
-          id: `venta-${o.id}-${it.id}-extra-${t}`,
+          id: `venta-${currentOrder.id}-${it.id}-extra-${t}`,
           key,
           delta: -take,
           reason: 'venta',
-          orderId: o.id,
+          orderId: currentOrder.id,
           note: 'Descuento de unidades bajo pedido',
           at: t
         });
@@ -693,6 +801,109 @@ export function removeReadyMadeShirt(id: string, qty = 1): void {
       .filter((r) => !r.deleted && r.qty > 0);
     return { ...s, readyMadeStock: next };
   });
+}
+
+export function sellReadyMadeShirt(input: {
+  readyMadeId: string;
+  qty: number;
+  unitPrice: number;
+  customerName: string;
+  customerPhone?: string;
+  paymentMethod: string;
+}): Order | null {
+  let created: Order | null = null;
+  const t = now();
+  update((s) => {
+    const list = s.readyMadeStock || [];
+    const target = list.find((r) => r.id === input.readyMadeId && !r.deleted && r.qty > 0);
+    if (!target) return s;
+    const sellQty = Math.max(1, Math.min(target.qty, Math.floor(input.qty || 1)));
+    const unitPrice = Math.max(0, input.unitPrice);
+    const total = sellQty * unitPrice;
+    const brand = s.brands.find((b) => b.id === target.brandId);
+    const color = s.colors.find((c) => c.id === target.colorId);
+    const orderId = uid();
+    const itemId = uid();
+    const isPlain = target.designCode === 'LISA';
+    const resolvedPlacement = (isPlain ? null : target.placement || 'back') as Order['placement'];
+
+    const newOrder: Order = {
+      id: orderId,
+      folio: nextFolio(s),
+      status: 'entregado',
+      customerId: null,
+      addressId: null,
+      shipTo: {
+        name: input.customerName.trim() || 'Consumidor Final',
+        phone: (input.customerPhone || '').trim(),
+        address: ''
+      },
+      workType: isPlain ? 'Lisa' : 'Con diseño',
+      photoId: target.photoId || null,
+      items: [
+        {
+          id: itemId,
+          brandId: target.brandId,
+          colorId: target.colorId,
+          size: target.size,
+          qty: sellQty,
+          unitPrice,
+          manualPrice: true,
+          fromStock: 0,
+          brandName: target.brandName || brand?.name || '',
+          colorName: target.colorName || color?.name || '',
+          colorHex: target.colorHex || color?.hex || '#111827',
+          sku: skuOf(brand, color, target.size),
+          designId: null,
+          designName: isPlain ? null : target.designName,
+          designCode: isPlain ? null : target.designCode || null,
+          photoId: target.photoId || null,
+          photoUrl: null,
+          placement: resolvedPlacement
+        }
+      ],
+      subtotal: total,
+      shipping: 0,
+      total,
+      deposit: total,
+      balance: 0,
+      paymentMethod: input.paymentMethod || s.settings.paymentMethods[0] || 'Efectivo',
+      notes: `Venta de Prenda Ya Estampada en stock (${target.designName})`,
+      carrier: 'Entrega inmediata',
+      trackingNumber: 'TIENDA',
+      trackingUrl: '',
+      whatsappSentAt: null,
+      createdAt: t,
+      updatedAt: t,
+      history: [{ status: 'entregado', at: t }],
+      designId: null,
+      designName: isPlain ? null : target.designName,
+      designCode: isPlain ? null : target.designCode || null,
+      placement: resolvedPlacement,
+      guidePhotoId: null
+    };
+    created = newOrder;
+
+    const nextReady = list
+      .map((r) => {
+        if (r.id !== target.id) return r;
+        const nextQty = Math.max(0, r.qty - sellQty);
+        return {
+          ...r,
+          qty: nextQty,
+          deleted: nextQty <= 0,
+          updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
+        };
+      })
+      .filter((r) => !r.deleted && r.qty > 0);
+
+    return {
+      ...s,
+      readyMadeStock: nextReady,
+      orders: [...s.orders, newOrder]
+    };
+  });
+  return created;
 }
 
 export function markPaid(id: string): void {

@@ -7,7 +7,46 @@ import { STATUS_LABEL } from '../lib/actions';
 import { downloadText, toCSV } from '../lib/csv';
 import { ColorDot, Empty, toast } from '../components/ui';
 import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
-import type { Order } from '../lib/types';
+import type { CatalogDesign, Order } from '../lib/types';
+
+function resolveOrderItemDesign(
+  o: Order,
+  it: Order['items'][number],
+  hasAnyItemDesign: boolean,
+  catalogMap: Map<string, CatalogDesign>
+): { code: string; name: string } {
+  const itemHasOwn = Boolean(it.designId || it.designCode || it.designName || it.photoId);
+  if (itemHasOwn) {
+    const cat = it.designId ? catalogMap.get(it.designId) : undefined;
+    const rawName = (it.designName || cat?.name || '').trim();
+    const isPlainLabel = rawName.toLowerCase().includes('lisa');
+    const code = (it.designCode || cat?.code || (isPlainLabel ? 'LISA' : 'CUSTOM')).trim();
+    const name = rawName || 'Diseño personalizado';
+    return { code: code || 'CUSTOM', name };
+  }
+
+  if (hasAnyItemDesign) {
+    return { code: 'LISA', name: 'Camisa Lisa (Sin estampado)' };
+  }
+
+  const cat = o.designId ? catalogMap.get(o.designId) : undefined;
+  let dCode = (o.designCode || cat?.code || '').trim();
+  let dName = (o.designName || cat?.name || '').trim();
+  if (!dName && o.notes) {
+    const m = /Diseño:\s*(?:\[([^\]]+)\]\s*)?([^·|]+)/i.exec(o.notes);
+    if (m) {
+      if (m[1] && !dCode) dCode = m[1].trim();
+      dName = m[2].trim();
+    }
+  }
+  if (!dName) {
+    if (!o.photoId || o.workType.toLowerCase().includes('lisa')) {
+      return { code: dCode || 'LISA', name: 'Camisa Lisa (Sin estampado)' };
+    }
+    return { code: dCode || 'CUSTOM', name: `Diseño Personalizado (${o.workType})` };
+  }
+  return { code: dCode || 'S/C', name: dName };
+}
 
 type Preset = 'hoy' | '7d' | '30d' | 'todo' | 'rango';
 
@@ -52,10 +91,17 @@ export default function Reports() {
     [state.orders, range]
   );
 
+  const catalogMap = useMemo(
+    () => new Map((state.catalogDesigns || []).map((d) => [d.id, d])),
+    [state.catalogDesigns]
+  );
+
   const summary = useMemo(() => {
     let total = 0;
     let collected = 0;
     let pending = 0;
+    let shippingTotal = 0;
+    let garmentCostTotal = 0;
     let units = 0;
     const bySize = new Map<string, number>();
     const byColor = new Map<string, { name: string; hex: string; qty: number }>();
@@ -65,43 +111,24 @@ export default function Reports() {
       { key: string; code: string; name: string; qty: number; ordersCount: number; revenue: number }
     >();
 
-    const catalogMap = new Map(
-      (state.catalogDesigns || []).map((d) => [d.id, d])
-    );
+    const brandCostMap = new Map(state.brands.map((b) => [b.id, b.cost || 0]));
 
     for (const o of orders) {
       total += o.total;
       collected += o.deposit;
       pending += o.balance;
+      shippingTotal += o.shipping || 0;
 
-      // Resolver código y nombre del diseño/estilo vendido
-      const cat = o.designId ? catalogMap.get(o.designId) : undefined;
-      let dCode = o.designCode || cat?.code || '';
-      let dName = o.designName || cat?.name || '';
-      if (!dName && o.notes) {
-        const m = /Diseño:\s*(?:\[([^\]]+)\]\s*)?([^·|]+)/i.exec(o.notes);
-        if (m) {
-          if (m[1] && !dCode) dCode = m[1].trim();
-          dName = m[2].trim();
-        }
-      }
-      if (!dName) {
-        if (!o.photoId || o.workType.toLowerCase().includes('lisa')) {
-          dCode = dCode || 'LISA';
-          dName = 'Camisa Lisa (Sin estampado)';
-        } else {
-          dCode = dCode || 'CUSTOM';
-          dName = `Diseño Personalizado (${o.workType})`;
-        }
-      }
-      const designKey = `${dCode}|${dName}`.toLowerCase();
-      let orderQty = 0;
-      let orderLineRev = 0;
+      const hasAnyItemDesign = o.items.some((x) =>
+        Boolean(x.designId || x.designCode || x.designName || x.photoId)
+      );
+      const seenDesignsInOrder = new Set<string>();
 
       for (const it of o.items) {
         units += it.qty;
-        orderQty += it.qty;
-        orderLineRev += it.qty * it.unitPrice;
+        const lineRev = it.qty * it.unitPrice;
+        const unitCost = brandCostMap.get(it.brandId) || 0;
+        garmentCostTotal += it.qty * unitCost;
         bySize.set(it.size, (bySize.get(it.size) || 0) + it.qty);
         byBrand.set(it.brandName, (byBrand.get(it.brandName) || 0) + it.qty);
         const prev = byColor.get(it.colorName);
@@ -110,23 +137,35 @@ export default function Reports() {
           hex: it.colorHex,
           qty: (prev?.qty || 0) + it.qty
         });
-      }
 
-      const prevDesign = byDesign.get(designKey);
-      byDesign.set(designKey, {
-        key: designKey,
-        code: dCode || 'S/C',
-        name: dName,
-        qty: (prevDesign?.qty || 0) + orderQty,
-        ordersCount: (prevDesign?.ordersCount || 0) + 1,
-        revenue: (prevDesign?.revenue || 0) + orderLineRev
-      });
+        const resolved = resolveOrderItemDesign(o, it, hasAnyItemDesign, catalogMap);
+        const designKey = `${resolved.code}|${resolved.name}`.toLowerCase();
+        const isFirstInOrder = !seenDesignsInOrder.has(designKey);
+        if (isFirstInOrder) seenDesignsInOrder.add(designKey);
+
+        const prevDesign = byDesign.get(designKey);
+        byDesign.set(designKey, {
+          key: designKey,
+          code: resolved.code,
+          name: resolved.name,
+          qty: (prevDesign?.qty || 0) + it.qty,
+          ordersCount: (prevDesign?.ordersCount || 0) + (isFirstInOrder ? 1 : 0),
+          revenue: (prevDesign?.revenue || 0) + lineRev
+        });
+      }
     }
+
+    const garmentRevenue = Math.max(0, total - shippingTotal);
+    const grossProfit = garmentRevenue - garmentCostTotal;
 
     return {
       total,
       collected,
       pending,
+      shippingTotal,
+      garmentRevenue,
+      garmentCostTotal,
+      grossProfit,
       units,
       count: orders.length,
       bySize: Array.from(bySize.entries()),
@@ -134,9 +173,10 @@ export default function Reports() {
       byBrand: Array.from(byBrand.entries()).sort((a, b) => b[1] - a[1]),
       byDesign: Array.from(byDesign.values()).sort((a, b) => b.qty - a.qty || b.revenue - a.revenue)
     };
-  }, [orders, state.catalogDesigns]);
+  }, [orders, catalogMap, state.brands]);
 
   const exportCsv = () => {
+    const brandCostMap = new Map(state.brands.map((b) => [b.id, b.cost || 0]));
     const rows: (string | number)[][] = [
       [
         'Folio',
@@ -153,6 +193,7 @@ export default function Reports() {
         'Cantidad',
         'Precio Unitario (L)',
         'Subtotal Línea (L)',
+        'Costo Camisas (L)',
         'Envío Pedido (L)',
         'Total Pedido (L)',
         'Anticipo (L)',
@@ -163,15 +204,20 @@ export default function Reports() {
       ]
     ];
     for (const o of orders) {
+      const hasAnyItemDesign = o.items.some((x) =>
+        Boolean(x.designId || x.designCode || x.designName || x.photoId)
+      );
       for (const it of o.items) {
+        const resolved = resolveOrderItemDesign(o, it, hasAnyItemDesign, catalogMap);
+        const lineCost = it.qty * (brandCostMap.get(it.brandId) || 0);
         rows.push([
           folioLabel(o.folio),
           fmtDateTime(o.createdAt),
           STATUS_LABEL[o.status],
           o.shipTo.name,
           o.shipTo.phone,
-          o.designCode || (o.photoId ? 'CUSTOM' : 'LISA'),
-          o.designName || (o.photoId ? 'Diseño personalizado' : 'Camisa Lisa'),
+          resolved.code,
+          resolved.name,
           o.workType,
           it.brandName,
           it.colorName,
@@ -179,6 +225,7 @@ export default function Reports() {
           it.qty,
           fromCents(it.unitPrice).toFixed(2),
           fromCents(it.qty * it.unitPrice).toFixed(2),
+          fromCents(lineCost).toFixed(2),
           fromCents(o.shipping).toFixed(2),
           fromCents(o.total).toFixed(2),
           fromCents(o.deposit).toFixed(2),
@@ -281,6 +328,28 @@ export default function Reports() {
           </div>
         </div>
       </div>
+
+      {orders.length > 0 && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="card">
+            <div className="text-xs font-bold uppercase text-slate-500">Venta prendas (sin envío)</div>
+            <div className="mt-1 text-lg font-extrabold text-slate-900">{money(summary.garmentRevenue)}</div>
+            <div className="text-[11px] text-slate-400">Envíos facturados: {money(summary.shippingTotal)}</div>
+          </div>
+          <div className="card">
+            <div className="text-xs font-bold uppercase text-slate-500">Costo camisas en blanco</div>
+            <div className="mt-1 text-lg font-extrabold text-amber-700">{money(summary.garmentCostTotal)}</div>
+            <div className="text-[11px] text-slate-400">Según costo por marca</div>
+          </div>
+          <div className="card">
+            <div className="text-xs font-bold uppercase text-slate-500">Ganancia bruta estimada</div>
+            <div className={`mt-1 text-lg font-extrabold ${summary.grossProfit >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+              {money(summary.grossProfit)}
+            </div>
+            <div className="text-[11px] text-slate-400">Antes de tinta DTF y gastos fijos</div>
+          </div>
+        </div>
+      )}
 
       {orders.length === 0 ? (
         <Empty icon="📈" text="Sin ventas en este período" />

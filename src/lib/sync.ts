@@ -307,10 +307,15 @@ export class SyncEngine {
   private async fetchMissingPhotos(state: AppState) {
     if (!this.client || !navigator.onLine) return;
     const orderPhotos = state.orders
-      .filter((o) => !o.deleted && (o.photoId || o.guidePhotoId))
+      .filter((o) => !o.deleted)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 60)
-      .flatMap((o) => [o.photoId, o.guidePhotoId].filter(Boolean) as string[]);
+      .flatMap((o) => [
+        o.photoId,
+        o.guidePhotoId,
+        ...(o.items || []).map((it) => it.photoId)
+      ])
+      .filter((id): id is string => Boolean(id));
     const catalogPhotos = (state.catalogDesigns || [])
       .filter((d) => d.photoId && !d.deleted)
       .map((d) => d.photoId);

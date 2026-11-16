@@ -97,7 +97,11 @@ export default function Workshop() {
               }`
             : ''
         }
-        confirmLabel="Sí, eliminar y devolver"
+        confirmLabel={
+          confirmDelete && orderStockReturnCount(confirmDelete) > 0
+            ? 'Sí, eliminar y devolver'
+            : 'Sí, eliminar pedido'
+        }
         danger
         onConfirm={() => {
           if (confirmDelete) {
@@ -126,7 +130,6 @@ function WorkshopCard({
   onOpenPdf: () => void;
   onAskDelete: () => void;
 }) {
-  const photo = usePhoto(order.photoId);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState(order.notes || '');
 
@@ -136,12 +139,20 @@ function WorkshopCard({
     toast(`${folioLabel(order.folio)} enviado a despacho`);
   };
 
+  const totalUnits = order.items.reduce((s, it) => s + it.qty, 0);
+  const anyItemHasOwnPhoto = order.items.some((it) => Boolean(it.photoId));
+
   return (
-    <article className="card space-y-3 border-2 border-slate-200">
+    <article className="card space-y-3 border border-slate-200/90 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-xl font-extrabold text-brand-900">{folioLabel(order.folio)}</span>
-          <span className="rounded-lg bg-brand-100 px-3 py-1 text-sm font-bold text-brand-900">{order.workType}</span>
+          <span className="rounded-lg bg-brand-100 px-3 py-1 text-xs font-extrabold text-brand-900">
+            {order.workType}
+          </span>
+          <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+            {totalUnits} {totalUnits === 1 ? 'prenda' : 'prendas'}
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -183,22 +194,9 @@ function WorkshopCard({
       {order.shipTo.name && (
         <div className="text-sm font-semibold text-slate-600">
           Cliente: <span className="text-slate-900">{order.shipTo.name}</span>
-        </div>
-      )}
-
-      {photo && (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-          <img
-            src={photo}
-            alt={`Diseño ${folioLabel(order.folio)}`}
-            className="max-h-72 w-full cursor-zoom-in object-contain"
-            onClick={() => onZoom(photo)}
-          />
-          <div className="border-t border-slate-200 p-2">
-            <button className="btn-soft w-full" onClick={() => onZoom(photo)}>
-              🔍 Ver Diseño
-            </button>
-          </div>
+          {order.shipTo.phone && order.shipTo.phone !== 'Consumidor Final' && (
+            <span className="ml-1.5 font-normal text-slate-500">· {order.shipTo.phone}</span>
+          )}
         </div>
       )}
 
@@ -231,21 +229,36 @@ function WorkshopCard({
         </div>
       ) : (
         order.notes && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-950">
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
             📝 {order.notes}
           </div>
         )
       )}
 
-      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/60">
-        {order.items.map((it) => (
-          <WorkshopItemRow
-            key={it.id}
-            item={it}
-            fallbackPhotoId={order.items.length === 1 ? order.photoId : null}
-            onZoom={onZoom}
-          />
-        ))}
+      <ul className="divide-y divide-slate-200/80 rounded-2xl border border-slate-200 bg-slate-50/60">
+        {order.items.map((it) => {
+          const itemLooksPlain =
+            !it.photoId &&
+            !it.designId &&
+            !it.designName &&
+            !it.designCode &&
+            (order.items.length > 1 && anyItemHasOwnPhoto);
+          const fallbackPhotoId =
+            !itemLooksPlain && !anyItemHasOwnPhoto
+              ? order.photoId
+              : order.items.length === 1
+              ? order.photoId
+              : null;
+          return (
+            <WorkshopItemRow
+              key={it.id}
+              item={it}
+              fallbackPhotoId={fallbackPhotoId}
+              fallbackPlacement={order.placement || null}
+              onZoom={onZoom}
+            />
+          );
+        })}
       </ul>
 
       <button className="btn-success w-full text-base" onClick={finish}>
@@ -258,54 +271,77 @@ function WorkshopCard({
 function WorkshopItemRow({
   item,
   fallbackPhotoId,
+  fallbackPlacement,
   onZoom
 }: {
   item: Order['items'][number];
   fallbackPhotoId: string | null;
+  fallbackPlacement: Order['placement'] | null;
   onZoom: (src: string) => void;
 }) {
   const photo = usePhoto(item.photoId || fallbackPhotoId);
-  const side = item.placement === 'back' ? 'Espalda' : item.placement ? 'Frente' : null;
+  const effPlacement = item.placement || (photo ? fallbackPlacement : null);
+  const side = effPlacement === 'back' ? 'ESPALDA' : effPlacement ? 'FRENTE' : null;
 
   return (
-    <li className="flex items-center justify-between gap-2.5 px-3 py-2.5">
-      <div className="flex min-w-0 items-center gap-2.5">
+    <li className="flex items-center justify-between gap-3 px-3 py-3">
+      <div className="flex min-w-0 items-center gap-3">
         {photo ? (
           <button
             type="button"
             onClick={() => onZoom(photo)}
-            className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/15 bg-white p-0.5 shadow-sm"
-            title="Ver diseño"
+            className="group relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-black/15 p-1 shadow-sm transition hover:scale-105"
+            style={{ backgroundColor: item.colorHex || '#111827' }}
+            title="Toca para ver diseño en grande"
           >
             <img src={photo} alt={item.designName || 'Diseño'} className="h-full w-full object-contain" />
+            {side && (
+              <span className="absolute inset-x-0 bottom-0 bg-black/70 py-0.5 text-center text-[8px] font-black tracking-wider text-white">
+                {side}
+              </span>
+            )}
+            <span className="absolute right-1 top-1 rounded bg-black/50 px-1 text-[9px] text-white opacity-0 transition group-hover:opacity-100">
+              🔍
+            </span>
           </button>
         ) : (
-          <ColorDot hex={item.colorHex} size={24} />
+          <div
+            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-black/10 shadow-inner"
+            style={{ backgroundColor: item.colorHex || '#F1F5F9' }}
+            title={item.colorName}
+          >
+            <ColorDot hex={item.colorHex} size={26} />
+          </div>
         )}
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <ColorDot hex={item.colorHex} size={14} />
-            <span className="truncate font-bold text-slate-900">
+            <span className="truncate font-extrabold text-slate-900">
               {item.brandName} · {item.colorName}
             </span>
           </div>
-          {item.designName ? (
-            <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs">
-              <span className="font-semibold text-slate-700">
-                {item.designCode ? `[${item.designCode}] ` : ''}{item.designName}
+          {item.designName || photo ? (
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
+              {item.designCode && (
+                <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-300">
+                  {item.designCode}
+                </span>
+              )}
+              <span className="font-bold text-slate-800">
+                {item.designName || 'Diseño personalizado'}
               </span>
               {side && (
-                <span className="rounded bg-slate-200/80 px-1.5 py-0.2 text-[10px] font-bold text-slate-700">
+                <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-extrabold text-amber-900">
                   📍 {side}
                 </span>
               )}
             </div>
           ) : (
-            <div className="text-[11px] font-medium text-slate-500">👕 Lisa</div>
+            <div className="mt-0.5 text-xs font-medium text-slate-500">👕 Camisa Lisa (Sin diseño)</div>
           )}
         </div>
       </div>
-      <span className="shrink-0 rounded-lg bg-white px-3 py-1 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
+      <span className="shrink-0 rounded-xl bg-white px-3.5 py-1.5 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
         {item.size} × {item.qty}
       </span>
     </li>
