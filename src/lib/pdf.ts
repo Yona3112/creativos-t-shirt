@@ -301,20 +301,24 @@ export async function renderCatalogOrderCardCanvas(
   const multiItems = input.items && input.items.length > 1 ? input.items : null;
   const visibleRows = multiItems ? multiItems.slice(0, 6) : [];
   const extraRows = multiItems && multiItems.length > 6 ? multiItems.length - 6 : 0;
-  const rowH = 98;
+  const rowH = 148;
   const multiBlockH = multiItems
     ? visibleRows.length * rowH + (extraRows > 0 ? 34 : 0) + 18
     : 296;
 
   const W = 720;
+  const PX = 2.5;
   const custY = 160 + multiBlockH + 14;
   const custH = 210;
   const totY = custY + custH + 26;
   const H = totY + 136 + 56;
   const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
+  canvas.width = W * PX;
+  canvas.height = H * PX;
   const ctx = canvas.getContext('2d')!;
+  ctx.scale(PX, PX);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
   // Fondo general estilo Apple
   ctx.fillStyle = '#F5F5F7';
@@ -371,18 +375,18 @@ export async function renderCatalogOrderCardCanvas(
     for (let idx = 0; idx < visibleRows.length; idx++) {
       const it = visibleRows[idx];
       ctx.fillStyle = '#F8FAFC';
-      roundRect(56, rowY, W - 112, 86, 18);
+      roundRect(56, rowY, W - 112, 136, 18);
       ctx.fill();
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = '#E2E8F0';
       ctx.stroke();
 
-      // Miniatura de diseño sobre color de tela
-      const tx = 68;
-      const ty = rowY + 11;
-      const ts = 64;
+      // Miniatura de diseño grande y nítida sobre color de tela
+      const tx = 66;
+      const ty = rowY + 8;
+      const ts = 120;
       ctx.fillStyle = it.colorHex || '#1A1A1C';
-      roundRect(tx, ty, ts, ts, 12);
+      roundRect(tx, ty, ts, ts, 14);
       ctx.fill();
       ctx.strokeStyle = '#CBD5E1';
       ctx.stroke();
@@ -390,7 +394,7 @@ export async function renderCatalogOrderCardCanvas(
       if (it.designUrl) {
         const img = await loadImageSafe(it.designUrl);
         if (img) {
-          const pad = 7;
+          const pad = 8;
           const sc = Math.min((ts - pad * 2) / (img.naturalWidth || 1), (ts - pad * 2) / (img.naturalHeight || 1));
           const dw = (img.naturalWidth || 1) * sc;
           const dh = (img.naturalHeight || 1) * sc;
@@ -398,32 +402,43 @@ export async function renderCatalogOrderCardCanvas(
         }
       } else {
         ctx.fillStyle = '#94A3B8';
-        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('LISA', tx + ts / 2, ty + ts / 2 + 4);
         ctx.textAlign = 'left';
       }
 
-      const sideText = it.designUrl ? (it.placement === 'back' ? 'Espalda' : 'Frente') : 'Lisa';
+      const sideText = it.designUrl ? (it.placement === 'back' ? 'ESPALDA' : 'FRENTE') : 'LISA';
       const titleLine = it.designName
         ? `${it.designCode ? `[${it.designCode}] ` : ''}${it.designName}`
         : 'Camisa Lisa';
+      const mx = 202;
       ctx.fillStyle = '#0F172A';
-      ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-      ctx.fillText(titleLine.slice(0, 30), 148, rowY + 36);
+      ctx.font = 'bold 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(titleLine.slice(0, 32), mx, rowY + 34);
 
       ctx.fillStyle = '#475569';
       ctx.font = '600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-      ctx.fillText(`${it.colorName} · Talla ${it.size} · ${sideText}`, 148, rowY + 62);
+      ctx.fillText(`${it.colorName} · Talla ${it.size}`, mx, rowY + 60);
+
+      // Píldora clara de ubicación para Taller
+      ctx.fillStyle = it.designUrl ? (it.placement === 'back' ? '#1D4ED8' : '#B45309') : '#E2E8F0';
+      roundRect(mx, rowY + 76, 134, 30, 9);
+      ctx.fill();
+      ctx.fillStyle = it.designUrl ? '#FFFFFF' : '#475569';
+      ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(it.designUrl ? `📍 ${sideText}` : 'SIN DISEÑO', mx + 67, rowY + 96);
+      ctx.textAlign = 'left';
 
       // Píldora cantidad + subtotal derecha
       ctx.fillStyle = '#0F172A';
       ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`${it.qty} × ${money(it.unitPrice)}`, W - 76, rowY + 36);
+      ctx.fillText(`${it.qty} × ${money(it.unitPrice)}`, W - 76, rowY + 42);
       ctx.fillStyle = '#059669';
-      ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-      ctx.fillText(money(it.qty * it.unitPrice), W - 76, rowY + 62);
+      ctx.font = 'bold 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(money(it.qty * it.unitPrice), W - 76, rowY + 72);
       ctx.textAlign = 'left';
 
       rowY += rowH;
@@ -663,7 +678,7 @@ export function packCanvasesToPdfFile(
 
   for (let i = 0; i < n; i++) {
     const canvas = canvases[i];
-    const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.95);
     const b64 = jpegDataUrl.split(',')[1] || '';
     const binStr = atob(b64);
     const imgBytes = new Uint8Array(binStr.length);
@@ -768,15 +783,19 @@ export async function buildWorkshopOrdersPdfFile(
   const W = 900;
   const H = 1272;
   const M = 36;
+  const PX = 2.5; // Resolución alta para que Taller vea nítidos los diseños
   const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif';
 
   const pages: HTMLCanvasElement[] = [];
 
   const createPage = (pageNum: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; y: number } => {
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = H;
+    canvas.width = W * PX;
+    canvas.height = H * PX;
     const ctx = canvas.getContext('2d')!;
+    ctx.scale(PX, PX);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     ctx.fillStyle = '#F5F5F7';
     ctx.fillRect(0, 0, W, H);
@@ -834,7 +853,7 @@ export async function buildWorkshopOrdersPdfFile(
 
     const headH = 54;
     const clientH = 52 + addrLines.length * 18 + (noteLines.length > 0 ? 18 + noteLines.length * 18 : 0);
-    const rowH = 88;
+    const rowH = 196;
     const totalCardH = headH + clientH + o.items.length * rowH + 22;
 
     if (cur.y + Math.min(totalCardH, headH + clientH + rowH + 24) > H - M - 28) {
@@ -961,8 +980,8 @@ export async function buildWorkshopOrdersPdfFile(
       ctx.stroke();
 
       // Recuadro miniatura del diseño sobre color de camisa
-      const thumbSize = 68;
-      const tx = M + 14;
+      const thumbSize = 176;
+      const tx = M + 10;
       const ty = y + 7;
       ctx.fillStyle = it.colorHex || '#1A1A1C';
       drawRoundedRect(ctx, tx, ty, thumbSize, thumbSize, 12);
@@ -991,7 +1010,7 @@ export async function buildWorkshopOrdersPdfFile(
       );
 
       if (loadedImg) {
-        const pad = 6;
+        const pad = 10;
         const avail = thumbSize - pad * 2;
         const sc = Math.min(avail / (loadedImg.naturalWidth || 1), avail / (loadedImg.naturalHeight || 1));
         const dw = (loadedImg.naturalWidth || 1) * sc;
@@ -1008,7 +1027,7 @@ export async function buildWorkshopOrdersPdfFile(
       // Meta de prenda
       const mx = tx + thumbSize + 16;
       ctx.beginPath();
-      ctx.arc(mx + 7, y + 25, 7, 0, Math.PI * 2);
+      ctx.arc(mx + 8, y + 36, 8, 0, Math.PI * 2);
       ctx.fillStyle = it.colorHex || '#111827';
       ctx.fill();
       ctx.lineWidth = 1;
@@ -1016,8 +1035,8 @@ export async function buildWorkshopOrdersPdfFile(
       ctx.stroke();
 
       ctx.fillStyle = '#0F172A';
-      ctx.font = `800 15px ${FONT}`;
-      ctx.fillText(`${it.brandName} · ${it.colorName}`, mx + 20, y + 30);
+      ctx.font = `800 17px ${FONT}`;
+      ctx.fillText(`${it.brandName} · ${it.colorName}`, mx + 22, y + 42);
 
       const designTitle = it.designName
         ? `${it.designCode ? `[${it.designCode}] ` : ''}${it.designName}`
@@ -1029,37 +1048,52 @@ export async function buildWorkshopOrdersPdfFile(
       const rawPlace = it.placement || o.placement;
       const sideLabel = hasPrint
         ? rawPlace === 'back'
-          ? 'ESPALDA'
+          ? '📍 ESPALDA (ATRÁS)'
           : rawPlace === 'pocket'
-          ? 'BOLSILLO'
-          : 'FRENTE'
-        : 'LISA';
+          ? '📍 BOLSILLO'
+          : '📍 FRENTE (PECHO)'
+        : 'SIN ESTAMPADO (LISA)';
 
       ctx.fillStyle = '#334155';
-      ctx.font = `700 13.5px ${FONT}`;
-      const designShort = designTitle.length > 42 ? `${designTitle.slice(0, 41)}…` : designTitle;
-      ctx.fillText(designShort, mx, y + 54);
+      ctx.font = `700 15px ${FONT}`;
+      const designLines = wrapCanvasTextByWidth(ctx, designTitle, cardW - thumbSize - 190).slice(0, 2);
+      let dy = y + 72;
+      for (const dln of designLines) {
+        ctx.fillText(dln, mx, dy);
+        dy += 22;
+      }
 
-      const dWidth = ctx.measureText(designShort).width;
-      ctx.fillStyle = hasPrint ? '#EFF6FF' : '#F1F5F9';
-      drawRoundedRect(ctx, mx + dWidth + 10, y + 39, 82, 20, 10);
+      const sideColorBg = hasPrint
+        ? rawPlace === 'back'
+          ? '#1D4ED8'
+          : rawPlace === 'pocket'
+          ? '#0F766E'
+          : '#B45309'
+        : '#E2E8F0';
+      ctx.fillStyle = sideColorBg;
+      drawRoundedRect(ctx, mx, y + 124, 210, 38, 10);
       ctx.fill();
-      ctx.fillStyle = hasPrint ? '#1D4ED8' : '#475569';
-      ctx.font = `800 10.5px ${FONT}`;
+      ctx.fillStyle = hasPrint ? '#FFFFFF' : '#475569';
+      ctx.font = `900 15px ${FONT}`;
       ctx.textAlign = 'center';
-      ctx.fillText(sideLabel, mx + dWidth + 51, y + 53);
+      ctx.fillText(sideLabel, mx + 105, y + 148);
       ctx.textAlign = 'left';
 
-      // Talla x Cantidad grande a la derecha
-      const badgeW = 128;
-      const badgeH = 44;
+      // Tarjeta grande de Talla y Cantidad a la derecha
+      const badgeW = 138;
+      const badgeH = 82;
+      const badgeX = M + cardW - badgeW - 14;
+      const badgeY = y + 54;
       ctx.fillStyle = '#0F172A';
-      drawRoundedRect(ctx, M + cardW - badgeW - 14, y + 19, badgeW, badgeH, 12);
+      drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, 14);
       ctx.fill();
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = `900 18px ${FONT}`;
+      ctx.font = `900 20px ${FONT}`;
       ctx.textAlign = 'center';
-      ctx.fillText(`${it.size} × ${it.qty}`, M + cardW - 14 - badgeW / 2, y + 47);
+      ctx.fillText(`TALLA ${it.size}`, badgeX + badgeW / 2, badgeY + 34);
+      ctx.fillStyle = '#38BDF8';
+      ctx.font = `900 15px ${FONT}`;
+      ctx.fillText(`CANT: ${it.qty} ${it.qty === 1 ? 'UD' : 'UDS'}`, badgeX + badgeW / 2, badgeY + 62);
       ctx.textAlign = 'left';
 
       y += rowH;
@@ -1083,7 +1117,7 @@ export async function buildWorkshopOrdersPdfFile(
       ? `Taller-${String(targetOrders[0].folio).padStart(8, '0')}.pdf`
       : `Cola-Taller-${dayKey()}.pdf`;
   const file = packCanvasesToPdfFile(pages, filename, 595, 842);
-  const previewUrls = pages.map((c) => c.toDataURL('image/jpeg', 0.85));
+  const previewUrls = pages.map((c) => c.toDataURL('image/jpeg', 0.94));
   return { file, previewUrls };
 }
 

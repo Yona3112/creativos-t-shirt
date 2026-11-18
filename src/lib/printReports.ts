@@ -979,12 +979,12 @@ export function printDailyOrdersReport(
         padding-bottom: 0;
       }
       .thumb-frame {
-        width: 50px;
-        height: 50px;
+        width: 112px;
+        height: 112px;
         flex-shrink: 0;
-        border-radius: 10px;
+        border-radius: 14px;
         border: 1px solid rgba(15, 23, 42, 0.16);
-        padding: 4px;
+        padding: 6px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -997,12 +997,12 @@ export function printDailyOrdersReport(
         display: block;
       }
       .thumb-mini {
-        width: 38px;
-        height: 38px;
+        width: 68px;
+        height: 68px;
         margin: 0 auto;
-        border-radius: 8px;
+        border-radius: 10px;
         border: 1px solid rgba(15, 23, 42, 0.16);
-        padding: 3px;
+        padding: 4px;
         display: flex;
         align-items: center;
         justify-content: center;

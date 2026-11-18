@@ -1356,7 +1356,7 @@ export function CustomerCatalogView({
 
       if (it.photoUrl) {
         try {
-          itemThumb = await createDesignThumbnail(it.photoUrl, 240);
+          itemThumb = await createDesignThumbnail(it.photoUrl, 720);
         } catch {
           itemThumb = null;
         }
@@ -1484,7 +1484,7 @@ export function CustomerCatalogView({
             ? `${webOrderItems.length} prendas variadas`
             : firstItem.designName || 'Camisa Lisa',
         designCode: firstItem.designCode,
-        designUrl: firstItem.designThumb || finalCartItems[0]?.photoUrl || null,
+        designUrl: finalCartItems[0]?.photoUrl || firstItem.designThumb || null,
         placement: firstItem.placement,
         paymentLabel: paymentPending ? 'Pagar al recoger en tienda' : 'Transferencia / Anticipo',
         stockNote: clientCampaign !== 'all' ? `Colección: ${clientCampaign}` : undefined,
@@ -1497,7 +1497,7 @@ export function CustomerCatalogView({
           unitPrice: it.unitPrice,
           designName: it.designName,
           designCode: it.designCode,
-          designUrl: it.designThumb || finalCartItems[idx]?.photoUrl || null,
+          designUrl: finalCartItems[idx]?.photoUrl || it.designThumb || null,
           placement: it.placement
         }))
       };

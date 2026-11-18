@@ -8,18 +8,22 @@ import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleI
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto } from '../lib/sync';
 import { addressOneLine, createOrder, deleteColor, quickCustomer, saveCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
+import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
+import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
+import { NewColorModal } from '../components/NewColorModal';
+import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
+import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
+import { useCatalogDesigns } from '../lib/catalogDesigns';
+import { sanitizeWebOrder } from '../lib/publicCatalog';
+import { WEB_ORDER_LATEST_KEY, readWebOrderImportHash, type CustomerWebOrderPayload } from './Catalog3D';
 
 function cleanHnPhoneDigits(raw: string): string {
   const digits = (raw || '').replace(/\D/g, '');
   return digits.length > 8 && digits.startsWith('504') ? digits.slice(3) : digits;
 }
-import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
-import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
-import { NewColorModal } from '../components/NewColorModal';
-import { fillTemplate, whatsappUrl } from '../lib/whatsapp';
-import { useCatalogDesigns } from '../lib/catalogDesigns';
-import { sanitizeWebOrder } from '../lib/publicCatalog';
-import { WEB_ORDER_LATEST_KEY, readWebOrderImportHash, type CustomerWebOrderPayload } from './Catalog3D';
+
+const POS_WIZARD_TITLES = ['Ubicación', 'Diseño', 'Talla', 'Datos'] as const;
+const POS_WIZARD_LAST = 3 as const;
 
 const LS_CART = 'cgs_cart_v1';
 const LS_LAST_IMPORTED_WEB_ORDER = 'cgs_last_imported_weborder_v1';
@@ -208,9 +212,12 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   const customer = state.customers.find((c) => c.id === draft.customerId) || null;
 
-  const addLine = () => {
-    if (!brand || !color) return toast('Elige marca y color', 'error');
-    if (qty < 1) return;
+  const commitCurrentLineToCart = (silent = false): boolean => {
+    if (!brand || !color) {
+      if (!silent) toast('Elige marca y color', 'error');
+      return false;
+    }
+    if (qty < 1) return false;
     const isManual = manualPrice !== null;
     const hasDesignForLine = isCustomWork && Boolean(draft.photo || draft.designId || draft.designName);
     const curDesignId = hasDesignForLine ? draft.designId || null : null;
@@ -265,16 +272,20 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       }
       return { ...d, lines: next };
     });
-    const st = stock.get(vkey(brand.id, color.id, size)) || 0;
-    const designLabel = curDesignName ? ` · ${curDesignName}` : ' · Lisa';
-    toast(
-      st >= qty
-        ? `+${qty} ${brand.code} ${color.name} ${size}${designLabel}`
-        : `+${qty} ${color.name} ${size}${designLabel} (Bajo pedido)`,
-      st >= qty ? 'ok' : 'info'
-    );
+    if (!silent) {
+      const st = stock.get(vkey(brand.id, color.id, size)) || 0;
+      const designLabel = curDesignName ? ` · ${curDesignName}` : ' · Lisa';
+      toast(
+        st >= qty
+          ? `+${qty} ${brand.code} ${color.name} ${size}${designLabel}`
+          : `+${qty} ${color.name} ${size}${designLabel} (Bajo pedido)`,
+        st >= qty ? 'ok' : 'info'
+      );
+    }
     setQty(1);
     setManualPrice(null);
+    setJustAddedLine(true);
+    return true;
   };
 
   const updateLine = (id: string, patch: Partial<CartLine>) =>
@@ -376,9 +387,34 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [consumidorNote, setConsumidorNote] = useState('');
   const [customerError, setCustomerError] = useState<string | null>(null);
   const customerSectionRef = useRef<HTMLDivElement>(null);
-  const [posStep, setPosStep] = useState<'armar' | 'cobrar'>('armar');
-  const goToStep = (step: 'armar' | 'cobrar') => {
-    setPosStep(step);
+  const [wizardStep, setWizardStep] = useState<0 | 1 | 2 | 3>(() =>
+    draft.lines.length > 0 ? 3 : 0
+  );
+  const [maxStepReached, setMaxStepReached] = useState<number>(() =>
+    draft.lines.length > 0 ? 3 : 0
+  );
+  const [justAddedLine, setJustAddedLine] = useState<boolean>(() => draft.lines.length > 0);
+  const [pdfModalOrder, setPdfModalOrder] = useState<Order | null>(null);
+
+  const goToWizardStep = (next: number) => {
+    const clamped = Math.max(0, Math.min(POS_WIZARD_LAST, next)) as 0 | 1 | 2 | 3;
+    if (clamped === POS_WIZARD_LAST && (!justAddedLine || lines.length === 0)) {
+      commitCurrentLineToCart(true);
+    }
+    setWizardStep(clamped);
+    setMaxStepReached((prev) => Math.max(prev, clamped));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleAddAnotherShirt = (fromStep3 = false) => {
+    if (!fromStep3 || !justAddedLine || lines.length === 0) {
+      commitCurrentLineToCart(false);
+    }
+    clearDraftDesign();
+    setQty(1);
+    setManualPrice(null);
+    setJustAddedLine(true);
+    setWizardStep(0);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const [latestWebOrder, setLatestWebOrder] = useState<CustomerWebOrderPayload | null>(null);
@@ -452,8 +488,21 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             bCols.find((c) => c.name.toLowerCase() === (it.colorName || '').toLowerCase()) ||
             bCols[0];
 
+          const matchedCatalogDesign = (state.catalogDesigns || []).find(
+            (d) =>
+              !d.deleted &&
+              d.photoId &&
+              ((it.designId && d.id === it.designId) ||
+                (it.designCode && d.code && d.code.toLowerCase() === it.designCode.toLowerCase()) ||
+                (it.designName && d.name.toLowerCase() === it.designName.toLowerCase()))
+          );
           let itemPhoto: string | null = null;
-          if (it.photoId) {
+          let resolvedItemPhotoId = it.photoId || null;
+          if (matchedCatalogDesign?.photoId) {
+            itemPhoto = await fetchSharedPhoto(matchedCatalogDesign.photoId);
+            if (itemPhoto) resolvedItemPhotoId = matchedCatalogDesign.photoId;
+          }
+          if (!itemPhoto && it.photoId) {
             itemPhoto = await fetchSharedPhoto(it.photoId);
           }
           if (!itemPhoto && it.designThumb) {
@@ -485,10 +534,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               qty: Math.max(1, it.qty || 1),
               unitPrice: it.unitPrice || (lineHasDesign ? (settings.priceCustom || 35000) : tierPrice(settings, matchedB, it.qty || 1)),
               manualPrice: false,
-              designId: it.designId || null,
-              designName: it.designName || null,
-              designCode: it.designCode || null,
-              photoId: it.photoId || null,
+              designId: it.designId || matchedCatalogDesign?.id || null,
+              designName: it.designName || matchedCatalogDesign?.name || null,
+              designCode: it.designCode || matchedCatalogDesign?.code || null,
+              photoId: resolvedItemPhotoId,
               photo: itemPhoto,
               rawPhoto: itemPhoto,
               placement: lineHasDesign ? (it.placement || 'back') : null,
@@ -562,7 +611,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           /* ignorar */
         }
         setLatestWebOrder(null);
-        setPosStep('cobrar');
+        setJustAddedLine(true);
+        setWizardStep(3);
+        setMaxStepReached(3);
         window.scrollTo({ top: 0, behavior: 'smooth' });
         toast(`✅ Pedido de ${webOrder.customerName || 'Cliente'} (${importedLines.length} prendas) cargado`);
       } catch (e) {
@@ -662,7 +713,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const confirm = async (status: 'en_produccion' | 'borrador') => {
     if (!lines.length) return toast('Agrega al menos una camisa', 'error');
     if (status !== 'borrador' && !customerCheck.ok) {
-      setPosStep('cobrar');
+      setWizardStep(3);
+      setMaxStepReached(3);
       setCustomerError(customerCheck.reason);
       setTimeout(() => customerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 40);
       toast(customerCheck.reason, 'error');
@@ -698,12 +750,12 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       await savePhoto(mainPhotoId, draft.photo, 0);
     }
 
-    // Persistir las fotos de cada línea individual si el pedido contiene múltiples diseños
+    // Persistir las fotos de cada línea en alta resolución localmente para Taller PDF
     const linesWithPhotos: CartLine[] = [];
     for (const l of lines) {
       let lPhotoId = l.photoId || null;
-      if (l.photo && !lPhotoId) {
-        lPhotoId = uid();
+      if (l.photo && (!lPhotoId || lPhotoId.startsWith('photo_'))) {
+        if (!lPhotoId) lPhotoId = uid();
         await savePhoto(lPhotoId, l.photo, 0);
       }
       linesWithPhotos.push({
@@ -750,14 +802,23 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     setCustomerError(null);
     setQ('');
     setCustMode('buscar');
-    setPosStep('armar');
+    setWizardStep(0);
+    setMaxStepReached(0);
+    setJustAddedLine(false);
     setDone(order);
   };
 
   const normalForBrand = normalPrice(settings, brand);
+  const currentDraftLabel = `${color?.name || 'Color'} · ${(draft.placement || 'back') === 'back' ? 'Espalda' : 'Frente'} · Talla ${size} · ${qty} ${qty === 1 ? 'ud' : 'uds'}${draft.designName ? ` · ${draft.designName}` : ''}`;
+  const bottomBarTotal =
+    wizardStep === POS_WIZARD_LAST
+      ? total
+      : justAddedLine && lines.length > 0
+      ? subtotal
+      : subtotal + qty * unitPrice;
 
   return (
-    <div className="space-y-4 pb-6">
+    <div className="space-y-4 pb-36 sm:pb-32">
       {/* Banner 1-Clic cuando un cliente envía un pedido desde la Tienda 3D */}
       {latestWebOrder && (
         <section className="rounded-[24px] border border-white/10 bg-slate-900/95 p-4 text-white shadow-lg backdrop-blur-xl">
@@ -824,66 +885,88 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </section>
       )}
 
-      {/* Barra de navegación 2 pasos estilo Shopify POS */}
-      <div className="sticky top-[68px] z-30 -mx-1 rounded-2xl border border-slate-200/90 bg-white/95 p-1.5 shadow-sm backdrop-blur-md">
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            onClick={() => goToStep('armar')}
-            className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-extrabold transition ${
-              posStep === 'armar'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <span>1 · Armar Prendas</span>
-            {cartQty > 0 && (
-              <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-black ${
-                  posStep === 'armar' ? 'bg-white text-slate-900' : 'bg-brand-100 text-brand-900'
-                }`}
+      {/* Barra de progreso 4 slides estilo Catálogo */}
+      <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
+        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-500">
+          <div className="flex items-center gap-2">
+            <span>Paso {wizardStep + 1} de {POS_WIZARD_LAST + 1}</span>
+            <span className="font-bold text-slate-900">· {POS_WIZARD_TITLES[wizardStep]}</span>
+          </div>
+          {cartQty > 0 && (
+            <button
+              type="button"
+              onClick={() => goToWizardStep(3)}
+              className="inline-flex items-center gap-1 rounded-full bg-slate-900 px-2.5 py-0.5 text-[11px] font-bold text-white shadow-sm hover:bg-slate-800"
+              title="Ir al resumen y cobro"
+            >
+              <span>🛒 {cartQty}</span>
+              <span>· {money(subtotal)}</span>
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-4 gap-1.5">
+          {POS_WIZARD_TITLES.map((title, i) => {
+            const unlocked = i <= maxStepReached || (i === POS_WIZARD_LAST && lines.length > 0);
+            const active = i === wizardStep;
+            return (
+              <button
+                key={title}
+                type="button"
+                disabled={!unlocked && i > wizardStep}
+                aria-label={`Ir al paso ${i + 1}: ${title}`}
+                onClick={() => (unlocked || i <= wizardStep) && goToWizardStep(i)}
+                className="group flex flex-col items-start gap-1 text-left disabled:cursor-default"
               >
-                {cartQty}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => goToStep('cobrar')}
-            className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition ${
-              posStep === 'cobrar'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : lines.length > 0
-                ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-            }`}
-          >
-            <span>2 · Cliente y Pago</span>
-            {lines.length > 0 && (
-              <span className="font-mono text-[11px] opacity-90">· {money(total)}</span>
-            )}
-          </button>
+                <span
+                  className={`h-1.5 w-full rounded-full transition-colors ${
+                    i <= wizardStep
+                      ? 'bg-slate-900'
+                      : unlocked
+                      ? 'bg-slate-400'
+                      : 'bg-slate-200'
+                  }`}
+                />
+                <span
+                  className={`truncate text-[10px] font-semibold ${
+                    active
+                      ? 'text-slate-900'
+                      : unlocked || i <= wizardStep
+                      ? 'text-slate-500 group-hover:text-slate-800'
+                      : 'text-slate-300'
+                  }`}
+                >
+                  {i + 1}. {title}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {posStep === 'armar' && (
+      {/* PASOS 1 y 2: VISOR 3D + UBICACIÓN O DISEÑO (IGUAL AL CATÁLOGO) */}
+      {wizardStep <= 1 && (
         <div className="space-y-4">
-      {/* 1. Marca */}
-      <section className="card">
-        <h2 className="section-title">1 · Marca</h2>
-        <div className="grid grid-cols-2 gap-2">
-          {brands.map((b) => (
-            <button key={b.id} className={`chip ${b.id === brandId ? 'chip-on' : 'chip-off'}`} onClick={() => setBrandId(b.id)}>
-              {b.name}
-            </button>
-          ))}
-        </div>
-      </section>
+          {wizardStep === 0 && brands.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+              <span className="px-2 text-xs font-bold text-slate-500">Marca:</span>
+              {brands.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+                    b.id === brandId ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  onClick={() => {
+                    setBrandId(b.id);
+                    setJustAddedLine(false);
+                  }}
+                >
+                  {b.name}
+                </button>
+              ))}
+            </div>
+          )}
 
-      {/* 2. Color + Visor 3D Real */}
-      <section className="card space-y-3">
-        <h2 className="section-title mb-0">2 · Color y Vista 3D Real</h2>
-        <div className="rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-100 via-white to-slate-100 p-3">
           <InteractiveShirt3D
             hex={color?.hex || '#e5e7eb'}
             colorName={color?.name || ''}
@@ -893,16 +976,26 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             designScale={draft.designScale ?? 2.0}
             designOffsetX={draft.designOffsetX ?? 0}
             designOffsetY={draft.designOffsetY ?? 0}
+            wizardStep={wizardStep === 0 ? 'color' : 'design'}
             onDesignChange={(patch) => {
               const next: Partial<Draft> = {};
               if (patch.scale !== undefined) next.designScale = patch.scale;
               if (patch.offsetX !== undefined) next.designOffsetX = patch.offsetX;
               if (patch.offsetY !== undefined) next.designOffsetY = patch.offsetY;
-              if (patch.placement !== undefined) next.placement = patch.placement;
+              if (patch.placement !== undefined) {
+                next.placement = patch.placement;
+                setJustAddedLine(false);
+              }
               set(next);
             }}
-            onUploadFile={(file) => void onPhoto(file)}
-            onClearDesign={clearDraftDesign}
+            onUploadFile={(file) => {
+              setJustAddedLine(false);
+              void onPhoto(file);
+            }}
+            onClearDesign={() => {
+              clearDraftDesign();
+              setJustAddedLine(false);
+            }}
             removeBg={draft.removeBg ?? false}
             onToggleRemoveBg={(next) => void toggleRemoveBg(next)}
             onAiRemoveBg={() => void handleAiBgNewOrder()}
@@ -921,7 +1014,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               };
             })}
             activeColorId={color?.id}
-            onSelectColor={(id) => setColorId(id)}
+            onSelectColor={(id) => {
+              setColorId(id);
+              setJustAddedLine(false);
+            }}
             onAddNewColor={() => setColorModal(true)}
             onEditColor={(id) => {
               const target = colors.find((c) => c.id === id);
@@ -936,21 +1032,28 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             activeCatalogDesignId={draft.designId || null}
             onSelectCatalogDesign={(d) => {
               if (!d.imageUrl) return;
+              const curSide = draft.placement || 'back';
+              const sideWork = settings.workTypes.find((w) =>
+                curSide === 'back'
+                  ? w.toLowerCase().includes('espalda')
+                  : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+              ) || customWorkTypeDefault;
               set({
                 photo: d.imageUrl,
                 rawPhoto: d.imageUrl,
                 designId: d.id,
                 designName: d.name,
                 designCode: d.code || 'D-001',
-                placement: 'back',
+                placement: curSide,
                 designScale: 2.0,
                 designOffsetX: 0,
                 designOffsetY: 0,
                 workType: draft.workType.toLowerCase().includes('lisa')
-                  ? customWorkTypeDefault
+                  ? sideWork
                   : draft.workType
               });
-              toast(`"${d.code ? `[${d.code}] ` : ''}${d.name}" colocado en ESPALDA (Tamaño A3)`);
+              setJustAddedLine(false);
+              toast(`"${d.code ? `[${d.code}] ` : ''}${d.name}" colocado en ${curSide === 'back' ? 'ESPALDA' : 'FRENTE'}`);
             }}
             onRenameCatalogDesign={(id, name, code) => {
               renameDesign(id, name, code);
@@ -1026,201 +1129,315 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 : null
             }
           />
-        </div>
 
-        {draft.photo && (
-          <div className="grid grid-cols-1 gap-2 rounded-xl border border-amber-200 bg-amber-50/70 p-2.5 sm:grid-cols-3">
-            <div>
-              <label className="label text-xs">Código de Diseño (Reporte)</label>
-              <input
-                className="input font-mono font-bold uppercase"
-                placeholder="Ej. D-001, TORO-01"
-                value={draft.designCode || ''}
-                onChange={(e) => set({ designCode: e.target.value.toUpperCase() })}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="label text-xs">Nombre del Diseño / Estilo de Camisa (Reporte)</label>
-              <input
-                className="input font-bold"
-                placeholder="Ej. Establo Silla, Toro Honduras..."
-                value={draft.designName || ''}
-                onChange={(e) => set({ designName: e.target.value })}
-              />
-            </div>
-          </div>
-        )}
-
-        <div>
-          <label className="label" htmlFor="wt">
-            Tipo de trabajo
-          </label>
-          <select id="wt" className="input" value={draft.workType} onChange={(e) => set({ workType: e.target.value })}>
-            {settings.workTypes.map((w) => (
-              <option key={w}>{w}</option>
-            ))}
-          </select>
-        </div>
-      </section>
-
-      {/* 3. Talla */}
-      <section className="card">
-        <h2 className="section-title">3 · Talla</h2>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {settings.sizes.map((sz) => {
-            const st = brand && color ? stock.get(vkey(brand.id, color.id, sz)) || 0 : 0;
-            const active = sz === size;
-            return (
-              <button key={sz} className={`chip flex-col gap-0.5 py-2 ${active ? 'chip-on' : 'chip-off'}`} onClick={() => setSize(sz)}>
-                <span className="text-lg font-extrabold leading-tight">{sz}</span>
-                <span
-                  className={`text-[11px] font-bold ${
-                    active
-                      ? st > 0
-                        ? 'text-emerald-300'
-                        : 'text-amber-300'
-                      : st > 0
-                      ? 'text-emerald-600'
-                      : 'text-amber-600'
-                  }`}
-                >
-                  {st > 0 ? `${st} disp.` : 'Disponible pronto'}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* 4. Precio y 5. Cantidad */}
-      <section className="card space-y-3">
-        <h2 className="section-title">4 · Precio</h2>
-        <div className="grid grid-cols-2 gap-2">
-          <div
-            role="button"
-            tabIndex={0}
-            className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
-              !isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
-            }`}
-            onClick={() => {
-              setManualPrice(null);
-              clearDraftDesign();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                setManualPrice(null);
-                clearDraftDesign();
-              }
-            }}
-          >
-            <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>👕 Camisa Lisa</span>
-              {!isCustomWork && (
-                <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                  Activo
-                </span>
-              )}
-            </div>
-            <div onClick={(e) => e.stopPropagation()}>
-              <MoneyInput
-                ariaLabel="Precio camisa lisa"
-                value={normalForBrand}
-                onChange={(c) => {
-                  if (c === null) return;
-                  if (brand && brand.priceOverride !== null) updateBrand(brand.id, { priceOverride: c });
-                  else updateSettings({ priceNormal: c });
-                }}
-              />
-            </div>
-          </div>
-          <div
-            role="button"
-            tabIndex={0}
-            className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
-              isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
-            }`}
-            onClick={() => {
-              setManualPrice(null);
-              set({ workType: customWorkTypeDefault });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                setManualPrice(null);
-                set({ workType: customWorkTypeDefault });
-              }
-            }}
-          >
-            <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>✨ Personalizada A3</span>
-              {isCustomWork && (
-                <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                  Activo
-                </span>
-              )}
-            </div>
-            <div onClick={(e) => e.stopPropagation()}>
-              <MoneyInput
-                ariaLabel="Precio personalizada"
-                value={settings.priceCustom || 35000}
-                onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
-              />
-            </div>
-          </div>
-        </div>
-        <div>
-          <label className="label">Precio aplicado a esta prenda (L)</label>
-          <div className="flex gap-2">
-            <MoneyInput className="flex-1" ariaLabel="Precio por camisa" value={unitPrice} onChange={(c) => setManualPrice(c)} />
-            {manualPrice !== null && (
-              <button className="btn-ghost" onClick={() => setManualPrice(null)} title="Restablecer precio sugerido">
-                ↺
-              </button>
-            )}
-          </div>
-        </div>
-        <h2 className="section-title pt-1">5 · Cantidad</h2>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Stepper value={qty} min={1} onCommit={setQty} ariaLabel="Cantidad" />
-          <div className="text-right">
-            <div className="text-xs text-slate-500">{qty} × {money(unitPrice)}</div>
-            <div className="text-lg font-extrabold">{money(qty * unitPrice)}</div>
-          </div>
-        </div>
-        <button className="btn-primary w-full text-lg" onClick={addLine} disabled={!brand || !color}>
-          ➕ Agregar al Pedido
-        </button>
-
-        {lines.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/90 p-3">
-            <div>
-              <div className="text-xs font-extrabold text-emerald-950">
-                🛒 {cartQty} {cartQty === 1 ? 'prenda lista' : 'prendas listas'} · {money(subtotal)}
+          {wizardStep === 0 && (
+            <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
+              <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">¿Dónde irá el diseño?</h2>
+              <p className="mb-3 text-xs text-slate-500">Elige el color de la camisa arriba y el lado a estampar aquí.</p>
+              <div className="grid grid-cols-2 gap-2">
+                {([['back', 'Espalda (Atrás)'], ['center', 'Frente (Pecho)']] as const).map(([k, lbl]) => {
+                  const active = (draft.placement || 'back') === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => {
+                        set({ placement: k });
+                        setJustAddedLine(false);
+                      }}
+                      className={`min-h-[52px] rounded-2xl border text-sm font-bold transition ${
+                        active
+                          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                          : 'border-slate-200 bg-white text-slate-800 hover:border-slate-400'
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
               </div>
-              <div className="text-[11px] font-medium text-emerald-800">
-                {lines.map((l) => `${l.qty}× ${state.colors.find((c) => c.id === l.colorId)?.name || ''} ${l.size}`).join(' · ')}
+            </section>
+          )}
+
+          {wizardStep === 1 && (
+            <section className="card space-y-3">
+              {draft.photo && (
+                <div className="grid grid-cols-1 gap-2 rounded-xl border border-amber-200 bg-amber-50/70 p-2.5 sm:grid-cols-3">
+                  <div>
+                    <label className="label text-xs">Código de Diseño (Reporte)</label>
+                    <input
+                      className="input font-mono font-bold uppercase"
+                      placeholder="Ej. D-001, TORO-01"
+                      value={draft.designCode || ''}
+                      onChange={(e) => {
+                        set({ designCode: e.target.value.toUpperCase() });
+                        setJustAddedLine(false);
+                      }}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="label text-xs">Nombre del Diseño / Estilo de Camisa (Reporte)</label>
+                    <input
+                      className="input font-bold"
+                      placeholder="Ej. Establo Silla, Toro Honduras..."
+                      value={draft.designName || ''}
+                      onChange={(e) => {
+                        set({ designName: e.target.value });
+                        setJustAddedLine(false);
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="label" htmlFor="wt">
+                  Tipo de trabajo
+                </label>
+                <select
+                  id="wt"
+                  className="input"
+                  value={draft.workType}
+                  onChange={(e) => {
+                    set({ workType: e.target.value });
+                    setJustAddedLine(false);
+                  }}
+                >
+                  {settings.workTypes.map((w) => (
+                    <option key={w}>{w}</option>
+                  ))}
+                </select>
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* PASO 3: TALLA, PRECIO Y CANTIDAD */}
+      {wizardStep === 2 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 rounded-[22px] border border-slate-200/80 bg-white p-3 shadow-sm">
+            <div
+              className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-black/10 p-1.5 shadow-inner"
+              style={{ backgroundColor: color?.hex || '#111827' }}
+            >
+              {draft.photo ? (
+                <img
+                  src={draft.photo}
+                  alt={draft.designName || 'Diseño'}
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <span className="text-2xl">👕</span>
+              )}
+              <span className="absolute inset-x-0 bottom-0 bg-black/65 py-0.5 text-center text-[9px] font-bold text-white">
+                {(draft.placement || 'back') === 'back' ? 'Espalda' : 'Frente'}
+              </span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Prenda actual
+              </div>
+              <div className="truncate text-sm font-bold text-slate-900">
+                {brand?.name} · {color?.name || 'Color'} · {(draft.placement || 'back') === 'back' ? 'Espalda' : 'Frente'}
+              </div>
+              <div className="truncate text-xs text-slate-500">
+                {draft.photo ? `${draft.designCode ? `[${draft.designCode}] ` : ''}${draft.designName || 'Diseño personalizado'}` : 'Camisa lisa (sin diseño)'}
               </div>
             </div>
             <button
               type="button"
-              onClick={() => goToStep('cobrar')}
-              className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.99] sm:w-auto"
+              onClick={() => goToWizardStep(1)}
+              className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100 active:scale-95"
             >
-              Continuar a Cliente y Pago →
+              Editar 3D
             </button>
           </div>
-        )}
-      </section>
+
+          <section className="card">
+            <h2 className="section-title">Talla</h2>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              {settings.sizes.map((sz) => {
+                const st = brand && color ? stock.get(vkey(brand.id, color.id, sz)) || 0 : 0;
+                const active = sz === size;
+                return (
+                  <button
+                    key={sz}
+                    type="button"
+                    className={`chip flex-col gap-0.5 py-2 ${active ? 'chip-on' : 'chip-off'}`}
+                    onClick={() => {
+                      setSize(sz);
+                      setJustAddedLine(false);
+                    }}
+                  >
+                    <span className="text-lg font-extrabold leading-tight">{sz}</span>
+                    <span
+                      className={`text-[11px] font-bold ${
+                        active
+                          ? st > 0
+                            ? 'text-emerald-300'
+                            : 'text-amber-300'
+                          : st > 0
+                          ? 'text-emerald-600'
+                          : 'text-amber-600'
+                      }`}
+                    >
+                      {st > 0 ? `${st} disp.` : 'Encargo'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="card space-y-3">
+            <h2 className="section-title">Precio y Cantidad</h2>
+            <div className="grid grid-cols-2 gap-2">
+              <div
+                role="button"
+                tabIndex={0}
+                className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
+                  !isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
+                }`}
+                onClick={() => {
+                  setManualPrice(null);
+                  clearDraftDesign();
+                  setJustAddedLine(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setManualPrice(null);
+                    clearDraftDesign();
+                    setJustAddedLine(false);
+                  }
+                }}
+              >
+                <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
+                  <span>👕 Camisa Lisa</span>
+                  {!isCustomWork && (
+                    <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                      Activo
+                    </span>
+                  )}
+                </div>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <MoneyInput
+                    ariaLabel="Precio camisa lisa"
+                    value={normalForBrand}
+                    onChange={(c) => {
+                      if (c === null) return;
+                      if (brand && brand.priceOverride !== null) updateBrand(brand.id, { priceOverride: c });
+                      else updateSettings({ priceNormal: c });
+                    }}
+                  />
+                </div>
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
+                  isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
+                }`}
+                onClick={() => {
+                  setManualPrice(null);
+                  set({ workType: customWorkTypeDefault });
+                  setJustAddedLine(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setManualPrice(null);
+                    set({ workType: customWorkTypeDefault });
+                    setJustAddedLine(false);
+                  }
+                }}
+              >
+                <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
+                  <span>✨ Personalizada A3</span>
+                  {isCustomWork && (
+                    <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                      Activo
+                    </span>
+                  )}
+                </div>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <MoneyInput
+                    ariaLabel="Precio personalizada"
+                    value={settings.priceCustom || 35000}
+                    onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Precio aplicado a esta prenda (L)</label>
+              <div className="flex gap-2">
+                <MoneyInput
+                  className="flex-1"
+                  ariaLabel="Precio por camisa"
+                  value={unitPrice}
+                  onChange={(c) => {
+                    setManualPrice(c);
+                    setJustAddedLine(false);
+                  }}
+                />
+                {manualPrice !== null && (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => setManualPrice(null)}
+                    title="Restablecer precio sugerido"
+                  >
+                    ↺
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">Cantidad</div>
+                <div className="text-xs text-slate-500">{qty} × {money(unitPrice)}</div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Stepper
+                  value={qty}
+                  min={1}
+                  onCommit={(v) => {
+                    setQty(v);
+                    setJustAddedLine(false);
+                  }}
+                  ariaLabel="Cantidad"
+                />
+                <div className="min-w-[82px] text-right text-lg font-extrabold">{money(qty * unitPrice)}</div>
+              </div>
+            </div>
+          </section>
+
+          <div className="rounded-[22px] border border-dashed border-slate-300 bg-white/80 p-3 text-center">
+            <button
+              type="button"
+              onClick={() => handleAddAnotherShirt(false)}
+              disabled={!brand || !color}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-4 text-xs font-extrabold text-slate-900 shadow-sm transition hover:bg-slate-100 active:scale-[0.99]"
+            >
+              + Agregar al pedido y elegir otra prenda
+            </button>
+            <p className="mt-1.5 text-[11px] text-slate-500">
+              ¿El cliente lleva otra talla, color o diseño? Agrégalo aquí y pasa al siguiente.
+            </p>
+          </div>
         </div>
       )}
 
-      {/* Paso 2: Resumen, Cliente y Cobro */}
-      {posStep === 'cobrar' && (
+      {/* PASO 4: RESUMEN, CLIENTE Y PAGO */}
+      {wizardStep === 3 && (
       <section className="card space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <h2 className="section-title mb-0">Resumen del pedido</h2>
+            <h2 className="section-title mb-0">Tu pedido</h2>
             {lines.length > 0 && (
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
                 {cartQty} {cartQty === 1 ? 'unidad' : 'unidades'}
@@ -1229,10 +1446,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           </div>
           <button
             type="button"
-            onClick={() => goToStep('armar')}
-            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-extrabold text-slate-800 hover:bg-slate-100"
+            onClick={() => handleAddAnotherShirt(true)}
+            className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-extrabold text-slate-800 hover:bg-slate-100"
           >
-            ← + Agregar otra prenda
+            + Agregar otra prenda
           </button>
         </div>
 
@@ -1754,7 +1971,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             className="btn-ghost text-red-600"
             onClick={() => {
               setDraft({ ...emptyDraft(), paymentMethod: draft.paymentMethod });
-              setPosStep('armar');
+              setJustAddedLine(false);
+              setMaxStepReached(0);
+              setWizardStep(0);
             }}
             disabled={!lines.length && !draft.photo}
           >
@@ -1763,6 +1982,62 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </div>
       </section>
       )}
+
+      {/* BARRA INFERIOR FIJA DEL ASISTENTE (ATRÁS / SIGUIENTE / CONFIRMAR) */}
+      <div
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.08] bg-white/95 px-3 py-2.5 shadow-[0_-8px_30px_rgba(0,0,0,0.08)] backdrop-blur-xl sm:px-4 sm:py-3"
+        style={{ paddingBottom: 'max(0.65rem, env(safe-area-inset-bottom))' }}
+      >
+        <div className="mx-auto max-w-2xl space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 truncate text-xs font-medium text-slate-500">
+              {wizardStep === POS_WIZARD_LAST
+                ? `${cartQty} ${cartQty === 1 ? 'prenda' : 'prendas'} en el pedido`
+                : currentDraftLabel}
+            </div>
+            <div className="shrink-0 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
+              {money(bottomBarTotal)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-[auto_1fr] gap-2">
+            <button
+              type="button"
+              onClick={() => goToWizardStep(wizardStep - 1)}
+              disabled={wizardStep === 0}
+              className="inline-flex min-h-[48px] items-center justify-center rounded-full border border-slate-300 bg-white px-5 text-sm font-bold text-slate-800 shadow-sm transition active:scale-95 disabled:opacity-30"
+            >
+              ← Atrás
+            </button>
+            {wizardStep < POS_WIZARD_LAST ? (
+              <button
+                type="button"
+                onClick={() => goToWizardStep(wizardStep + 1)}
+                className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-slate-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
+              >
+                {wizardStep === 1 && !draft.photo ? 'Seguir sin diseño (Lisa) →' : 'Siguiente →'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void confirm('en_produccion')}
+                disabled={!lines.length}
+                className={`inline-flex min-h-[48px] items-center justify-center rounded-full px-5 text-sm font-extrabold shadow-md transition active:scale-95 ${
+                  customerCheck.ok
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    : 'bg-amber-500 text-stone-950 hover:bg-amber-400'
+                }`}
+              >
+                {!customerCheck.ok
+                  ? '🔒 Falta cliente / teléfono o Cons. Final'
+                  : paymentMode === 'pending'
+                  ? `⏳ Confirmar (Pago Pendiente) · ${money(total)}`
+                  : `✅ Confirmar Pedido · ${money(total)}`}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
 
       <NewColorModal open={colorModal} onClose={() => setColorModal(false)} brandId={brandId} onAdded={(n) => setPendingColorName(n)} />
       <PhotoViewer src={viewer} onClose={() => setViewer(null)} />
@@ -1793,7 +2068,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             <div className="text-5xl">✅</div>
             <div className="text-2xl font-extrabold">{money(done.total)}</div>
             {done.balance > 0 && <div className="font-bold text-red-600">Saldo pendiente: {money(done.balance)}</div>}
-            {done.shipTo.phone && (
+            <button
+              type="button"
+              onClick={() => setPdfModalOrder(done)}
+              className="btn-primary w-full"
+            >
+              🧾 Ver / Descargar PDF de Taller
+            </button>
+            {done.shipTo.phone && done.shipTo.phone.replace(/\D/g, '').length >= 8 && (
               <a
                 className="btn w-full bg-[#25D366] text-white"
                 href={whatsappUrl(done.shipTo.phone, fillTemplate(settings.waConfirm, done, settings))}
@@ -1806,6 +2088,16 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           </div>
         )}
       </Modal>
+
+      {pdfModalOrder && (
+        <WorkshopPdfModal
+          open
+          onClose={() => setPdfModalOrder(null)}
+          orders={[pdfModalOrder]}
+          settings={settings}
+          title={`Orden Taller ${folioLabel(pdfModalOrder.folio)}`}
+        />
+      )}
 
       <Modal
         open={!!editingColor}
