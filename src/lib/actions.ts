@@ -540,10 +540,57 @@ export function updateOrderDetails(
     let reconciledItems = patch.items;
 
     if (activeStockOrder) {
+      // Devolver stock de prendas que fueron eliminadas al editar el pedido
+      const nextIds = new Set(patch.items.map((x) => x.id));
+      for (const removedIt of existing.items) {
+        if (!nextIds.has(removedIt.id) && (removedIt.fromStock || 0) > 0) {
+          movements.push({
+            id: `edit-rem-${id}-${removedIt.id}-${t}`,
+            key: vkey(removedIt.brandId, removedIt.colorId, removedIt.size),
+            delta: removedIt.fromStock,
+            reason: 'ajuste',
+            orderId: id,
+            note: 'Prenda quitada al editar pedido',
+            at: t
+          });
+        }
+      }
+
       reconciledItems = patch.items.map((nextIt, idx) => {
-        const prevIt = existing.items.find((x) => x.id === nextIt.id) || existing.items[idx];
+        const prevIt = existing.items.find((x) => x.id === nextIt.id);
         const prevFrom = Math.max(0, prevIt?.fromStock || 0);
         const key = vkey(nextIt.brandId, nextIt.colorId, nextIt.size);
+        const prevKey = prevIt ? vkey(prevIt.brandId, prevIt.colorId, prevIt.size) : null;
+
+        // Si cambió de color/talla/marca, devolver la variante anterior y tomar de la nueva
+        if (prevIt && prevKey && prevKey !== key) {
+          if (prevFrom > 0) {
+            movements.push({
+              id: `edit-swap-ret-${id}-${nextIt.id}-${t}-${idx}`,
+              key: prevKey,
+              delta: prevFrom,
+              reason: 'ajuste',
+              orderId: id,
+              note: 'Cambio de color/talla al editar pedido',
+              at: t
+            });
+          }
+          const { stock } = computeStock({ ...s, movements });
+          const avail = Math.max(0, stock.get(key) || 0);
+          const take = Math.min(avail, nextIt.qty);
+          if (take > 0) {
+            movements.push({
+              id: `edit-swap-take-${id}-${nextIt.id}-${t}-${idx}`,
+              key,
+              delta: -take,
+              reason: 'venta',
+              orderId: id,
+              note: 'Nueva variante al editar pedido',
+              at: t
+            });
+          }
+          return { ...nextIt, fromStock: take };
+        }
 
         if (nextIt.qty < prevFrom) {
           const ret = prevFrom - nextIt.qty;
@@ -570,7 +617,7 @@ export function updateOrderDetails(
               delta: -take,
               reason: 'venta',
               orderId: id,
-              note: 'Aumento de cantidad en pedido',
+              note: prevIt ? 'Aumento de cantidad en pedido' : 'Prenda agregada al editar pedido',
               at: t
             });
           }

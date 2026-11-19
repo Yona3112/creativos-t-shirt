@@ -110,6 +110,10 @@ export default function Reports() {
       string,
       { key: string; code: string; name: string; qty: number; ordersCount: number; revenue: number }
     >();
+    const byPaymentMethod = new Map<
+      string,
+      { method: string; ordersCount: number; total: number; collected: number; pending: number }
+    >();
 
     const brandCostMap = new Map(state.brands.map((b) => [b.id, b.cost || 0]));
 
@@ -118,6 +122,16 @@ export default function Reports() {
       collected += o.deposit;
       pending += o.balance;
       shippingTotal += o.shipping || 0;
+
+      const pm = (o.paymentMethod || 'Efectivo').trim() || 'Efectivo';
+      const prevPm = byPaymentMethod.get(pm);
+      byPaymentMethod.set(pm, {
+        method: pm,
+        ordersCount: (prevPm?.ordersCount || 0) + 1,
+        total: (prevPm?.total || 0) + o.total,
+        collected: (prevPm?.collected || 0) + o.deposit,
+        pending: (prevPm?.pending || 0) + o.balance
+      });
 
       const hasAnyItemDesign = o.items.some((x) =>
         Boolean(x.designId || x.designCode || x.designName || x.photoId)
@@ -171,7 +185,8 @@ export default function Reports() {
       bySize: Array.from(bySize.entries()),
       byColor: Array.from(byColor.values()).sort((a, b) => b.qty - a.qty),
       byBrand: Array.from(byBrand.entries()).sort((a, b) => b[1] - a[1]),
-      byDesign: Array.from(byDesign.values()).sort((a, b) => b.qty - a.qty || b.revenue - a.revenue)
+      byDesign: Array.from(byDesign.values()).sort((a, b) => b.qty - a.qty || b.revenue - a.revenue),
+      byPaymentMethod: Array.from(byPaymentMethod.values()).sort((a, b) => b.collected - a.collected || b.total - a.total)
     };
   }, [orders, catalogMap, state.brands]);
 
@@ -355,6 +370,40 @@ export default function Reports() {
         <Empty icon="📈" text="Sin ventas en este período" />
       ) : (
         <>
+          {/* Arqueo de Caja por Método de Pago */}
+          {summary.byPaymentMethod.length > 0 && (
+            <section className="card space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="section-title mb-0">💳 Arqueo de Caja por Método de Pago</h2>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-extrabold text-emerald-900">
+                  Cobrado: {money(summary.collected)}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3">
+                {summary.byPaymentMethod.map((pm) => (
+                  <div
+                    key={pm.method}
+                    className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs font-extrabold text-slate-800">{pm.method}</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-slate-200">
+                        {pm.ordersCount} ped.
+                      </span>
+                    </div>
+                    <div className="text-lg font-black text-emerald-700">{money(pm.collected)}</div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Facturado: {money(pm.total)}</span>
+                      {pm.pending > 0 && (
+                        <span className="font-bold text-rose-600">Resta: {money(pm.pending)}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Ranking de Diseños / Estilos de Camisa más vendidos por Código y Nombre */}
           <section className="card space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

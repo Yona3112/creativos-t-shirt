@@ -267,7 +267,7 @@ export default function App() {
           {section === 'catalogo' && <Catalog3D />}
           {section === 'taller' && <Workshop />}
           {section === 'inventario' && <Inventory />}
-          {section === 'pedidos' && <Orders />}
+          {section === 'pedidos' && <Orders navigate={navigate} />}
           {section === 'clientes' && <Customers navigate={navigate} />}
           {section === 'reportes' && <Reports />}
           {section === 'ajustes' && <SettingsPage />}

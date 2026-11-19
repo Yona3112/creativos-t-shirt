@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { motion, AnimatePresence } from 'motion/react';
 import { centsToInput, toCents } from '../lib/money';
 import { getPhoto } from '../lib/db';
+import { downloadImageUrl } from '../lib/csv';
 import { usePhotoVersion } from '../lib/store';
 import type { OrderStatus } from '../lib/types';
 
@@ -314,9 +315,21 @@ export function PhotoViewer({ src, onClose }: { src: string | null; onClose: () 
             +
           </button>
         </div>
-        <button className="btn bg-white text-slate-900" onClick={onClose}>
-          ✕ Cerrar
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="btn bg-emerald-600 text-white hover:bg-emerald-700"
+            onClick={() => {
+              void downloadImageUrl('Diseno-Taller-HD.png', src);
+              toast('Descargando PNG en resolución original', 'ok');
+            }}
+          >
+            ⬇ PNG HD
+          </button>
+          <button className="btn bg-white text-slate-900" onClick={onClose}>
+            ✕ Cerrar
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-auto" onDoubleClick={() => setZoom((z) => (z > 1 ? 1 : 2.5))}>
         <div className="flex min-h-full min-w-full items-center justify-center" style={{ width: `${zoom * 100}%` }}>

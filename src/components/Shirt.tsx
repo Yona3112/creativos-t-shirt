@@ -727,6 +727,7 @@ export function InteractiveShirt3D({
   const [isWesternModalOpen, setIsWesternModalOpen] = useState(false);
   const [showPositionSliders, setShowPositionSliders] = useState(false);
   const [colorSwitchNote, setColorSwitchNote] = useState<string | null>(null);
+  const [designSearch, setDesignSearch] = useState('');
   const [uploadModalState, setUploadModalState] = useState<
     { mode: 'files'; files: File[] } | { mode: 'current' } | null
   >(null);
@@ -978,8 +979,18 @@ export function InteractiveShirt3D({
   };
 
   const filteredCatalogDesigns = (catalogDesigns || []).filter((d) => {
-    if (!activeCampaign || activeCampaign === 'all') return true;
-    return (d.campaign || '').toLowerCase() === activeCampaign.toLowerCase();
+    const campOk =
+      !activeCampaign || activeCampaign === 'all'
+        ? true
+        : (d.campaign || '').toLowerCase() === activeCampaign.toLowerCase();
+    if (!campOk) return false;
+    const sq = designSearch.trim().toLowerCase();
+    if (!sq) return true;
+    return (
+      (d.name || '').toLowerCase().includes(sq) ||
+      (d.code || '').toLowerCase().includes(sq) ||
+      (d.campaign || '').toLowerCase().includes(sq)
+    );
   });
 
   const readySlideDesigns = filteredCatalogDesigns.filter((d) => !!d.imageUrl);
@@ -1385,9 +1396,30 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          <p className="mb-2.5 text-[11px] text-slate-500">
+          <p className="mb-2 text-[11px] text-slate-500">
             Desliza horizontalmente para ver diseños · Si subes imagen propia, ideal PNG sin fondo
           </p>
+
+          {(catalogDesigns?.length || 0) > 4 && (
+            <div className="mb-2.5 flex items-center gap-1.5">
+              <input
+                type="search"
+                value={designSearch}
+                onChange={(e) => setDesignSearch(e.target.value)}
+                placeholder="🔍 Buscar diseño por nombre o código (ej. D-001, Toro)..."
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+              />
+              {designSearch && (
+                <button
+                  type="button"
+                  onClick={() => setDesignSearch('')}
+                  className="rounded-xl bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
 
           <div
             ref={clientCarouselRef}
@@ -1496,7 +1528,11 @@ export function InteractiveShirt3D({
       )}
 
       {/* ESCENARIO Y HERRAMIENTAS ESTILO APPLE STUDIO (ADMIN) */}
-      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[1fr_280px]">
+      <div
+        className={`grid grid-cols-1 items-start gap-3 ${
+          !wizardStep || wizardStep === 'design' ? 'lg:grid-cols-[1fr_280px]' : ''
+        }`}
+      >
         {/* LIENZO 3D CENTRAL */}
         <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-gradient-to-b from-white via-[#F5F5F7] to-[#ECECEF] p-4 shadow-sm">
           {/* Barra superior flotante: Vista y Stock */}
@@ -1575,7 +1611,7 @@ export function InteractiveShirt3D({
             />
             <div className="pointer-events-none absolute bottom-4 h-4 w-44 rounded-full bg-black/15 blur-md" />
 
-            {readySlideDesigns.length > 1 && (
+            {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
               <>
                 <button
                   type="button"
@@ -1774,6 +1810,7 @@ export function InteractiveShirt3D({
         </div>
 
         {/* PANEL DERECHO DE ESTUDIO (Ajuste de Diseño A3/A4 y Posición) */}
+        {(!wizardStep || wizardStep === 'design') && (
         <div className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           {onUploadFile && (
             <div className="space-y-2 border-b border-slate-100 pb-3">
@@ -2045,10 +2082,11 @@ export function InteractiveShirt3D({
             </div>
           </div>
         </div>
+        )}
       </div>
 
       {/* GALERÍA DE DISEÑOS DEL CATÁLOGO */}
-      {(isStoreOwner || (catalogDesigns && catalogDesigns.length > 0)) && (
+      {(!wizardStep || wizardStep === 'design') && (isStoreOwner || (catalogDesigns && catalogDesigns.length > 0)) && (
         <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           {onUploadCatalogFiles && (
             <input
@@ -2155,6 +2193,28 @@ export function InteractiveShirt3D({
               </div>
             )}
           </div>
+
+          {/* Buscador rápido de diseños (Admin / POS) */}
+          {(catalogDesigns?.length || 0) > 4 && (
+            <div className="mb-3 flex items-center gap-1.5">
+              <input
+                type="search"
+                value={designSearch}
+                onChange={(e) => setDesignSearch(e.target.value)}
+                placeholder="🔍 Buscar diseño por nombre o código (ej. D-001)..."
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+              />
+              {designSearch && (
+                <button
+                  type="button"
+                  onClick={() => setDesignSearch('')}
+                  className="rounded-xl bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Barra tipo Slide para recorrer diseños del catálogo */}
           {readySlideDesigns.length > 1 && (

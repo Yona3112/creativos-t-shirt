@@ -23,6 +23,22 @@ export function downloadBlob(filename: string, blob: Blob): void {
   setTimeout(() => URL.revokeObjectURL(url), 15000);
 }
 
+export async function downloadImageUrl(filename: string, src: string): Promise<void> {
+  if (!src) return;
+  try {
+    const resp = await fetch(src);
+    const blob = await resp.blob();
+    downloadBlob(filename, blob);
+  } catch {
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
 export async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);

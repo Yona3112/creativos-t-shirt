@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Order, OrderStatus, Settings } from '../lib/types';
+import type { Order, OrderStatus, Section, Settings } from '../lib/types';
 import { notifyPhotos, useAppState } from '../lib/store';
+import { brandColors, skuOf } from '../lib/inventory';
 import { folioLabel, uid } from '../lib/ids';
 import { fromCents, money, toCents } from '../lib/money';
 import { dayKey, fmtDateTime } from '../lib/time';
@@ -40,7 +41,7 @@ function readInitialOrderQuery(): string {
   }
 }
 
-export default function Orders() {
+export default function Orders({ navigate }: { navigate?: (s: Section) => void }) {
   const state = useAppState();
   const { settings } = state;
   const today = dayKey();
@@ -245,6 +246,16 @@ export default function Orders() {
               onZoom={setViewer}
               onAskCancel={() => setCancelOrder(o)}
               onEdit={() => setEditingOrder(o)}
+              onRepeat={
+                navigate
+                  ? () => {
+                      try {
+                        sessionStorage.setItem('cgs_repeat_order_v1', JSON.stringify(o));
+                      } catch {}
+                      navigate('vender');
+                    }
+                  : undefined
+              }
               onAskDelete={() => setConfirmDeleteOrder(o)}
               onOpenWorkshopPdf={() =>
                 setPdfModal({
@@ -414,6 +425,7 @@ function OrderCard({
   onZoom,
   onAskCancel,
   onEdit,
+  onRepeat,
   onAskDelete,
   onOpenWorkshopPdf
 }: {
@@ -422,6 +434,7 @@ function OrderCard({
   onZoom: (src: string) => void;
   onAskCancel: () => void;
   onEdit: () => void;
+  onRepeat?: () => void;
   onAskDelete: () => void;
   onOpenWorkshopPdf: () => void;
 }) {
@@ -588,8 +601,18 @@ function OrderCard({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-semibold text-slate-500">{fmtDateTime(order.createdAt)}</span>
+          {onRepeat && (
+            <button
+              type="button"
+              onClick={onRepeat}
+              className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800 hover:bg-sky-100"
+              title="Crear un nuevo pedido igual a este"
+            >
+              🔄 Repetir
+            </button>
+          )}
           <button
             type="button"
             onClick={onEdit}
@@ -836,6 +859,7 @@ function EditOrderModal({
   settings: Settings;
   onClose: () => void;
 }) {
+  const state = useAppState();
   const [name, setName] = useState(order.shipTo.name || '');
   const [phone, setPhone] = useState(order.shipTo.phone || '');
   const [address, setAddress] = useState(order.shipTo.address || '');
@@ -856,32 +880,73 @@ function EditOrderModal({
     }))
   );
 
+  const handleAddItem = () => {
+    const base = items[items.length - 1];
+    const fallbackBrand = state.brands.find((b) => !b.deleted && b.id === base?.brandId) || state.brands.find((b) => !b.deleted);
+    const cols = fallbackBrand ? brandColors(state, fallbackBrand.id) : [];
+    const fallbackColor = cols.find((c) => c.id === base?.colorId) || cols[0];
+    const defaultSize = base?.size || (settings.sizes.includes('M') ? 'M' : settings.sizes[0] || 'M');
+    const defaultPrice = base ? base.unitPrice : settings.priceCustom || 35000;
+    setItems((prev) => [
+      ...prev,
+      {
+        id: uid(),
+        brandId: fallbackBrand?.id || base?.brandId || '',
+        colorId: fallbackColor?.id || base?.colorId || '',
+        size: defaultSize,
+        qty: 1,
+        unitPrice: defaultPrice,
+        manualPrice: true,
+        fromStock: 0,
+        brandName: fallbackBrand?.name || base?.brandName || '',
+        colorName: fallbackColor?.name || base?.colorName || '',
+        colorHex: fallbackColor?.hex || base?.colorHex || '#1A1A1C',
+        sku: skuOf(fallbackBrand, fallbackColor, defaultSize),
+        designId: null,
+        designName: null,
+        designCode: null,
+        photoId: null,
+        photoUrl: null,
+        placement: base?.placement || order.placement || 'back',
+        priceInput: String(fromCents(defaultPrice)),
+        qtyInput: '1',
+        designCodeInput: '',
+        designNameInput: ''
+      }
+    ]);
+  };
+
   const handleSave = () => {
+    if (items.length === 0) return toast('El pedido debe tener al menos una prenda', 'error');
     const isSingleItem = items.length === 1;
-    const nextItems = items.map((it) => ({
-      id: it.id,
-      brandId: it.brandId,
-      colorId: it.colorId,
-      size: it.size,
-      qty: Math.max(1, Math.floor(Number(it.qtyInput) || 1)),
-      unitPrice: toCents(it.priceInput),
-      manualPrice: true,
-      fromStock: it.fromStock,
-      brandName: it.brandName,
-      colorName: it.colorName,
-      colorHex: it.colorHex,
-      sku: it.sku,
-      designId: it.designId || null,
-      designName: isSingleItem
-        ? (designName.trim() || it.designNameInput.trim() || null)
-        : (it.designNameInput.trim() || null),
-      designCode: isSingleItem
-        ? (designCode.trim().toUpperCase() || it.designCodeInput.trim().toUpperCase() || null)
-        : (it.designCodeInput.trim().toUpperCase() || null),
-      photoId: it.photoId || null,
-      photoUrl: null,
-      placement: it.placement || null
-    }));
+    const nextItems = items.map((it) => {
+      const brandObj = state.brands.find((b) => b.id === it.brandId);
+      const colorObj = state.colors.find((c) => c.id === it.colorId);
+      return {
+        id: it.id,
+        brandId: it.brandId,
+        colorId: it.colorId,
+        size: it.size,
+        qty: Math.max(1, Math.floor(Number(it.qtyInput) || 1)),
+        unitPrice: toCents(it.priceInput),
+        manualPrice: true,
+        fromStock: it.fromStock,
+        brandName: brandObj?.name || it.brandName,
+        colorName: colorObj?.name || it.colorName,
+        colorHex: colorObj?.hex || it.colorHex,
+        sku: skuOf(brandObj, colorObj, it.size) || it.sku,
+        designId: it.designId || null,
+        designName: isSingleItem
+          ? (designName.trim() || it.designNameInput.trim() || null)
+          : (it.designNameInput.trim() || null),
+        designCode: isSingleItem
+          ? (designCode.trim().toUpperCase() || it.designCodeInput.trim().toUpperCase() || null)
+          : (it.designCodeInput.trim().toUpperCase() || null),
+        photoId: it.photoId || null,
+        photoUrl: null,
+        placement: it.placement || null
+      };
+    });
     const itemDesignNames = Array.from(
       new Set(nextItems.map((i) => i.designName).filter((x): x is string => Boolean(x)))
     );
@@ -1003,21 +1068,91 @@ function EditOrderModal({
 
         {/* Prendas del pedido */}
         <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-xs font-extrabold uppercase text-slate-600">
-            {items.length > 1 ? 'Prendas, Precios y Diseños' : 'Prendas y Precios Unitarios'}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-extrabold uppercase text-slate-600">
+              {items.length > 1 ? 'Prendas, Precios y Diseños' : 'Prendas y Precios Unitarios'}
+            </div>
+            <button
+              type="button"
+              onClick={handleAddItem}
+              className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-800"
+            >
+              + Agregar prenda
+            </button>
           </div>
-          {items.map((it, idx) => (
-            <div key={it.id} className="space-y-1.5 rounded-lg border border-slate-200/80 bg-white/80 p-2 text-xs">
-              <div className="grid grid-cols-12 items-center gap-2">
-                <div className="col-span-5 font-bold text-slate-800">
-                  {it.brandName} · {it.colorName} ({it.size})
+          {items.map((it, idx) => {
+            const availColors = brandColors(state, it.brandId);
+            return (
+            <div key={it.id} className="space-y-2 rounded-lg border border-slate-200/80 bg-white p-2.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                  <ColorDot hex={it.colorHex} size={12} />
+                  <span>{it.brandName || 'Camisa'}</span>
+                </div>
+                {items.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}
+                    className="rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-600 hover:bg-rose-100"
+                    title="Quitar prenda del pedido"
+                  >
+                    ✕ Quitar
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-12 items-end gap-2">
+                <div className="col-span-4">
+                  <label className="block text-[10px] text-slate-500">Color</label>
+                  <select
+                    className="input h-9 px-1.5 text-xs"
+                    value={it.colorId}
+                    onChange={(e) => {
+                      const cid = e.target.value;
+                      const cObj = availColors.find((c) => c.id === cid);
+                      setItems((prev) =>
+                        prev.map((x, i) =>
+                          i === idx
+                            ? {
+                                ...x,
+                                colorId: cid,
+                                colorName: cObj?.name || x.colorName,
+                                colorHex: cObj?.hex || x.colorHex
+                              }
+                            : x
+                        )
+                      );
+                    }}
+                  >
+                    {availColors.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="col-span-3">
+                  <label className="block text-[10px] text-slate-500">Talla</label>
+                  <select
+                    className="input h-9 px-1.5 text-xs font-bold"
+                    value={it.size}
+                    onChange={(e) => {
+                      const sz = e.target.value;
+                      setItems((prev) => prev.map((x, i) => (i === idx ? { ...x, size: sz } : x)));
+                    }}
+                  >
+                    {settings.sizes.map((sz) => (
+                      <option key={sz} value={sz}>
+                        {sz}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="col-span-2">
                   <label className="block text-[10px] text-slate-500">Cant.</label>
                   <input
                     type="number"
                     min={1}
-                    className="input h-9 px-2"
+                    className="input h-9 px-1.5 text-center"
                     value={it.qtyInput}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -1025,12 +1160,12 @@ function EditOrderModal({
                     }}
                   />
                 </div>
-                <div className="col-span-4">
+                <div className="col-span-3">
                   <label className="block text-[10px] text-slate-500">Precio (L)</label>
                   <input
                     type="number"
                     min={0}
-                    className="input h-9 px-2"
+                    className="input h-9 px-1.5"
                     value={it.priceInput}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -1068,7 +1203,8 @@ function EditOrderModal({
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="grid grid-cols-2 gap-2">

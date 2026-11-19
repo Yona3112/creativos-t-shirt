@@ -1049,9 +1049,23 @@ export function CustomerCatalogView({
   const boutiqueTheme: BoutiqueTheme = payload.boutiqueTheme || 'ranchero';
   const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
   const [qty, setQty] = useState(1);
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
+  const savedBuyer = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('cgs_store_buyer_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as { name?: string; phone?: string; address?: string };
+        return {
+          name: typeof parsed.name === 'string' ? parsed.name : '',
+          phone: typeof parsed.phone === 'string' ? parsed.phone : '',
+          address: typeof parsed.address === 'string' ? parsed.address : ''
+        };
+      }
+    } catch {}
+    return { name: '', phone: '', address: '' };
+  }, []);
+  const [customerName, setCustomerName] = useState(savedBuyer.name);
+  const [customerPhone, setCustomerPhone] = useState(savedBuyer.phone);
+  const [customerAddress, setCustomerAddress] = useState(savedBuyer.address);
   const [paymentPending, setPaymentPending] = useState(false);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const deliverySectionRef = useRef<HTMLElement>(null);
@@ -1334,6 +1348,12 @@ export function CustomerCatalogView({
       return;
     }
     setDeliveryError(null);
+    try {
+      localStorage.setItem(
+        'cgs_store_buyer_v1',
+        JSON.stringify({ name: cleanName, phone: cleanPhone, address: cleanAddr })
+      );
+    } catch {}
     const orderId = uid().slice(0, 12);
 
     const finalCartItems: CustomerCartItem[] = effectiveOrderItems.map((it) => ({
@@ -1344,8 +1364,9 @@ export function CustomerCatalogView({
     const finalTotal = finalCartItems.reduce((s, it) => s + it.qty * it.unitPrice, 0);
     const finalUnits = finalCartItems.reduce((s, it) => s + it.qty, 0);
 
-    // Preparar y subir miniaturas / fotos para que Taller las tenga disponibles al instante
+    // Preparar y subir fotos en alta resolución HD para que Taller las tenga disponibles al instante
     const webOrderItems: CustomerWebOrderItem[] = [];
+    const uploadPromises: Promise<unknown>[] = [];
     let mainThumbUrl: string | null = null;
     let mainPhotoId: string | null = null;
 
@@ -1363,8 +1384,8 @@ export function CustomerCatalogView({
         if (!itemPid) {
           itemPid = `photo_${orderId}_${i}`;
         }
-        void savePhoto(itemPid, it.photoUrl, 0);
-        void uploadPhotoNow(itemPid, it.photoUrl);
+        uploadPromises.push(savePhoto(itemPid, it.photoUrl, 0));
+        uploadPromises.push(uploadPhotoNow(itemPid, it.photoUrl));
       }
 
       if (!mainThumbUrl && itemThumb) mainThumbUrl = itemThumb;
@@ -1416,6 +1437,12 @@ export function CustomerCatalogView({
       items: webOrderItems
     };
 
+    if (uploadPromises.length > 0) {
+      await Promise.race([
+        Promise.allSettled(uploadPromises),
+        new Promise((resolve) => setTimeout(resolve, 4000))
+      ]);
+    }
     const rawOrderJson = JSON.stringify(webOrder);
     void savePhoto(WEB_ORDER_LATEST_KEY, rawOrderJson, 0);
     void savePhoto(`weborder_${orderId}`, rawOrderJson, 0);
@@ -1655,7 +1682,7 @@ export function CustomerCatalogView({
             onUploadFile={async (file) => {
               try {
                 const autoJpg = isJpgFile(file);
-                const raw = await compressImage(file, 1400, 0.92, false);
+                const raw = await compressImage(file, 2400, 0.96, false);
                 const processed = autoJpg ? await applyBackgroundRemoval(raw, true, 34) : raw;
                 const customPid = `photo_client_${uid()}`;
                 const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();

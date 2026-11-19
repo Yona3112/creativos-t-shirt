@@ -309,7 +309,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     try {
       const autoJpgToPng = isJpgFile(f);
       const shouldRemoveBg = autoJpgToPng || (draft.removeBg ?? false);
-      const raw = await compressImage(f, 1400, 0.92, false);
+      const raw = await compressImage(f, 2400, 0.96, false);
       const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 34) : raw;
       const cleanFileName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
       set({
@@ -627,6 +627,110 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   const importWebOrderRef = useRef(importCustomerWebOrder);
   importWebOrderRef.current = importCustomerWebOrder;
+
+  // Cargar pedido repetido desde Pedidos ("🔄 Repetir")
+  useEffect(() => {
+    let cancelled = false;
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem('cgs_repeat_order_v1');
+      if (raw) sessionStorage.removeItem('cgs_repeat_order_v1');
+    } catch {}
+    if (!raw) return;
+
+    void (async () => {
+      try {
+        const src = JSON.parse(raw) as Order;
+        if (!src || !Array.isArray(src.items) || src.items.length === 0) return;
+        const repeatLines: CartLine[] = [];
+        let firstPhoto: string | null = null;
+        for (const it of src.items) {
+          const matchedCat = (state.catalogDesigns || []).find(
+            (d) =>
+              !d.deleted &&
+              d.photoId &&
+              ((it.designId && d.id === it.designId) ||
+                (it.designCode && d.code && d.code.toLowerCase() === it.designCode.toLowerCase()) ||
+                (it.designName && d.name.toLowerCase() === it.designName.toLowerCase()))
+          );
+          const pid = matchedCat?.photoId || it.photoId || (src.items.length === 1 ? src.photoId : null);
+          const loaded = pid ? await fetchSharedPhoto(pid) : null;
+          if (!firstPhoto && loaded) firstPhoto = loaded;
+          repeatLines.push({
+            id: uid(),
+            brandId: it.brandId,
+            colorId: it.colorId,
+            size: it.size,
+            qty: Math.max(1, it.qty || 1),
+            unitPrice: it.unitPrice,
+            manualPrice: it.manualPrice,
+            designId: it.designId || matchedCat?.id || null,
+            designName: it.designName || matchedCat?.name || null,
+            designCode: it.designCode || matchedCat?.code || null,
+            photoId: pid || null,
+            photo: loaded,
+            rawPhoto: loaded,
+            placement: it.placement || (loaded ? src.placement || 'back' : null),
+            scale: 2.0,
+            offsetX: 0,
+            offsetY: 0,
+            workType: src.workType
+          });
+        }
+        if (cancelled) return;
+
+        const existingCust =
+          (src.customerId && state.customers.find((c) => !c.deleted && c.id === src.customerId)) || null;
+        const isConsFinal =
+          !existingCust &&
+          ((src.shipTo?.name || '').toLowerCase().includes('consumidor final') ||
+            (src.shipTo?.phone || '').toLowerCase().includes('consumidor'));
+        if (existingCust) {
+          setCustMode('buscar');
+        } else if (isConsFinal) {
+          setCustMode('consumidor');
+        } else if (src.shipTo?.name) {
+          setCustMode('nuevo');
+          setQc({
+            name: src.shipTo.name,
+            phone: (src.shipTo.phone || '').replace(/^\+?504\s*/, ''),
+            address: src.shipTo.address || ''
+          });
+        }
+
+        setDraft((prev) => ({
+          ...prev,
+          lines: repeatLines,
+          photo: firstPhoto,
+          rawPhoto: firstPhoto,
+          placement: src.placement || 'back',
+          designId: src.designId || null,
+          designName: src.designName || null,
+          designCode: src.designCode || null,
+          workType: src.workType || prev.workType,
+          customerId: existingCust ? existingCust.id : null,
+          addressId: existingCust ? src.addressId || existingCust.addresses[0]?.id || null : null,
+          withShipping: (src.shipping || 0) > 0,
+          shipping: (src.shipping || 0) > 0 ? src.shipping : prev.shipping,
+          paymentMethod: src.paymentMethod || prev.paymentMethod,
+          paymentMode: 'full',
+          deposit: null,
+          notes: src.notes || ''
+        }));
+        setJustAddedLine(true);
+        setWizardStep(3);
+        setMaxStepReached(3);
+        toast(`🔄 Pedido ${folioLabel(src.folio)} cargado para repetir`, 'ok');
+      } catch {
+        /* ignorar */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Cargar pedido automáticamente si viene del link #pedido=<id> o mostrar banner del último pedido web
   useEffect(() => {

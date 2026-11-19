@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import type { Order } from '../lib/types';
+import type { CatalogDesign, Order } from '../lib/types';
 import { useAppState } from '../lib/store';
 import { folioLabel } from '../lib/ids';
 import { money } from '../lib/money';
 import { deleteOrder, orderStockReturnCount, patchOrder, setOrderStatus } from '../lib/actions';
+import { downloadImageUrl } from '../lib/csv';
 import { printDailyOrdersReport } from '../lib/printReports';
 import { ColorDot, Confirm, Empty, PhotoViewer, toast, usePhoto } from '../components/ui';
 import { WorkshopPdfModal } from '../components/WorkshopPdfModal';
@@ -21,6 +22,41 @@ export default function Workshop() {
         .sort((a, b) => a.folio - b.folio),
     [state.orders]
   );
+
+  const pickingSummary = useMemo(() => {
+    const map = new Map<
+      string,
+      { brandName: string; colorName: string; colorHex: string; size: string; qty: number }
+    >();
+    let totalUnits = 0;
+    for (const o of queue) {
+      for (const it of o.items) {
+        totalUnits += it.qty;
+        const key = `${it.brandName}|${it.colorName}|${it.size}`;
+        const prev = map.get(key);
+        if (prev) {
+          prev.qty += it.qty;
+        } else {
+          map.set(key, {
+            brandName: it.brandName,
+            colorName: it.colorName,
+            colorHex: it.colorHex,
+            size: it.size,
+            qty: it.qty
+          });
+        }
+      }
+    }
+    const list = Array.from(map.values()).sort(
+      (a, b) =>
+        a.brandName.localeCompare(b.brandName) ||
+        a.colorName.localeCompare(b.colorName) ||
+        a.size.localeCompare(b.size)
+    );
+    return { list, totalUnits };
+  }, [queue]);
+
+  const catalogDesigns = state.catalogDesigns || [];
 
   if (queue.length === 0) {
     return <Empty icon="🔨" text="Sin pedidos en producción" />;
@@ -60,10 +96,37 @@ export default function Workshop() {
           </button>
         </div>
       </div>
+
+      {pickingSummary.list.length > 0 && (
+        <section className="card space-y-2 border border-slate-200/90 bg-white">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-xs font-extrabold uppercase tracking-wide text-slate-700">
+              📦 Camisas a sacar de estante ({pickingSummary.totalUnits} uds)
+            </h2>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {pickingSummary.list.map((p) => (
+              <span
+                key={`${p.brandName}|${p.colorName}|${p.size}`}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-800"
+              >
+                <ColorDot hex={p.colorHex} size={12} />
+                <span className="font-black text-slate-900">{p.qty}×</span>
+                <span>{p.colorName}</span>
+                <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[10px] font-black text-white">
+                  {p.size}
+                </span>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
       {queue.map((order) => (
         <WorkshopCard
           key={order.id}
           order={order}
+          catalogDesigns={catalogDesigns}
           onZoom={setViewer}
           onOpenPdf={() =>
             setPdfModal({
@@ -121,11 +184,13 @@ export default function Workshop() {
 
 function WorkshopCard({
   order,
+  catalogDesigns,
   onZoom,
   onOpenPdf,
   onAskDelete
 }: {
   order: Order;
+  catalogDesigns: CatalogDesign[];
   onZoom: (src: string) => void;
   onOpenPdf: () => void;
   onAskDelete: () => void;
@@ -253,6 +318,8 @@ function WorkshopCard({
             <WorkshopItemRow
               key={it.id}
               item={it}
+              folio={order.folio}
+              catalogDesigns={catalogDesigns}
               fallbackPhotoId={fallbackPhotoId}
               fallbackPlacement={order.placement || null}
               onZoom={onZoom}
@@ -270,18 +337,46 @@ function WorkshopCard({
 
 function WorkshopItemRow({
   item,
+  folio,
+  catalogDesigns,
   fallbackPhotoId,
   fallbackPlacement,
   onZoom
 }: {
   item: Order['items'][number];
+  folio: number;
+  catalogDesigns: CatalogDesign[];
   fallbackPhotoId: string | null;
   fallbackPlacement: Order['placement'] | null;
   onZoom: (src: string) => void;
 }) {
-  const photo = usePhoto(item.photoId || fallbackPhotoId);
+  const matchedCatalog = useMemo(
+    () =>
+      catalogDesigns.find(
+        (d) =>
+          !d.deleted &&
+          d.photoId &&
+          ((item.designId && d.id === item.designId) ||
+            (item.designCode && d.code && d.code.toLowerCase() === item.designCode.toLowerCase()) ||
+            (item.designName && d.name.toLowerCase() === item.designName.toLowerCase()))
+      ) || null,
+    [catalogDesigns, item.designId, item.designCode, item.designName]
+  );
+  // Priorizar el PNG maestro del catálogo (resolución original sin pérdida)
+  const photo = usePhoto(matchedCatalog?.photoId || item.photoId || fallbackPhotoId);
   const effPlacement = item.placement || (photo ? fallbackPlacement : null);
   const side = effPlacement === 'back' ? 'ESPALDA' : effPlacement ? 'FRENTE' : null;
+
+  const handleDownloadPng = () => {
+    if (!photo) return;
+    const safeCode = (item.designCode || item.designName || 'ARTE')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .slice(0, 24);
+    const safeColor = (item.colorName || 'Color').replace(/[^a-zA-Z0-9_-]+/g, '_');
+    const filename = `Diseno-${String(folio).padStart(8, '0')}-${safeCode}-${safeColor}-${item.size}.png`;
+    void downloadImageUrl(filename, photo);
+    toast(`Descargando PNG original HD (${filename})`, 'ok');
+  };
 
   return (
     <li className="flex items-center justify-between gap-3 px-3 py-3">
@@ -341,9 +436,21 @@ function WorkshopItemRow({
           )}
         </div>
       </div>
-      <span className="shrink-0 rounded-xl bg-white px-3.5 py-1.5 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
-        {item.size} × {item.qty}
-      </span>
+      <div className="flex shrink-0 flex-col items-end gap-1.5">
+        <span className="rounded-xl bg-white px-3.5 py-1.5 text-base font-extrabold text-slate-900 shadow-sm ring-1 ring-slate-200">
+          {item.size} × {item.qty}
+        </span>
+        {photo && (
+          <button
+            type="button"
+            onClick={handleDownloadPng}
+            className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-extrabold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+            title="Descargar PNG original sin fondo en alta resolución para impresión DTF"
+          >
+            ⬇ PNG HD
+          </button>
+        )}
+      </div>
     </li>
   );
 }

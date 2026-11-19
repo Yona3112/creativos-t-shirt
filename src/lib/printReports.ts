@@ -565,8 +565,6 @@ export function lookupOrderDesignThumb(
   photoMap: Map<string, string>,
   catalogDesigns = getState().catalogDesigns || []
 ): string | null {
-  if (opts.photoId && photoMap.has(opts.photoId)) return photoMap.get(opts.photoId) || null;
-  if (opts.photoUrl && (opts.photoUrl.startsWith('data:') || opts.photoUrl.startsWith('http'))) return opts.photoUrl;
   const match = catalogDesigns.find(
     (d) =>
       !d.deleted &&
@@ -575,7 +573,10 @@ export function lookupOrderDesignThumb(
         (opts.designCode && d.code && d.code.toLowerCase() === opts.designCode.toLowerCase()) ||
         (opts.designName && d.name.toLowerCase() === opts.designName.toLowerCase()))
   );
+  // Priorizar el PNG original maestro del catálogo en máxima resolución cuando existe coincidencia
   if (match?.photoId && photoMap.has(match.photoId)) return photoMap.get(match.photoId) || null;
+  if (opts.photoId && photoMap.has(opts.photoId)) return photoMap.get(opts.photoId) || null;
+  if (opts.photoUrl && (opts.photoUrl.startsWith('data:') || opts.photoUrl.startsWith('http'))) return opts.photoUrl;
   if (opts.orderPhotoId && photoMap.has(opts.orderPhotoId)) {
     return photoMap.get(opts.orderPhotoId) || null;
   }
