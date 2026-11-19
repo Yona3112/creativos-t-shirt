@@ -31,10 +31,17 @@ function mergeReadyMade(a: ReadyMadeShirt[], b: ReadyMadeShirt[]): ReadyMadeShir
     } else {
       const tx = x.updatedAt ?? x.createdAt ?? 0;
       const ty = y.updatedAt ?? y.createdAt ?? 0;
-      map.set(y.id, ty >= tx ? y : x);
+      if (ty !== tx) {
+        map.set(y.id, ty > tx ? y : x);
+      } else if (Boolean(x.deleted) !== Boolean(y.deleted)) {
+        map.set(y.id, x.deleted ? x : y);
+      } else {
+        map.set(y.id, ty >= tx ? y : x);
+      }
     }
   }
-  return Array.from(map.values()).filter((r) => !r.deleted && r.qty > 0);
+  // Conservar lápidas (deleted: true) para que una prenda vendida/eliminada no resucite desde otro dispositivo
+  return Array.from(map.values());
 }
 
 const UNUSED_SEED_BRAND_IDS = new Set(['b-nx', 'b-pc', 'b-hn']);
@@ -210,9 +217,7 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
   );
 
   const stockEntries = (Array.isArray(s.stockEntries) ? s.stockEntries : []).filter(Boolean);
-  const rawReadyMade = (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(
-    (r) => r && !r.deleted && r.qty > 0
-  );
+  const rawReadyMade = (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(Boolean);
   const cleanOrders = rawOrders.filter(Boolean);
 
   return {

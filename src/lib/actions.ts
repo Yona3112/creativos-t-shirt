@@ -823,9 +823,15 @@ export function updateReadyMadeShirt(id: string, patch: Partial<ReadyMadeShirt>)
   const t = now();
   update((s) => {
     const list = s.readyMadeStock || [];
-    const next = list
-      .map((r) => (r.id === id ? { ...r, ...patch, updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1) } : r))
-      .filter((r) => !r.deleted && r.qty > 0);
+    const next = list.map((r) => {
+      if (r.id !== id) return r;
+      const merged = { ...r, ...patch };
+      return {
+        ...merged,
+        deleted: merged.deleted || merged.qty <= 0,
+        updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
+      };
+    });
     return { ...s, readyMadeStock: next };
   });
 }
@@ -834,18 +840,16 @@ export function removeReadyMadeShirt(id: string, qty = 1): void {
   const t = now();
   update((s) => {
     const list = s.readyMadeStock || [];
-    const next = list
-      .map((r) => {
-        if (r.id !== id) return r;
-        const nextQty = Math.max(0, r.qty - qty);
-        return {
-          ...r,
-          qty: nextQty,
-          deleted: nextQty <= 0,
-          updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
-        };
-      })
-      .filter((r) => !r.deleted && r.qty > 0);
+    const next = list.map((r) => {
+      if (r.id !== id) return r;
+      const nextQty = Math.max(0, r.qty - qty);
+      return {
+        ...r,
+        qty: nextQty,
+        deleted: nextQty <= 0,
+        updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
+      };
+    });
     return { ...s, readyMadeStock: next };
   });
 }
@@ -931,18 +935,16 @@ export function sellReadyMadeShirt(input: {
     };
     created = newOrder;
 
-    const nextReady = list
-      .map((r) => {
-        if (r.id !== target.id) return r;
-        const nextQty = Math.max(0, r.qty - sellQty);
-        return {
-          ...r,
-          qty: nextQty,
-          deleted: nextQty <= 0,
-          updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
-        };
-      })
-      .filter((r) => !r.deleted && r.qty > 0);
+    const nextReady = list.map((r) => {
+      if (r.id !== target.id) return r;
+      const nextQty = Math.max(0, r.qty - sellQty);
+      return {
+        ...r,
+        qty: nextQty,
+        deleted: nextQty <= 0,
+        updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
+      };
+    });
 
     return {
       ...s,

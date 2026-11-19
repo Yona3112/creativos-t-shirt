@@ -1181,6 +1181,7 @@ export function CustomerCatalogView({
     if (!hasDesign || !selectedColor) return null;
     return list.find(
       (r) =>
+        !r.deleted &&
         r.qty > 0 &&
         r.size === size &&
         r.colorName.toLowerCase() === selectedColor.name.toLowerCase() &&

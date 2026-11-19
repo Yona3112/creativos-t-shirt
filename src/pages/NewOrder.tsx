@@ -1557,53 +1557,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           </button>
         </div>
 
-        {draft.photo && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-2.5">
-            <div className="flex items-center gap-3">
-              <button className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-amber-300 bg-white" onClick={() => setViewer(draft.photo)}>
-                <img src={draft.photo} alt="Diseño" className="h-full w-full object-contain" />
-              </button>
-              <div>
-                <div className="text-sm font-extrabold text-slate-800">{draft.workType}</div>
-                <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-black text-stone-950">
-                  📍 Ubicación: {(draft.placement || 'back') === 'back' ? 'ESPALDA (Parte de Atrás)' : 'FRENTE (Pecho Delantero)'}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => set({ placement: 'back' })}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition ${
-                  (draft.placement || 'back') === 'back'
-                    ? 'bg-slate-900 text-white'
-                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                🔄 Espalda
-              </button>
-              <button
-                type="button"
-                onClick={() => set({ placement: 'center' })}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-extrabold transition ${
-                  draft.placement && draft.placement !== 'back'
-                    ? 'bg-slate-900 text-white'
-                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                👕 Frente
-              </button>
-              <button
-                type="button"
-                onClick={clearDraftDesign}
-                className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-extrabold text-rose-600 hover:bg-rose-100"
-              >
-                🚫 Quitar
-              </button>
-            </div>
-          </div>
-        )}
-
         {lines.length === 0 ? (
           <p className="py-4 text-center text-slate-400">🛒 Vacío</p>
         ) : (
@@ -2056,17 +2009,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           )}
         </dl>
 
-        <button
-          className={`w-full text-lg ${customerCheck.ok ? 'btn-success' : 'btn bg-amber-500 text-stone-950 hover:bg-amber-400'}`}
-          onClick={() => confirm('en_produccion')}
-          disabled={!lines.length}
-        >
-          {!customerCheck.ok
-            ? '🔒 Falta cliente / teléfono o Cons. Final'
-            : paymentMode === 'pending'
-            ? `⏳ Confirmar (Pago Pendiente) · ${money(total)}`
-            : `✅ Confirmar Pedido · ${money(total)}`}
-        </button>
         <div className="grid grid-cols-2 gap-2">
           <button className="btn-ghost" onClick={() => confirm('borrador')} disabled={!lines.length}>
             Guardar borrador

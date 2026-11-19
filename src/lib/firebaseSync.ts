@@ -273,7 +273,13 @@ export class FirebaseSyncEngine {
     const sanitized = normalize(state);
     const rawPayload: AppState = { ...sanitized, _by: this.device, _at: Date.now() };
     // Firestore rechaza propiedades con valor `undefined`; serializamos para limpiarlas de forma segura
-    const payload: AppState = JSON.parse(JSON.stringify(rawPayload));
+    const serialized = JSON.stringify(rawPayload);
+    const payload: AppState = JSON.parse(serialized);
+    if (serialized.length > 920000) {
+      console.warn('[firebase-sync] app_state supera 920 KB; ejecuta Purgar datos basura en Ajustes');
+      this.setStatus('error', 'Base de datos cerca del límite (1 MB). Ve a Ajustes → Purgar datos basura.');
+      return;
+    }
     const syncDocRef = doc(this.fs, 'cgs_sync', 'app_state');
     await setDoc(syncDocRef, { payload, updated_at: now });
     this.lastRemoteSig = contentSignature(sanitized);
@@ -448,8 +454,7 @@ export async function uploadPhotoNowFirebase(id: string, data: string): Promise<
       await setDoc(photoDoc, { data, chunks: 1, updatedAt: Date.now() });
     } else {
       const totalChunks = Math.ceil(data.length / CHUNK_SIZE);
-      const mainDoc = doc(fs, 'cgs_photos', id);
-      await setDoc(mainDoc, { chunks: totalChunks, updatedAt: Date.now() });
+      // Subir todos los fragmentos PRIMERO antes de publicar el documento maestro (commit atómico)
       const chunkPromises: Promise<unknown>[] = [];
       for (let i = 0; i < totalChunks; i++) {
         const slice = data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
@@ -457,6 +462,8 @@ export async function uploadPhotoNowFirebase(id: string, data: string): Promise<
         chunkPromises.push(setDoc(chunkDoc, { data: slice }));
       }
       await Promise.all(chunkPromises);
+      const mainDoc = doc(fs, 'cgs_photos', id);
+      await setDoc(mainDoc, { chunks: totalChunks, updatedAt: Date.now() });
     }
     try {
       const updated = await db.photos.update(id, { synced: 1 });
@@ -474,15 +481,15 @@ export async function uploadPhotoNowFirebase(id: string, data: string): Promise<
 }
 
 export async function fetchSharedPhotoFirebase(id: string): Promise<string | null> {
-  // Para llaves mutables como LIVE_CATALOG_KEY, no leer caché viejo de Dexie si hay red
-  if (id !== LIVE_CATALOG_KEY) {
+  // Para llaves mutables (vitrina y último pedido web), no leer caché viejo de Dexie si hay red
+  const isMutableKey = id === LIVE_CATALOG_KEY || id === WEB_ORDER_LATEST_KEY;
+  if (!isMutableKey) {
     const local = await db.photos.get(id);
     if (local?.data) return local.data;
   }
   const cfg = getFirebaseConfig();
   if (!cfg || !navigator.onLine) {
-    // Si estamos offline y es LIVE_CATALOG_KEY, usar fallback local
-    if (id === LIVE_CATALOG_KEY) {
+    if (isMutableKey) {
       const fallbackLocal = await db.photos.get(id);
       return fallbackLocal?.data || null;
     }
@@ -493,8 +500,7 @@ export async function fetchSharedPhotoFirebase(id: string): Promise<string | nul
     const photoDoc = doc(fs, 'cgs_photos', id);
     const snap = await getDoc(photoDoc);
     if (!snap.exists()) {
-      // Fallback a Dexie si no existe aún en Firestore
-      if (id === LIVE_CATALOG_KEY) {
+      if (isMutableKey) {
         const fallbackLocal = await db.photos.get(id);
         return fallbackLocal?.data || null;
       }
@@ -512,13 +518,15 @@ export async function fetchSharedPhotoFirebase(id: string): Promise<string | nul
         );
       }
       const parts = await Promise.all(promises);
-      const fullData = parts.join('');
-      if (fullData) {
+      // Solo aceptar si TODOS los fragmentos existen (evita guardar imágenes truncadas)
+      if (parts.length === total && parts.every((p) => p.length > 0)) {
+        const fullData = parts.join('');
         try {
           await db.photos.put({ id, data: fullData, synced: 1, createdAt: Date.now() });
         } catch {}
         return fullData;
       }
+      return null;
     } else if (snapData.data) {
       const dataStr = snapData.data as string;
       try {

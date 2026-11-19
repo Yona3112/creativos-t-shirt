@@ -3,7 +3,7 @@ import type { AppState, SyncStatus } from './types';
 import { contentSignature, mergeStates, normalize } from './merge';
 import { db } from './db';
 import { getDeviceId } from './ids';
-import { buildPublicCatalog, LIVE_CATALOG_KEY } from './publicCatalog';
+import { buildPublicCatalog, LIVE_CATALOG_KEY, WEB_ORDER_LATEST_KEY } from './publicCatalog';
 import {
   getFirebaseConfig,
   uploadPhotoNowFirebase,
@@ -353,7 +353,8 @@ export async function uploadPhotoNow(id: string, data: string): Promise<void> {
 }
 
 export async function fetchSharedPhoto(id: string): Promise<string | null> {
-  if (id !== LIVE_CATALOG_KEY) {
+  const isMutableKey = id === LIVE_CATALOG_KEY || id === WEB_ORDER_LATEST_KEY;
+  if (!isMutableKey) {
     const local = await db.photos.get(id);
     if (local?.data) return local.data;
   }
@@ -362,7 +363,7 @@ export async function fetchSharedPhoto(id: string): Promise<string | null> {
   }
   const cfg = getConfig();
   if (!cfg || !navigator.onLine) {
-    if (id === LIVE_CATALOG_KEY) {
+    if (isMutableKey) {
       const fallback = await db.photos.get(id);
       return fallback?.data || null;
     }
@@ -380,7 +381,7 @@ export async function fetchSharedPhoto(id: string): Promise<string | null> {
   } catch {
     /* ignorar */
   }
-  if (id === LIVE_CATALOG_KEY) {
+  if (isMutableKey) {
     const fallback = await db.photos.get(id);
     return fallback?.data || null;
   }
