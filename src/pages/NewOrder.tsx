@@ -7,7 +7,7 @@ import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K, isJpgFile } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto } from '../lib/sync';
-import { addressOneLine, createOrder, deleteColor, quickCustomer, saveCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
+import { addressOneLine, createOrder, deleteColor, quickCustomer, reconcileBackorderStock, saveCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -182,6 +182,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     [settings.sizes, sizeQtys]
   );
   const currentDraftQty = selectedSizeEntries.reduce((s, e) => s + e.qty, 0);
+
+  useEffect(() => {
+    reconcileBackorderStock();
+  }, []);
 
   useEffect(() => {
     if (!colors.some((c) => c.id === colorId)) setColorId(colors[0]?.id || '');
@@ -1203,7 +1207,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             processingText={procMsg}
             colorOptions={colors.map((c) => {
               const totalC = brand
-                ? settings.sizes.reduce((s, sz) => s + (stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
+                ? settings.sizes.reduce((s, sz) => s + Math.max(0, stock.get(vkey(brand.id, c.id, sz)) || 0), 0)
                 : 0;
               return {
                 id: c.id,
@@ -1320,7 +1324,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               brand && color
                 ? (() => {
                     const totalColorStock = settings.sizes.reduce(
-                      (s, sz) => s + (stock.get(vkey(brand.id, color.id, sz)) || 0),
+                      (s, sz) => s + Math.max(0, stock.get(vkey(brand.id, color.id, sz)) || 0),
                       0
                     );
                     return {
@@ -1458,10 +1462,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                       <div className="text-sm font-extrabold text-slate-900">{sz}</div>
                       <div
                         className={`text-[10px] font-bold ${
-                          st > 0 ? 'text-emerald-600' : 'text-amber-600'
+                          st > 0 ? 'text-emerald-600' : st < 0 ? 'text-rose-600' : 'text-amber-600'
                         }`}
                       >
-                        {st > 0 ? `${st} disp.` : 'Encargo'}
+                        {st > 0 ? `${st} disp.` : st < 0 ? `Encargo (${st})` : 'Encargo'}
                       </div>
                     </div>
                     <div

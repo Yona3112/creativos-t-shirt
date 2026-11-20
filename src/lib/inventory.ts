@@ -20,7 +20,6 @@ export function computeStock(state: AppState): StockInfo {
     stock.set(m.key, (stock.get(m.key) || 0) + m.delta);
     if (m.delta > 0 && (m.reason === 'compra' || m.reason === 'ajuste')) everStocked.add(m.key);
   }
-  for (const [k, v] of stock) if (v < 0) stock.set(k, 0);
   return { stock, everStocked };
 }
 
@@ -113,8 +112,10 @@ export function lowColorStockList(state: AppState, info: StockInfo): LowColorSto
       for (const size of state.settings.sizes) {
         const key = vkey(brand.id, color.id, size);
         const qty = info.stock.get(key) || 0;
-        totalStock += qty;
-        if (qty > 0) sizesBreakdown.push({ size, qty });
+        if (qty > 0) {
+          totalStock += qty;
+          sizesBreakdown.push({ size, qty });
+        }
       }
       if (totalStock >= 1 && totalStock <= threshold) {
         out.push({
@@ -128,6 +129,37 @@ export function lowColorStockList(state: AppState, info: StockInfo): LowColorSto
     }
   }
   return out.sort((a, b) => a.totalStock - b.totalStock);
+}
+
+export interface NegativeVariant {
+  key: string;
+  brand: Brand;
+  color: Color;
+  size: string;
+  /** Saldo en negativo (ej. -2) */
+  stock: number;
+  /** Cantidad de camisas por cubrir de pedidos ya facturados (ej. 2) */
+  needed: number;
+}
+
+/**
+ * Variantes con saldo en negativo por pedidos facturados "bajo pedido / encargo"
+ * que aún están pendientes de cubrir con un próximo ingreso de inventario.
+ */
+export function negativeStockList(state: AppState, info: StockInfo): NegativeVariant[] {
+  const out: NegativeVariant[] = [];
+  for (const brand of activeBrands(state)) {
+    for (const color of brandColors(state, brand.id)) {
+      for (const size of state.settings.sizes) {
+        const key = vkey(brand.id, color.id, size);
+        const stock = info.stock.get(key) || 0;
+        if (stock < 0) {
+          out.push({ key, brand, color, size, stock, needed: Math.abs(stock) });
+        }
+      }
+    }
+  }
+  return out.sort((a, b) => a.stock - b.stock);
 }
 
 /**

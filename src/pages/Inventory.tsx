@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState, useStock } from '../lib/store';
-import { activeBrands, brandColors, lowColorStockList, normalPrice, parseVKey, skuOf, vkey } from '../lib/inventory';
+import { activeBrands, brandColors, lowColorStockList, negativeStockList, normalPrice, parseVKey, skuOf, vkey } from '../lib/inventory';
 import { printInventoryReport, printStockEntryReport } from '../lib/printReports';
 import {
   addBrand,
@@ -10,6 +10,7 @@ import {
   deleteBrand,
   deleteColor,
   purgeGarbageData,
+  reconcileBackorderStock,
   removeReadyMadeShirt,
   sellReadyMadeShirt,
   setStockAbsolute,
@@ -48,6 +49,15 @@ export default function Inventory() {
   const [sizeFilter, setSizeFilter] = useState('all');
 
   const lowColors = useMemo(() => lowColorStockList(state, stockInfo), [state, stockInfo]);
+  const negativeVariants = useMemo(() => negativeStockList(state, stockInfo), [state, stockInfo]);
+  const totalNeededUnits = useMemo(
+    () => negativeVariants.reduce((s, v) => s + v.needed, 0),
+    [negativeVariants]
+  );
+
+  useEffect(() => {
+    reconcileBackorderStock();
+  }, []);
 
   const activeEntries = useMemo(
     () =>
@@ -168,7 +178,8 @@ export default function Inventory() {
     let sum = 0;
     for (const r of rows) {
       for (const sz of r.sizes) {
-        sum += stock.get(vkey(r.brand.id, r.color.id, sz)) || 0;
+        const val = stock.get(vkey(r.brand.id, r.color.id, sz)) || 0;
+        if (val > 0) sum += val;
       }
     }
     return sum;
@@ -429,10 +440,25 @@ export default function Inventory() {
               Estampadas ({readyMadeCount})
             </button>
           </div>
-          <div className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white">
-            {view === 'estampadas'
-              ? `Estampadas: ${readyMadeCount} uds`
-              : `Stock: ${totalUnits} uds`}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {totalNeededUnits > 0 && view !== 'estampadas' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setView('ingresos');
+                  setIngresoTab('nuevo');
+                }}
+                className="rounded-xl bg-rose-600 px-3 py-2 text-xs font-extrabold text-white shadow-sm transition hover:bg-rose-700"
+                title="Camisas facturadas por pedido pendientes de ingresar"
+              >
+                Por cubrir: −{totalNeededUnits} uds
+              </button>
+            )}
+            <div className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white">
+              {view === 'estampadas'
+                ? `Estampadas: ${readyMadeCount} uds`
+                : `Stock disp.: ${totalUnits} uds`}
+            </div>
           </div>
         </div>
 
@@ -507,6 +533,78 @@ export default function Inventory() {
             )}
           </div>
         </div>
+
+        {/* Alerta de Camisas Facturadas por Pedido (En Negativo / Pendientes de Ingresar) */}
+        {negativeVariants.length > 0 && (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50/80 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-extrabold text-rose-900">
+                  📦 Camisas facturadas por pedido pendientes de cubrir (−{totalNeededUnits}{' '}
+                  {totalNeededUnits === 1 ? 'unidad' : 'unidades'} en negativo)
+                </div>
+                <p className="mt-0.5 text-[11px] font-medium text-rose-800/90">
+                  Al registrar tu ingreso de mercadería (ej. +10), las unidades en negativo se descuentan solas (−2 + 10 = 8 disponibles) para que tu inventario quede 100% cuadrado.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {view !== 'ingresos' || ingresoTab !== 'nuevo' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView('ingresos');
+                      setIngresoTab('nuevo');
+                    }}
+                    className="rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700"
+                  >
+                    Ir a Registrar Ingreso →
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next: Record<string, number> = { ...entryDraft };
+                      for (const v of negativeVariants) {
+                        next[v.key] = Math.max(next[v.key] || 0, v.needed);
+                      }
+                      setEntryDraft(next);
+                      toast(`Se rellenaron +${totalNeededUnits} uds para cubrir los pedidos`, 'info');
+                    }}
+                    className="rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 shadow-sm transition hover:bg-rose-100"
+                  >
+                    ⚡ Rellenar exactas para cubrir (+{totalNeededUnits})
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {negativeVariants.map((v) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  onClick={() => {
+                    setBrandFilter(v.brand.id);
+                    setColorFilter(v.color.name);
+                    setView('ingresos');
+                    setIngresoTab('nuevo');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 shadow-sm transition hover:border-rose-400"
+                >
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full border border-black/20"
+                    style={{ backgroundColor: v.color.hex }}
+                  />
+                  <span>{v.color.name}</span>
+                  <span className="rounded bg-slate-900 px-1.5 py-0.2 text-[10px] font-bold text-white">
+                    {v.size}
+                  </span>
+                  <span className="font-extrabold text-rose-600">{v.stock}</span>
+                  <span className="text-[10px] text-rose-700">(faltan {v.needed})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Alerta compacta de Colores por Agotarse (1 a 10 uds) */}
         {lowColors.length > 0 && (
@@ -743,13 +841,34 @@ export default function Inventory() {
                                       className={`h-9 w-16 rounded-xl border text-center text-sm font-bold outline-none transition ${
                                         addVal > 0
                                           ? 'border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20'
+                                          : currentVal < 0
+                                          ? 'border-rose-300 bg-rose-50/70 text-rose-900 focus:border-rose-600'
                                           : 'border-slate-200 bg-white text-slate-900 focus:border-slate-900'
                                       }`}
                                     />
-                                    <span className="mt-0.5 text-[10px] font-medium text-slate-400">
+                                    <span
+                                      className={`mt-0.5 text-[10px] font-medium ${
+                                        currentVal < 0 ? 'font-bold text-rose-600' : 'text-slate-400'
+                                      }`}
+                                    >
                                       Había: {currentVal}
+                                      {currentVal < 0 && addVal === 0 ? ' (pedido)' : ''}
                                       {addVal > 0 ? (
-                                        <strong className="text-emerald-700"> → {currentVal + addVal}</strong>
+                                        <strong
+                                          className={
+                                            currentVal + addVal < 0
+                                              ? 'text-rose-600'
+                                              : 'text-emerald-700'
+                                          }
+                                        >
+                                          {' '}
+                                          → Queda: {currentVal + addVal}
+                                          {currentVal < 0
+                                            ? currentVal + addVal >= 0
+                                              ? ` (cubre ${Math.abs(currentVal)})`
+                                              : ` (faltan ${Math.abs(currentVal + addVal)})`
+                                            : ''}
+                                        </strong>
                                       ) : null}
                                     </span>
                                   </div>
@@ -819,15 +938,15 @@ export default function Inventory() {
                         visibleSizes.map((sz) => {
                           const k = vkey(brand.id, color.id, sz);
                           const currentVal = stock.get(k) || 0;
-                          const hadBefore = Math.max(0, dailyComparison.beforeByKey.get(k) || 0);
+                          const hadBefore = dailyComparison.beforeByKey.get(k) || 0;
                           const inToday = dailyComparison.inByKey.get(k) || 0;
                           const outToday = dailyComparison.outByKey.get(k) || 0;
-                          const endOfDayVal = Math.max(0, hadBefore + inToday - outToday);
+                          const endOfDayVal = hadBefore + inToday - outToday;
 
                           const rawCount = countDraft[k];
                           const countedVal =
                             rawCount !== undefined && rawCount.trim() !== ''
-                              ? Math.max(0, Math.floor(Number(rawCount) || 0))
+                              ? Math.floor(Number(rawCount) || 0)
                               : currentVal;
                           const diff = countedVal - currentVal;
 
@@ -1872,50 +1991,62 @@ function CompactStockCell({
   }, [value]);
 
   const commit = (raw: string) => {
-    const n = Math.max(0, Math.floor(Number(raw) || 0));
+    const parsed = Number(raw);
+    const n = Number.isFinite(parsed) ? Math.floor(parsed) : value;
     setText(String(n));
     if (n !== value) onCommit(n);
   };
 
+  const isNegative = value < 0;
+
   return (
-    <div className="inline-flex items-center gap-0.5">
-      <button
-        type="button"
-        className="flex h-12 w-8 items-center justify-center rounded-l-lg bg-slate-100 font-bold text-slate-700 active:bg-slate-200 disabled:opacity-40"
-        disabled={value <= 0}
-        onClick={() => onCommit(Math.max(0, value - 1))}
-        aria-label={`Restar ${label}`}
-      >
-        −
-      </button>
-      <input
-        type="number"
-        inputMode="numeric"
-        min={0}
-        aria-label={label}
-        className="h-12 w-12 border-y border-slate-200 bg-white text-center font-bold text-slate-900 outline-none focus:border-brand-600"
-        value={text}
-        onFocus={(e) => {
-          focused.current = true;
-          e.currentTarget.select();
-        }}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={(e) => {
-          focused.current = false;
-          commit(e.target.value);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        }}
-      />
-      <button
-        type="button"
-        className="flex h-12 w-8 items-center justify-center rounded-r-lg bg-brand-100 font-bold text-brand-900 active:bg-brand-200"
-        onClick={() => onCommit(value + 1)}
-        aria-label={`Sumar ${label}`}
-      >
-        +
-      </button>
+    <div className="inline-flex flex-col items-center">
+      <div className="inline-flex items-center gap-0.5">
+        <button
+          type="button"
+          className="flex h-11 w-7 items-center justify-center rounded-l-lg bg-slate-100 font-bold text-slate-700 active:bg-slate-200"
+          onClick={() => onCommit(value - 1)}
+          aria-label={`Restar ${label}`}
+        >
+          −
+        </button>
+        <input
+          type="number"
+          inputMode="numeric"
+          aria-label={label}
+          className={`h-11 w-12 border-y text-center font-bold outline-none ${
+            isNegative
+              ? 'border-rose-300 bg-rose-50 text-rose-700 focus:border-rose-600'
+              : 'border-slate-200 bg-white text-slate-900 focus:border-brand-600'
+          }`}
+          value={text}
+          onFocus={(e) => {
+            focused.current = true;
+            e.currentTarget.select();
+          }}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={(e) => {
+            focused.current = false;
+            commit(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          }}
+        />
+        <button
+          type="button"
+          className="flex h-11 w-7 items-center justify-center rounded-r-lg bg-brand-100 font-bold text-brand-900 active:bg-brand-200"
+          onClick={() => onCommit(value + 1)}
+          aria-label={`Sumar ${label}`}
+        >
+          +
+        </button>
+      </div>
+      {isNegative && (
+        <span className="mt-0.5 rounded bg-rose-100 px-1.5 py-0.2 text-[9px] font-extrabold text-rose-700">
+          Por cubrir: {Math.abs(value)}
+        </span>
+      )}
     </div>
   );
 }

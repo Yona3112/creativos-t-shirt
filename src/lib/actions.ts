@@ -10,7 +10,7 @@ const now = () => Date.now();
 /* ----------------------------- Inventario ----------------------------- */
 
 export function setStockAbsolute(key: string, target: number, reason: MovementReason = 'ajuste'): void {
-  const t = Math.max(0, Math.floor(target || 0));
+  const t = Math.floor(Number(target) || 0);
   update((s) => {
     const current = computeStock(s).stock.get(key) || 0;
     const delta = t - current;
@@ -148,8 +148,7 @@ export function voidStockEntry(id: string): void {
 
 export function addStock(key: string, delta: number): void {
   update((s) => {
-    const current = computeStock(s).stock.get(key) || 0;
-    const d = Math.max(-current, Math.trunc(delta));
+    const d = Math.trunc(delta);
     if (!d) return s;
     const m: Movement = { id: uid(), key, delta: d, reason: d > 0 ? 'compra' : 'ajuste', at: now() };
     return { ...s, movements: [...s.movements, m] };
@@ -409,8 +408,6 @@ export function nextFolio(s: AppState): number {
 export function createOrder(input: NewOrderInput): Order {
   let created!: Order;
   update((s) => {
-    const { stock } = computeStock(s);
-    const used = new Map<string, number>();
     const t = now();
     const orderId = uid();
     const movements: Movement[] = [];
@@ -418,9 +415,9 @@ export function createOrder(input: NewOrderInput): Order {
       const brand = s.brands.find((b) => b.id === l.brandId);
       const color = s.colors.find((c) => c.id === l.colorId);
       const key = vkey(l.brandId, l.colorId, l.size);
-      const avail = Math.max(0, (stock.get(key) || 0) - (used.get(key) || 0));
-      const fromStock = input.status === 'borrador' ? 0 : Math.min(avail, l.qty);
-      used.set(key, (used.get(key) || 0) + fromStock);
+      // Descontar siempre todas las unidades facturadas (aunque quede en negativo por ser "bajo pedido")
+      // para que al ingresar nueva mercadería el inventario cuadre automáticamente (-2 + 10 = 8).
+      const fromStock = input.status === 'borrador' ? 0 : l.qty;
       const itemId = uid();
       if (fromStock > 0) {
         movements.push({ id: `venta-${orderId}-${itemId}`, key, delta: -fromStock, reason: 'venta', orderId, at: t });
@@ -575,9 +572,7 @@ export function updateOrderDetails(
               at: t
             });
           }
-          const { stock } = computeStock({ ...s, movements });
-          const avail = Math.max(0, stock.get(key) || 0);
-          const take = Math.min(avail, nextIt.qty);
+          const take = nextIt.qty;
           if (take > 0) {
             movements.push({
               id: `edit-swap-take-${id}-${nextIt.id}-${t}-${idx}`,
@@ -607,9 +602,7 @@ export function updateOrderDetails(
         }
 
         if (nextIt.qty > prevFrom) {
-          const { stock } = computeStock({ ...s, movements });
-          const avail = Math.max(0, stock.get(key) || 0);
-          const take = Math.min(avail, nextIt.qty - prevFrom);
+          const take = nextIt.qty - prevFrom;
           if (take > 0) {
             movements.push({
               id: `edit-add-${id}-${nextIt.id}-${t}-${idx}`,
@@ -767,18 +760,13 @@ export function setOrderStatus(
       }
       items = currentOrder.items.map((it) => ({ ...it, fromStock: 0 }));
     } else if (status !== 'borrador') {
-      // Unidades que se vendieron "bajo pedido": al llegar inventario y avanzar el pedido,
-      // se descuentan del stock para que el inventario no quede inflado.
-      const { stock } = computeStock({ ...s, movements });
-      const used = new Map<string, number>();
+      // Unidades pendientes de descontar (ej. al pasar de borrador a producción o pedidos previos bajo pedido):
+      // se descuentan completas (aunque quede en negativo) para cuadrar automáticamente al ingresar inventario.
       items = currentOrder.items.map((it) => {
         const pending = it.qty - (it.fromStock || 0);
         if (pending <= 0) return it;
         const key = vkey(it.brandId, it.colorId, it.size);
-        const avail = Math.max(0, (stock.get(key) || 0) - (used.get(key) || 0));
-        const take = Math.min(avail, pending);
-        if (take <= 0) return it;
-        used.set(key, (used.get(key) || 0) + take);
+        const take = pending;
         movements.push({
           id: `venta-${currentOrder.id}-${it.id}-extra-${t}`,
           key,
@@ -802,6 +790,52 @@ export function setOrderStatus(
     };
   });
   return null;
+}
+
+/**
+ * Reconcilia pedidos activos en producción que hayan sido facturados antes sin descontar
+ * unidades "bajo pedido" (`fromStock < qty`), dejándolos reflejados en el inventario (en negativo si aplica).
+ */
+export function reconcileBackorderStock(): number {
+  let fixedUnits = 0;
+  update((s) => {
+    const t = now();
+    const movements = [...s.movements];
+    const existingIds = new Set(movements.map((m) => m.id));
+    let changed = false;
+
+    const orders = s.orders.map((o) => {
+      if (o.deleted || o.status !== 'en_produccion') return o;
+      let orderChanged = false;
+      const items = o.items.map((it) => {
+        const pending = it.qty - (it.fromStock || 0);
+        if (pending <= 0) return it;
+        const movId = `venta-${o.id}-${it.id}-bo`;
+        if (!existingIds.has(movId)) {
+          movements.push({
+            id: movId,
+            key: vkey(it.brandId, it.colorId, it.size),
+            delta: -pending,
+            reason: 'venta',
+            orderId: o.id,
+            note: `Bajo pedido #${o.folio}`,
+            at: o.createdAt || t
+          });
+          existingIds.add(movId);
+        }
+        fixedUnits += pending;
+        orderChanged = true;
+        changed = true;
+        return { ...it, fromStock: it.qty };
+      });
+      if (!orderChanged) return o;
+      return { ...o, items, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) };
+    });
+
+    if (!changed) return s;
+    return { ...s, orders, movements };
+  });
+  return fixedUnits;
 }
 
 export function addReadyMadeShirt(item: Omit<ReadyMadeShirt, 'id' | 'createdAt'>): void {
