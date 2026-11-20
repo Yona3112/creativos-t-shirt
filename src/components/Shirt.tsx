@@ -1097,7 +1097,7 @@ export function InteractiveShirt3D({
             />
             <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/60 blur-md" />
 
-            {(!wizardStep || wizardStep === 'color') && !designUrl && (
+            {(!wizardStep || wizardStep === 'design') && !designUrl && (
               <div className="pointer-events-none absolute bottom-5 z-10 rounded-full bg-black/55 px-3 py-1 text-[11px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-md">
                 📍 Zona de diseño: {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
               </div>

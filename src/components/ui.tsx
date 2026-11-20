@@ -39,12 +39,13 @@ let toastSeq = 1;
 
 export function toast(text: string, kind: Toast['kind'] = 'ok'): void {
   const t = { id: toastSeq++, text, kind };
-  toasts = [...toasts, t];
+  // Mantener máximo 2 avisos discretos a la vez para no estorbar la pantalla
+  toasts = [...toasts.slice(-1), t];
   toastListeners.forEach((l) => l());
   setTimeout(() => {
     toasts = toasts.filter((x) => x.id !== t.id);
     toastListeners.forEach((l) => l());
-  }, kind === 'error' ? 4200 : 2600);
+  }, kind === 'error' ? 3600 : 1900);
 }
 
 export function Toasts() {
@@ -56,20 +57,31 @@ export function Toasts() {
     () => toasts
   );
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[80] flex flex-col items-center gap-2 px-4">
+    <div className="pointer-events-none fixed inset-x-0 top-3 z-[80] flex flex-col items-center gap-1.5 px-3">
       <AnimatePresence>
         {list.map((t) => (
           <motion.div
             key={t.id}
-            initial={{ opacity: 0, y: 16, scale: 0.95 }}
+            initial={{ opacity: 0, y: -10, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 12, scale: 0.95 }}
-            transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-            className={`pointer-events-auto max-w-md rounded-2xl px-4 py-3 text-center text-sm font-semibold text-white shadow-xl backdrop-blur-md ${
-              t.kind === 'error' ? 'bg-red-600/95' : t.kind === 'info' ? 'bg-slate-900/95' : 'bg-emerald-600/95'
+            exit={{ opacity: 0, y: -8, scale: 0.96 }}
+            transition={{ type: 'spring', stiffness: 520, damping: 34 }}
+            className={`pointer-events-auto inline-flex max-w-xs items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold shadow-md backdrop-blur-md sm:max-w-sm ${
+              t.kind === 'error'
+                ? 'border-red-500/30 bg-red-600/95 text-white'
+                : 'border-slate-900/10 bg-slate-900/92 text-white'
             }`}
           >
-            {t.text}
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                t.kind === 'error'
+                  ? 'bg-white'
+                  : t.kind === 'info'
+                  ? 'bg-sky-400'
+                  : 'bg-emerald-400'
+              }`}
+            />
+            <span className="truncate">{t.text}</span>
           </motion.div>
         ))}
       </AnimatePresence>

@@ -22,7 +22,28 @@ function cleanHnPhoneDigits(raw: string): string {
   return digits.length > 8 && digits.startsWith('504') ? digits.slice(3) : digits;
 }
 
-const POS_WIZARD_TITLES = ['Ubicación', 'Diseño', 'Talla', 'Datos'] as const;
+const POS_WIZARD_STEPS = [
+  {
+    short: 'Color',
+    title: 'Escoge color de camiseta',
+    subtitle: 'Elige la marca y el color de la camiseta en la vista 3D'
+  },
+  {
+    short: 'Diseño',
+    title: 'Escoge tu diseño y dónde irá',
+    subtitle: 'Indica si va en espalda o frente y selecciona o sube el diseño'
+  },
+  {
+    short: 'Tallas',
+    title: 'Escoge la cantidad y tallas',
+    subtitle: 'Pide varias unidades de la misma talla o combina tallas para este diseño'
+  },
+  {
+    short: 'Carrito',
+    title: 'Carrito y datos',
+    subtitle: 'Revisa las prendas, selecciona el cliente y registra el pago'
+  }
+] as const;
 const POS_WIZARD_LAST = 3 as const;
 
 const LS_CART = 'cgs_cart_v1';
@@ -135,8 +156,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [brandId, setBrandId] = useState(brands[0]?.id || '');
   const colors = brandColors(state, brandId);
   const [colorId, setColorId] = useState(colors[0]?.id || '');
-  const [size, setSize] = useState<string>(settings.sizes.includes('M') ? 'M' : settings.sizes[0]);
-  const [qty, setQty] = useState(1);
+  const defaultSize = settings.sizes.includes('M') ? 'M' : settings.sizes[0] || 'M';
+  const [sizeQtys, setSizeQtys] = useState<Record<string, number>>(() => ({ [defaultSize]: 1 }));
   const [manualPrice, setManualPrice] = useState<number | null>(null);
   const [colorModal, setColorModal] = useState(false);
   const [editingColor, setEditingColor] = useState<{ id: string; name: string; hex: string } | null>(null);
@@ -146,6 +167,21 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   const brand = brands.find((b) => b.id === brandId);
   const color = colors.find((c) => c.id === colorId) || colors[0];
+
+  const setSizeQty = (sz: string, nextQty: number) => {
+    const clamped = Math.max(0, Math.min(999, nextQty));
+    setSizeQtys((prev) => ({ ...prev, [sz]: clamped }));
+    setJustAddedLine(false);
+  };
+
+  const selectedSizeEntries = useMemo(
+    () =>
+      settings.sizes
+        .filter((sz) => (sizeQtys[sz] || 0) > 0)
+        .map((sz) => ({ size: sz, qty: sizeQtys[sz] || 0 })),
+    [settings.sizes, sizeQtys]
+  );
+  const currentDraftQty = selectedSizeEntries.reduce((s, e) => s + e.qty, 0);
 
   useEffect(() => {
     if (!colors.some((c) => c.id === colorId)) setColorId(colors[0]?.id || '');
@@ -163,7 +199,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   const lines = useMemo(() => repriceCart(draft.lines, settings, state.brands), [draft.lines, settings, state.brands]);
   const cartQty = lines.reduce((s, l) => s + l.qty, 0);
-  const projectedQty = cartQty + qty;
+  const projectedQty = cartQty + Math.max(1, currentDraftQty);
   const plainWorkTypeDefault =
     settings.workTypes.find((w) => w.toLowerCase().includes('lisa')) || 'Camisa Lisa';
   const customWorkTypeDefault =
@@ -217,7 +253,16 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       if (!silent) toast('Elige marca y color', 'error');
       return false;
     }
-    if (qty < 1) return false;
+    const entriesToAdd =
+      selectedSizeEntries.length > 0
+        ? selectedSizeEntries
+        : silent
+        ? [{ size: defaultSize, qty: 1 }]
+        : [];
+    if (entriesToAdd.length === 0) {
+      if (!silent) toast('Elige al menos una talla', 'error');
+      return false;
+    }
     const isManual = manualPrice !== null;
     const hasDesignForLine = isCustomWork && Boolean(draft.photo || draft.designId || draft.designName);
     const curDesignId = hasDesignForLine ? draft.designId || null : null;
@@ -231,58 +276,50 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     const curOffsetY = draft.designOffsetY || 0;
 
     setDraft((d) => {
-      // Para saber si ya existe esta misma línea en el carrito:
-      // Debe coincidir prenda (marca, color, talla, precio) Y el diseño (designId, designName y ubicación)
-      const idx = d.lines.findIndex(
-        (l) =>
-          l.brandId === brand.id &&
-          l.colorId === color.id &&
-          l.size === size &&
-          l.manualPrice === isManual &&
-          (!isManual || l.unitPrice === unitPrice) &&
-          (l.designId || null) === curDesignId &&
-          (l.designName || null) === curDesignName &&
-          (l.placement || null) === curPlacement
-      );
       const next = [...d.lines];
-      if (idx >= 0) {
-        // Mismo diseño y misma prenda: sumamos unidades a esa línea existente
-        next[idx] = { ...next[idx], qty: next[idx].qty + qty };
-      } else {
-        // Diseño diferente o prenda diferente: se agrega como línea individual
-        next.push({
-          id: uid(),
-          brandId: brand.id,
-          colorId: color.id,
-          size,
-          qty,
-          unitPrice,
-          manualPrice: isManual,
-          designId: curDesignId,
-          designName: curDesignName,
-          designCode: curDesignCode,
-          photo: curPhoto,
-          rawPhoto: curRawPhoto,
-          placement: curPlacement,
-          scale: curScale,
-          offsetX: curOffsetX,
-          offsetY: curOffsetY,
-          workType: draft.workType
-        });
+      for (const entry of entriesToAdd) {
+        const idx = next.findIndex(
+          (l) =>
+            l.brandId === brand.id &&
+            l.colorId === color.id &&
+            l.size === entry.size &&
+            l.manualPrice === isManual &&
+            (!isManual || l.unitPrice === unitPrice) &&
+            (l.designId || null) === curDesignId &&
+            (l.designName || null) === curDesignName &&
+            (l.placement || null) === curPlacement
+        );
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], qty: next[idx].qty + entry.qty };
+        } else {
+          next.push({
+            id: uid(),
+            brandId: brand.id,
+            colorId: color.id,
+            size: entry.size,
+            qty: entry.qty,
+            unitPrice,
+            manualPrice: isManual,
+            designId: curDesignId,
+            designName: curDesignName,
+            designCode: curDesignCode,
+            photo: curPhoto,
+            rawPhoto: curRawPhoto,
+            placement: curPlacement,
+            scale: curScale,
+            offsetX: curOffsetX,
+            offsetY: curOffsetY,
+            workType: draft.workType
+          });
+        }
       }
       return { ...d, lines: next };
     });
     if (!silent) {
-      const st = stock.get(vkey(brand.id, color.id, size)) || 0;
-      const designLabel = curDesignName ? ` · ${curDesignName}` : ' · Lisa';
-      toast(
-        st >= qty
-          ? `+${qty} ${brand.code} ${color.name} ${size}${designLabel}`
-          : `+${qty} ${color.name} ${size}${designLabel} (Bajo pedido)`,
-        st >= qty ? 'ok' : 'info'
-      );
+      const sizeSummary = entriesToAdd.map((e) => `${e.qty}×${e.size}`).join(', ');
+      toast(`Agregado: ${sizeSummary} (${color.name})`, 'ok');
     }
-    setQty(1);
+    setSizeQtys({ [defaultSize]: 1 });
     setManualPrice(null);
     setJustAddedLine(true);
     return true;
@@ -324,13 +361,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         designOffsetY: 0,
         workType: draft.workType.toLowerCase().includes('lisa') ? customWorkTypeDefault : draft.workType
       });
-      toast(
-        autoJpgToPng
-          ? 'JPG convertido automáticamente a PNG transparente en Tamaño A3'
-          : shouldRemoveBg
-          ? 'Diseño sin fondo agregado en Tamaño A3'
-          : 'Diseño agregado a la camisa 3D en Tamaño A3'
-      );
     } catch (e) {
       toast((e as Error).message, 'error');
     }
@@ -408,10 +438,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   const handleAddAnotherShirt = (fromStep3 = false) => {
     if (!fromStep3 || !justAddedLine || lines.length === 0) {
-      commitCurrentLineToCart(false);
+      if (!commitCurrentLineToCart(false)) return;
     }
     clearDraftDesign();
-    setQty(1);
+    setSizeQtys({ [defaultSize]: 1 });
     setManualPrice(null);
     setJustAddedLine(true);
     setWizardStep(0);
@@ -913,13 +943,17 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   };
 
   const normalForBrand = normalPrice(settings, brand);
-  const currentDraftLabel = `${color?.name || 'Color'} · ${(draft.placement || 'back') === 'back' ? 'Espalda' : 'Frente'} · Talla ${size} · ${qty} ${qty === 1 ? 'ud' : 'uds'}${draft.designName ? ` · ${draft.designName}` : ''}`;
+  const currentDraftLabel = `${color?.name || 'Color'} · ${(draft.placement || 'back') === 'back' ? 'Espalda' : 'Frente'} · ${
+    selectedSizeEntries.length > 0
+      ? selectedSizeEntries.map((e) => `${e.qty}×${e.size}`).join(', ')
+      : 'Sin talla'
+  }${draft.designName ? ` · ${draft.designName}` : ''}`;
   const bottomBarTotal =
     wizardStep === POS_WIZARD_LAST
       ? total
       : justAddedLine && lines.length > 0
       ? subtotal
-      : subtotal + qty * unitPrice;
+      : subtotal + currentDraftQty * unitPrice;
 
   return (
     <div className="space-y-4 pb-36 sm:pb-32">
@@ -989,12 +1023,37 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </section>
       )}
 
-      {/* Barra de progreso 4 slides estilo Catálogo */}
-      <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
-        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-500">
+      {/* Barra de progreso e instrucción clara del paso actual */}
+      <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
+        <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span>Paso {wizardStep + 1} de {POS_WIZARD_LAST + 1}</span>
-            <span className="font-bold text-slate-900">· {POS_WIZARD_TITLES[wizardStep]}</span>
+            <span className="inline-flex items-center rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+              Paso {wizardStep + 1} de {POS_WIZARD_LAST + 1}
+            </span>
+            <div className="hidden items-center gap-1 sm:flex">
+              {POS_WIZARD_STEPS.map((stInfo, i) => {
+                const unlocked = i <= maxStepReached || (i === POS_WIZARD_LAST && lines.length > 0);
+                const active = i === wizardStep;
+                return (
+                  <button
+                    key={stInfo.short}
+                    type="button"
+                    disabled={!unlocked && i > wizardStep}
+                    aria-label={`Ir al paso ${i + 1}: ${stInfo.title}`}
+                    onClick={() => (unlocked || i <= wizardStep) && goToWizardStep(i)}
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition disabled:cursor-default ${
+                      active
+                        ? 'bg-slate-900/10 text-slate-900'
+                        : unlocked || i <= wizardStep
+                        ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                        : 'text-slate-300'
+                    }`}
+                  >
+                    {i + 1}. {stInfo.short}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           {cartQty > 0 && (
             <button
@@ -1008,16 +1067,22 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             </button>
           )}
         </div>
-        <div className="grid grid-cols-4 gap-1.5">
-          {POS_WIZARD_TITLES.map((title, i) => {
+        <h2 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">
+          {POS_WIZARD_STEPS[wizardStep].title}
+        </h2>
+        <p className="mt-0.5 text-xs text-slate-500">
+          {POS_WIZARD_STEPS[wizardStep].subtitle}
+        </p>
+        <div className="mt-3 grid grid-cols-4 gap-1.5">
+          {POS_WIZARD_STEPS.map((stInfo, i) => {
             const unlocked = i <= maxStepReached || (i === POS_WIZARD_LAST && lines.length > 0);
             const active = i === wizardStep;
             return (
               <button
-                key={title}
+                key={stInfo.short}
                 type="button"
                 disabled={!unlocked && i > wizardStep}
-                aria-label={`Ir al paso ${i + 1}: ${title}`}
+                aria-label={`Ir al paso ${i + 1}: ${stInfo.title}`}
                 onClick={() => (unlocked || i <= wizardStep) && goToWizardStep(i)}
                 className="group flex flex-col items-start gap-1 text-left disabled:cursor-default"
               >
@@ -1031,15 +1096,15 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                   }`}
                 />
                 <span
-                  className={`truncate text-[10px] font-semibold ${
+                  className={`truncate text-[10px] font-semibold sm:hidden ${
                     active
                       ? 'text-slate-900'
                       : unlocked || i <= wizardStep
-                      ? 'text-slate-500 group-hover:text-slate-800'
+                      ? 'text-slate-500'
                       : 'text-slate-300'
                   }`}
                 >
-                  {i + 1}. {title}
+                  {i + 1}. {stInfo.short}
                 </span>
               </button>
             );
@@ -1047,7 +1112,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </div>
       </div>
 
-      {/* PASOS 1 y 2: VISOR 3D + UBICACIÓN O DISEÑO (IGUAL AL CATÁLOGO) */}
+      {/* PASOS 1 y 2: VISOR 3D + COLOR O DISEÑO Y UBICACIÓN */}
       {wizardStep <= 1 && (
         <div className="space-y-4">
           {wizardStep === 0 && brands.length > 1 && (
@@ -1069,6 +1134,37 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 </button>
               ))}
             </div>
+          )}
+
+          {wizardStep === 1 && (
+            <section className="rounded-[22px] border border-slate-200/80 bg-white p-3.5 shadow-sm">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800">¿Dónde irá el diseño?</span>
+                <span className="text-[11px] font-medium text-slate-400">Toca para girar la camisa</span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100 p-1">
+                {([['back', 'Espalda (Atrás)'], ['center', 'Frente (Pecho)']] as const).map(([k, lbl]) => {
+                  const active = (draft.placement || 'back') === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => {
+                        set({ placement: k });
+                        setJustAddedLine(false);
+                      }}
+                      className={`min-h-[40px] rounded-xl text-xs font-bold transition sm:text-sm ${
+                        active
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           )}
 
           <InteractiveShirt3D
@@ -1157,7 +1253,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                   : draft.workType
               });
               setJustAddedLine(false);
-              toast(`"${d.code ? `[${d.code}] ` : ''}${d.name}" colocado en ${curSide === 'back' ? 'ESPALDA' : 'FRENTE'}`);
             }}
             onRenameCatalogDesign={(id, name, code) => {
               renameDesign(id, name, code);
@@ -1223,45 +1318,22 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             }}
             stockBadge={
               brand && color
-                ? {
-                    available: (stock.get(vkey(brand.id, color.id, size)) || 0) > 0,
-                    text:
-                      (stock.get(vkey(brand.id, color.id, size)) || 0) > 0
-                        ? `Talla ${size}: ${stock.get(vkey(brand.id, color.id, size)) || 0} disp.`
-                        : `Talla ${size}: Disponible pronto`
-                  }
+                ? (() => {
+                    const totalColorStock = settings.sizes.reduce(
+                      (s, sz) => s + (stock.get(vkey(brand.id, color.id, sz)) || 0),
+                      0
+                    );
+                    return {
+                      available: totalColorStock > 0,
+                      text:
+                        totalColorStock > 0
+                          ? `${color.name}: ${totalColorStock} disp.`
+                          : `${color.name}: Bajo pedido`
+                    };
+                  })()
                 : null
             }
           />
-
-          {wizardStep === 0 && (
-            <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-              <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">¿Dónde irá el diseño?</h2>
-              <p className="mb-3 text-xs text-slate-500">Elige el color de la camisa arriba y el lado a estampar aquí.</p>
-              <div className="grid grid-cols-2 gap-2">
-                {([['back', 'Espalda (Atrás)'], ['center', 'Frente (Pecho)']] as const).map(([k, lbl]) => {
-                  const active = (draft.placement || 'back') === k;
-                  return (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => {
-                        set({ placement: k });
-                        setJustAddedLine(false);
-                      }}
-                      className={`min-h-[52px] rounded-2xl border text-sm font-bold transition ${
-                        active
-                          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                          : 'border-slate-200 bg-white text-slate-800 hover:border-slate-400'
-                      }`}
-                    >
-                      {lbl}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
 
           {wizardStep === 1 && (
             <section className="card space-y-3">
@@ -1358,44 +1430,81 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             </button>
           </div>
 
-          <section className="card">
-            <h2 className="section-title">Talla</h2>
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+          <section className="card space-y-3">
+            <div>
+              <h2 className="section-title mb-0.5">Cantidad por talla</h2>
+              <p className="text-xs text-slate-500">
+                Toca <strong className="text-slate-700">+</strong> en la misma talla o en varias tallas para este mismo diseño.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {settings.sizes.map((sz) => {
                 const st = brand && color ? stock.get(vkey(brand.id, color.id, sz)) || 0 : 0;
-                const active = sz === size;
+                const q = sizeQtys[sz] || 0;
+                const active = q > 0;
                 return (
-                  <button
+                  <div
                     key={sz}
-                    type="button"
-                    className={`chip flex-col gap-0.5 py-2 ${active ? 'chip-on' : 'chip-off'}`}
                     onClick={() => {
-                      setSize(sz);
-                      setJustAddedLine(false);
+                      if (q === 0) setSizeQty(sz, 1);
                     }}
+                    className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2.5 transition ${
+                      active
+                        ? 'border-slate-900 bg-slate-900/[0.03] ring-1 ring-slate-900/10'
+                        : 'cursor-pointer border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70'
+                    }`}
                   >
-                    <span className="text-lg font-extrabold leading-tight">{sz}</span>
-                    <span
-                      className={`text-[11px] font-bold ${
-                        active
-                          ? st > 0
-                            ? 'text-emerald-300'
-                            : 'text-amber-300'
-                          : st > 0
-                          ? 'text-emerald-600'
-                          : 'text-amber-600'
-                      }`}
+                    <div className="min-w-0">
+                      <div className="text-sm font-extrabold text-slate-900">{sz}</div>
+                      <div
+                        className={`text-[10px] font-bold ${
+                          st > 0 ? 'text-emerald-600' : 'text-amber-600'
+                        }`}
+                      >
+                        {st > 0 ? `${st} disp.` : 'Encargo'}
+                      </div>
+                    </div>
+                    <div
+                      className="flex items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {st > 0 ? `${st} disp.` : 'Encargo'}
-                    </span>
-                  </button>
+                      <button
+                        type="button"
+                        disabled={q <= 0}
+                        onClick={() => setSizeQty(sz, q - 1)}
+                        aria-label={`Restar talla ${sz}`}
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-700 transition hover:bg-slate-100 active:scale-95 disabled:opacity-30"
+                      >
+                        −
+                      </button>
+                      <span
+                        className={`min-w-[20px] text-center text-xs font-extrabold tabular-nums ${
+                          active ? 'text-slate-900' : 'text-slate-400'
+                        }`}
+                      >
+                        {q}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSizeQty(sz, q + 1)}
+                        aria-label={`Sumar talla ${sz}`}
+                        className={`flex h-7 w-7 items-center justify-center rounded-lg text-sm font-bold transition active:scale-95 ${
+                          active
+                            ? 'bg-slate-900 text-white hover:bg-slate-800'
+                            : 'border border-slate-200 bg-white text-slate-800 hover:bg-slate-100'
+                        }`}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
                 );
               })}
             </div>
           </section>
 
           <section className="card space-y-3">
-            <h2 className="section-title">Precio y Cantidad</h2>
+            <h2 className="section-title">Precio y resumen</h2>
             <div className="grid grid-cols-2 gap-2">
               <div
                 role="button"
@@ -1500,22 +1609,19 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-              <div>
-                <div className="text-sm font-semibold text-slate-900">Cantidad</div>
-                <div className="text-xs text-slate-500">{qty} × {money(unitPrice)}</div>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/80 px-3.5 py-2.5">
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900">
+                  {currentDraftQty > 0
+                    ? selectedSizeEntries.map((e) => `${e.qty}× ${e.size}`).join(' · ')
+                    : 'Ninguna talla seleccionada'}
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  {currentDraftQty} {currentDraftQty === 1 ? 'prenda' : 'prendas'} × {money(unitPrice)}
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Stepper
-                  value={qty}
-                  min={1}
-                  onCommit={(v) => {
-                    setQty(v);
-                    setJustAddedLine(false);
-                  }}
-                  ariaLabel="Cantidad"
-                />
-                <div className="min-w-[82px] text-right text-lg font-extrabold">{money(qty * unitPrice)}</div>
+              <div className="text-lg font-extrabold tabular-nums text-slate-900">
+                {money(currentDraftQty * unitPrice)}
               </div>
             </div>
           </section>
@@ -1524,13 +1630,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             <button
               type="button"
               onClick={() => handleAddAnotherShirt(false)}
-              disabled={!brand || !color}
-              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-4 text-xs font-extrabold text-slate-900 shadow-sm transition hover:bg-slate-100 active:scale-[0.99]"
+              disabled={!brand || !color || currentDraftQty <= 0}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-4 text-xs font-extrabold text-slate-900 shadow-sm transition hover:bg-slate-100 active:scale-[0.99] disabled:opacity-40"
             >
-              + Agregar al pedido y elegir otra prenda
+              + Agregar al carrito y elegir otro color o diseño
             </button>
             <p className="mt-1.5 text-[11px] text-slate-500">
-              ¿El cliente lleva otra talla, color o diseño? Agrégalo aquí y pasa al siguiente.
+              ¿El cliente lleva otro color o diseño en el mismo pedido? Agrégalo aquí y pasa al siguiente.
             </p>
           </div>
         </div>

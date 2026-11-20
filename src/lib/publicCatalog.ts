@@ -53,8 +53,18 @@ export interface SharedCatalogPayload {
   designs?: SharedCatalogDesignRef[];
   /** Disponibilidad por `${colorId}|${talla}` (solo cantidades, sin costos). */
   stock?: Record<string, number>;
+  /** Formas de pago disponibles en el catálogo público */
+  paymentMethods?: string[];
   publishedAt?: number;
 }
+
+export const DEFAULT_CATALOG_PAYMENT_METHODS: string[] = [
+  'Transferencia Bancaria',
+  'Efectivo en Tienda',
+  'Pago Contra Entrega',
+  'Pago Pendiente al Recoger',
+  'Tarjeta / Link de Pago'
+];
 
 export interface CustomerWebOrderItem {
   id: string;
@@ -197,6 +207,13 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     })
     .map(({ createdAt: _c, ...rest }) => rest);
 
+  const mergedPaymentMethods = Array.from(
+    new Set([
+      ...(st.paymentMethods || []).map((m) => m.trim()).filter(Boolean),
+      ...DEFAULT_CATALOG_PAYMENT_METHODS
+    ])
+  );
+
   return {
     storeName: st.storeName,
     storePhone: st.storePhone,
@@ -218,7 +235,8 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     boutiqueTheme: st.storeTheme || 'ranchero',
     activeCampaign: st.activeCampaign || 'all',
     designs,
-    stock: stockMap
+    stock: stockMap,
+    paymentMethods: mergedPaymentMethods
   };
 }
 

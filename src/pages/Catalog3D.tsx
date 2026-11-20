@@ -25,10 +25,11 @@ import {
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
-import { Confirm, Modal, Stepper, toast } from '../components/ui';
+import { Confirm, Modal, toast } from '../components/ui';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
 import {
   buildPublicCatalog,
+  DEFAULT_CATALOG_PAYMENT_METHODS,
   LIVE_CATALOG_KEY,
   WEB_ORDER_LATEST_KEY,
   type CustomerWebOrderItem,
@@ -39,7 +40,28 @@ import {
 } from '../lib/publicCatalog';
 
 const WIZARD_KEYS = ['color', 'design', 'size', 'data'] as const;
-const WIZARD_TITLES = ['Color y lado', 'Diseño', 'Talla y cantidad', 'Finalizar'];
+const WIZARD_STEPS = [
+  {
+    short: 'Color',
+    title: 'Escoge color de camiseta',
+    subtitle: 'Selecciona el color de tu camiseta en la vista 3D'
+  },
+  {
+    short: 'Diseño',
+    title: 'Escoge tu diseño y dónde irá',
+    subtitle: 'Elige espalda o frente y selecciona o sube tu diseño'
+  },
+  {
+    short: 'Tallas',
+    title: 'Escoge la cantidad y tallas',
+    subtitle: 'Pide varias unidades de la misma talla o combina tallas para este diseño'
+  },
+  {
+    short: 'Carrito',
+    title: 'Carrito y datos',
+    subtitle: 'Revisa tu pedido, elige la forma de pago y confirma'
+  }
+] as const;
 const WIZARD_LAST = WIZARD_KEYS.length - 1;
 
 const SIZE_CHART: Array<{ size: string; chest: string; length: string }> = [
@@ -1047,8 +1069,20 @@ export function CustomerCatalogView({
   const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
   const [offsetY, setOffsetY] = useState(payload.offsetY ?? 0);
   const boutiqueTheme: BoutiqueTheme = payload.boutiqueTheme || 'ranchero';
-  const [size, setSize] = useState(payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M');
-  const [qty, setQty] = useState(1);
+  const defaultSize = payload.sizes.includes('M') ? 'M' : payload.sizes[0] || 'M';
+  const [sizeQtys, setSizeQtys] = useState<Record<string, number>>(() => ({ [defaultSize]: 1 }));
+  const paymentOptions = useMemo(() => {
+    const raw = [
+      ...(payload.paymentMethods || []),
+      ...(state.settings.paymentMethods || []),
+      ...DEFAULT_CATALOG_PAYMENT_METHODS
+    ];
+    return Array.from(new Set(raw.map((m) => m.trim()).filter(Boolean)));
+  }, [payload.paymentMethods, state.settings.paymentMethods]);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>(
+    () => paymentOptions[0] || DEFAULT_CATALOG_PAYMENT_METHODS[0]
+  );
+  const paymentPending = /pendiente|contra entrega/i.test(selectedPaymentMethod);
   const savedBuyer = useMemo(() => {
     try {
       const raw = localStorage.getItem('cgs_store_buyer_v1');
@@ -1066,7 +1100,6 @@ export function CustomerCatalogView({
   const [customerName, setCustomerName] = useState(savedBuyer.name);
   const [customerPhone, setCustomerPhone] = useState(savedBuyer.phone);
   const [customerAddress, setCustomerAddress] = useState(savedBuyer.address);
-  const [paymentPending, setPaymentPending] = useState(false);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const deliverySectionRef = useRef<HTMLElement>(null);
   const [step, setStep] = useState(0);
@@ -1075,8 +1108,27 @@ export function CustomerCatalogView({
   const [justAddedToCart, setJustAddedToCart] = useState(false);
   const [confirmClearCart, setConfirmClearCart] = useState(false);
 
+  const setSizeQty = (sz: string, nextQty: number) => {
+    const clamped = Math.max(0, Math.min(99, nextQty));
+    setSizeQtys((prev) => ({ ...prev, [sz]: clamped }));
+    setJustAddedToCart(false);
+  };
+
+  const selectedSizeEntries = useMemo(
+    () =>
+      payload.sizes
+        .filter((sz) => (sizeQtys[sz] || 0) > 0)
+        .map((sz) => ({ size: sz, qty: sizeQtys[sz] || 0 })),
+    [payload.sizes, sizeQtys]
+  );
+  const draftTotalQty = selectedSizeEntries.reduce((s, e) => s + e.qty, 0);
+
   const goToStep = (next: number) => {
     const clamped = Math.max(0, Math.min(WIZARD_LAST, next));
+    if (clamped === WIZARD_LAST && draftTotalQty === 0 && customerCart.length === 0) {
+      const firstAvail = payload.sizes.find((sz) => getSizeStock(selectedColor, sz) > 0) || defaultSize;
+      setSizeQtys({ [firstAvail]: 1 });
+    }
     setStep(clamped);
     setMaxStepReached((prev) => Math.max(prev, clamped));
   };
@@ -1167,49 +1219,65 @@ export function CustomerCatalogView({
   const handleSelectColor = (c: SharedCatalogColor) => {
     setSelectedColor(c);
     setJustAddedToCart(false);
-    if (getSizeStock(c, size) === 0) {
+    if (selectedSizeEntries.length === 1 && getSizeStock(c, selectedSizeEntries[0].size) === 0) {
       const firstAvail = payload.sizes.find((sz) => getSizeStock(c, sz) > 0);
-      if (firstAvail) setSize(firstAvail);
+      if (firstAvail) setSizeQtys({ [firstAvail]: selectedSizeEntries[0].qty });
     }
   };
 
-  const selectedSizeStock = getSizeStock(selectedColor, size);
   const hasDesign = !!designUrl;
 
   const readyMadeMatch = useMemo(() => {
     const list = state.readyMadeStock || [];
-    if (!hasDesign || !selectedColor) return null;
+    if (!hasDesign || !selectedColor || selectedSizeEntries.length === 0) return null;
+    const pickedSizes = new Set(selectedSizeEntries.map((e) => e.size));
     return list.find(
       (r) =>
         !r.deleted &&
         r.qty > 0 &&
-        r.size === size &&
+        pickedSizes.has(r.size) &&
         r.colorName.toLowerCase() === selectedColor.name.toLowerCase() &&
         selectedDesignName &&
         r.designName.toLowerCase() === selectedDesignName.toLowerCase()
     );
-  }, [state.readyMadeStock, hasDesign, selectedColor, size, selectedDesignName]);
+  }, [state.readyMadeStock, hasDesign, selectedColor, selectedSizeEntries, selectedDesignName]);
 
   // Precio único simplificado para el cliente en Tienda 3D (L 350.00)
   const unitPrice = payload.priceCustom || 35000;
-  const total = qty * unitPrice;
+  const total = draftTotalQty * unitPrice;
 
-  const currentDraftItem: CustomerCartItem = {
-    id: '__draft__',
-    brandName: payload.brandName,
-    colorName: selectedColor?.name || 'Negro',
-    colorHex: selectedColor?.hex || '#111827',
-    size,
-    qty,
-    unitPrice,
-    designId: designUrl ? activeCatalogDesignId : null,
-    designName: designUrl ? selectedDesignName || 'Diseño personalizado' : null,
-    designCode: designUrl ? selectedDesignCode : null,
-    photoUrl: designUrl,
-    photoId: selectedDesignPhotoId,
-    placement,
-    scale
-  };
+  const currentDraftItems: CustomerCartItem[] = useMemo(
+    () =>
+      selectedSizeEntries.map((e) => ({
+        id: `__draft__${e.size}`,
+        brandName: payload.brandName,
+        colorName: selectedColor?.name || 'Negro',
+        colorHex: selectedColor?.hex || '#111827',
+        size: e.size,
+        qty: e.qty,
+        unitPrice,
+        designId: designUrl ? activeCatalogDesignId : null,
+        designName: designUrl ? selectedDesignName || 'Diseño personalizado' : null,
+        designCode: designUrl ? selectedDesignCode : null,
+        photoUrl: designUrl,
+        photoId: selectedDesignPhotoId,
+        placement,
+        scale
+      })),
+    [
+      selectedSizeEntries,
+      payload.brandName,
+      selectedColor,
+      unitPrice,
+      designUrl,
+      activeCatalogDesignId,
+      selectedDesignName,
+      selectedDesignCode,
+      selectedDesignPhotoId,
+      placement,
+      scale
+    ]
+  );
 
   const mergeCartItems = (
     base: CustomerCartItem[],
@@ -1233,12 +1301,14 @@ export function CustomerCatalogView({
     return [...base, preserveIncomingId ? incoming : { ...incoming, id: uid() }];
   };
 
-  const effectiveOrderItems: CustomerCartItem[] =
-    customerCart.length === 0
-      ? [currentDraftItem]
-      : justAddedToCart
-      ? customerCart
-      : mergeCartItems(customerCart, currentDraftItem, true);
+  const effectiveOrderItems: CustomerCartItem[] = useMemo(() => {
+    if (justAddedToCart && customerCart.length > 0) return customerCart;
+    if (customerCart.length === 0) return currentDraftItems;
+    return currentDraftItems.reduce(
+      (acc, item) => mergeCartItems(acc, item, true),
+      customerCart
+    );
+  }, [customerCart, currentDraftItems, justAddedToCart]);
 
   const effectiveTotalQty = effectiveOrderItems.reduce((sum, it) => sum + it.qty, 0);
   const effectiveTotalPrice = effectiveOrderItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
@@ -1247,19 +1317,24 @@ export function CustomerCatalogView({
   const cartTotalPrice = customerCart.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
 
   const handleAddToCart = (startNextShirt = false) => {
-    const itemToSave: CustomerCartItem = {
-      ...currentDraftItem,
-      designName: designUrl ? selectedDesignName || 'Diseño estampado' : null
-    };
-    setCustomerCart((prev) => mergeCartItems(prev, itemToSave));
+    if (currentDraftItems.length === 0) {
+      toast('Elige al menos una talla primero', 'error');
+      return;
+    }
+    setCustomerCart((prev) =>
+      currentDraftItems.reduce(
+        (acc, item) =>
+          mergeCartItems(acc, {
+            ...item,
+            designName: designUrl ? selectedDesignName || 'Diseño estampado' : null
+          }),
+        prev
+      )
+    );
     setJustAddedToCart(true);
 
-    toast(
-      `✓ +${qty} ${selectedColor?.name} (${size}) ${
-        designUrl ? `"${selectedDesignName || 'Diseño'}"` : 'Lisa'
-      } agregada al pedido`,
-      'ok'
-    );
+    const summarySizes = selectedSizeEntries.map((e) => `${e.qty}×${e.size}`).join(', ');
+    toast(`Agregado: ${summarySizes} (${selectedColor?.name})`, 'ok');
 
     if (startNextShirt) {
       setDesignUrl(null);
@@ -1267,7 +1342,7 @@ export function CustomerCatalogView({
       setSelectedDesignName(null);
       setSelectedDesignCode(null);
       setSelectedDesignPhotoId(null);
-      setQty(1);
+      setSizeQtys({ [defaultSize]: 1 });
       goToStep(0);
     }
   };
@@ -1285,13 +1360,11 @@ export function CustomerCatalogView({
   };
 
   const handleOrderItemQty = (id: string, delta: number) => {
-    if (id === '__draft__') {
-      if (delta < 0 && qty <= 1) {
-        if (customerCart.length > 0) setJustAddedToCart(true);
-        return;
-      }
-      setQty((q) => Math.max(1, q + delta));
-      setJustAddedToCart(false);
+    if (id.startsWith('__draft__')) {
+      const sz = id.slice('__draft__'.length);
+      const cur = sizeQtys[sz] || 0;
+      if (delta < 0 && cur <= 1 && effectiveOrderItems.length <= 1) return;
+      setSizeQty(sz, cur + delta);
       return;
     }
     const inCart = customerCart.find((c) => c.id === id);
@@ -1304,9 +1377,11 @@ export function CustomerCatalogView({
       eff &&
       eff.qty > inCart.qty
     ) {
-      if (qty <= 1) setJustAddedToCart(true);
-      else setQty((q) => Math.max(1, q - 1));
-      return;
+      const matchingDraft = currentDraftItems.find((d) => d.size === inCart.size);
+      if (matchingDraft) {
+        setSizeQty(matchingDraft.size, Math.max(0, (sizeQtys[matchingDraft.size] || 0) - 1));
+        return;
+      }
     }
     if (delta < 0 && inCart && inCart.qty <= 1 && effectiveOrderItems.length <= 1) {
       return;
@@ -1316,14 +1391,15 @@ export function CustomerCatalogView({
 
   const handleRemoveOrderItem = (id: string) => {
     if (effectiveOrderItems.length <= 1) return;
-    if (id === '__draft__') {
-      setJustAddedToCart(true);
+    if (id.startsWith('__draft__')) {
+      const sz = id.slice('__draft__'.length);
+      setSizeQty(sz, 0);
       return;
     }
     const inCart = customerCart.find((c) => c.id === id);
     const eff = effectiveOrderItems.find((c) => c.id === id);
     if (!justAddedToCart && customerCart.length > 0 && inCart && eff && eff.qty > inCart.qty) {
-      setJustAddedToCart(true);
+      setSizeQty(inCart.size, 0);
     }
     handleRemoveFromCart(id);
   };
@@ -1359,7 +1435,7 @@ export function CustomerCatalogView({
 
     const finalCartItems: CustomerCartItem[] = effectiveOrderItems.map((it) => ({
       ...it,
-      id: it.id === '__draft__' ? uid() : it.id
+      id: it.id.startsWith('__draft__') ? uid() : it.id
     }));
 
     const finalTotal = finalCartItems.reduce((s, it) => s + it.qty * it.unitPrice, 0);
@@ -1431,7 +1507,7 @@ export function CustomerCatalogView({
       photoId: mainPhotoId,
       designThumb: mainThumbUrl,
       campaign: clientCampaign !== 'all' ? clientCampaign : null,
-      paymentMethod: paymentPending ? 'Pago Pendiente en Tienda' : 'Transferencia / Anticipo',
+      paymentMethod: selectedPaymentMethod,
       paymentPending,
       placement: firstItem.placement || 'back',
       scale: firstItem.scale || 2.0,
@@ -1452,8 +1528,8 @@ export function CustomerCatalogView({
 
     const importUrl = `${location.origin}${location.pathname}#pedido=${orderId}`;
     const paymentLine = paymentPending
-      ? '⏳ Pago pendiente (Paga al llegar a la tienda)'
-      : '💳 Transferencia / Anticipo';
+      ? `⏳ ${selectedPaymentMethod}`
+      : `💳 ${selectedPaymentMethod}`;
     const clientHeader =
       cleanName || cleanPhone || cleanAddr || paymentPending
         ? `\n👤 *DATOS DEL CLIENTE:*${cleanName ? `\n• Nombre: ${cleanName}` : ''}${
@@ -1514,7 +1590,7 @@ export function CustomerCatalogView({
         designCode: firstItem.designCode,
         designUrl: finalCartItems[0]?.photoUrl || firstItem.designThumb || null,
         placement: firstItem.placement,
-        paymentLabel: paymentPending ? 'Pagar al recoger en tienda' : 'Transferencia / Anticipo',
+        paymentLabel: selectedPaymentMethod,
         stockNote: clientCampaign !== 'all' ? `Colección: ${clientCampaign}` : undefined,
         items: webOrderItems.map((it, idx) => ({
           brandName: it.brandName,
@@ -1602,50 +1678,92 @@ export function CustomerCatalogView({
       </header>
 
       <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
-        {/* PROGRESO DEL ASISTENTE */}
-        <div className="px-1">
-          <div className="mb-2 flex items-center justify-between text-[11px] font-semibold text-slate-500">
-            <span>Paso {step + 1} de {WIZARD_LAST + 1}</span>
-            <span className="font-bold text-slate-900">{WIZARD_TITLES[step]}</span>
-          </div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {WIZARD_TITLES.map((title, i) => {
-              const unlocked = i <= maxStepReached;
-              const active = i === step;
-              return (
-                <button
-                  key={title}
-                  type="button"
-                  disabled={!unlocked}
-                  aria-label={`Ir al paso ${i + 1}: ${title}`}
-                  onClick={() => unlocked && goToStep(i)}
-                  className="group flex flex-col items-start gap-1 text-left disabled:cursor-default"
-                >
-                  <span
-                    className={`h-1.5 w-full rounded-full transition-colors ${
-                      i <= step
-                        ? 'bg-slate-900'
-                        : unlocked
-                        ? 'bg-slate-400'
-                        : 'bg-slate-200'
-                    }`}
-                  />
-                  <span
-                    className={`hidden truncate text-[10px] font-semibold sm:block ${
+        {/* PROGRESO E INSTRUCCIÓN CLARA DEL PASO ACTUAL */}
+        <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
+          <div className="mb-2.5 flex items-center justify-between gap-2">
+            <span className="inline-flex items-center rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+              Paso {step + 1} de {WIZARD_LAST + 1}
+            </span>
+            <div className="flex items-center gap-1">
+              {WIZARD_STEPS.map((stInfo, i) => {
+                const unlocked = i <= maxStepReached;
+                const active = i === step;
+                return (
+                  <button
+                    key={stInfo.short}
+                    type="button"
+                    disabled={!unlocked}
+                    aria-label={`Ir al paso ${i + 1}: ${stInfo.title}`}
+                    onClick={() => unlocked && goToStep(i)}
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition disabled:cursor-default ${
                       active
-                        ? 'text-slate-900'
+                        ? 'bg-slate-900/10 text-slate-900'
                         : unlocked
-                        ? 'text-slate-500 group-hover:text-slate-800'
+                        ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
                         : 'text-slate-300'
                     }`}
                   >
-                    {i + 1}. {title}
-                  </span>
-                </button>
+                    {i + 1}. {stInfo.short}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <h2 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">
+            {WIZARD_STEPS[step].title}
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            {WIZARD_STEPS[step].subtitle}
+          </p>
+          <div className="mt-3 grid grid-cols-4 gap-1.5">
+            {WIZARD_STEPS.map((stInfo, i) => {
+              const unlocked = i <= maxStepReached;
+              return (
+                <button
+                  key={stInfo.short}
+                  type="button"
+                  disabled={!unlocked}
+                  aria-label={`Paso ${i + 1}: ${stInfo.title}`}
+                  onClick={() => unlocked && goToStep(i)}
+                  className="h-1.5 w-full rounded-full transition-colors disabled:cursor-default"
+                  style={{
+                    backgroundColor:
+                      i <= step ? '#0f172a' : unlocked ? '#94a3b8' : '#e2e8f0'
+                  }}
+                />
               );
             })}
           </div>
         </div>
+
+        {/* PASO 2: SELECTOR DE UBICACIÓN (ESPALDA / FRENTE) ARRIBA DEL VISOR 3D */}
+        {step === 1 && (
+          <section className="rounded-[22px] border border-slate-200/80 bg-white p-3.5 shadow-sm">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-800">¿Dónde irá tu diseño?</span>
+              <span className="text-[11px] font-medium text-slate-400">Toca para girar la camisa</span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100 p-1">
+              {([['back', 'Espalda (Atrás)'], ['center', 'Frente (Pecho)']] as const).map(([k, lbl]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    setPlacement(k);
+                    setJustAddedToCart(false);
+                  }}
+                  className={`min-h-[40px] rounded-xl text-xs font-bold transition sm:text-sm ${
+                    placement === k
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         {step <= 1 ? (
           <InteractiveShirt3D
@@ -1697,7 +1815,6 @@ export function CustomerCatalogView({
                 setScale(2.0);
                 setOffsetX(0);
                 setOffsetY(0);
-                toast('Tu imagen se aplicó a la camisa');
               } catch (e) {
                 toast((e as Error).message, 'error');
               }
@@ -1782,92 +1899,89 @@ export function CustomerCatalogView({
           </div>
         ) : null}
 
-        {/* PASO 1: UBICACIÓN DEL DISEÑO */}
-        {step === 0 && (
-          <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-            <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">¿Dónde irá el diseño?</h2>
-            <p className="mb-3 text-xs text-slate-500">Elige el color de la camisa arriba y la ubicación aquí.</p>
-            <div className="grid grid-cols-2 gap-2">
-              {([['back', 'Espalda'], ['center', 'Frente']] as const).map(([k, lbl]) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => {
-                    setPlacement(k);
-                    setJustAddedToCart(false);
-                  }}
-                  className={`min-h-[52px] rounded-2xl border text-sm font-bold transition ${
-                    placement === k
-                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-800 hover:border-slate-400'
-                  }`}
-                >
-                  {lbl}
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* PASO 3: SELECCIÓN DE TALLA, GUÍA Y CANTIDAD */}
+        {/* PASO 3: SELECCIÓN MULTI-TALLA, CANTIDAD Y GUÍA DE MEDIDAS */}
         {step === 2 && (
           <div className="space-y-3">
             <section className="space-y-4 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold tracking-tight text-slate-900">Talla</h2>
-                  <span
-                    className={`text-xs font-medium ${
-                      selectedSizeStock > 0 ? 'text-emerald-600' : 'text-amber-600'
-                    }`}
-                  >
-                    · {selectedSizeStock > 0 ? 'Disponible' : 'Bajo pedido'}
-                  </span>
+                <div>
+                  <h3 className="text-sm font-bold tracking-tight text-slate-900">
+                    Cantidad por talla
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Toca <strong className="text-slate-700">+</strong> en la misma talla o en varias tallas para este mismo diseño
+                  </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowSizeGuide((v) => !v)}
                   className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-bold text-slate-700 transition hover:bg-slate-100"
                 >
-                  {showSizeGuide ? 'Ocultar medidas' : '📏 Ver guía de medidas'}
+                  {showSizeGuide ? 'Ocultar medidas' : '📏 Guía de tallas'}
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {payload.sizes.map((sz) => {
                   const st = getSizeStock(selectedColor, sz);
-                  const isSel = sz === size;
+                  const q = sizeQtys[sz] || 0;
+                  const active = q > 0;
                   return (
-                    <button
+                    <div
                       key={sz}
-                      type="button"
                       onClick={() => {
-                        setSize(sz);
-                        setJustAddedToCart(false);
+                        if (q === 0) setSizeQty(sz, 1);
                       }}
-                      className={`flex min-h-[54px] flex-col items-center justify-center rounded-2xl border transition ${
-                        isSel
-                          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                          : st > 0
-                          ? 'border-slate-200 bg-white text-slate-900 hover:border-slate-400'
-                          : 'border-slate-100 bg-slate-50 text-slate-400'
+                      className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2.5 transition ${
+                        active
+                          ? 'border-slate-900 bg-slate-900/[0.03] ring-1 ring-slate-900/10'
+                          : 'cursor-pointer border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70'
                       }`}
                     >
-                      <span className="text-sm font-bold">{sz}</span>
-                      <span
-                        className={`text-[10px] font-medium ${
-                          isSel
-                            ? st > 0
-                              ? 'text-emerald-300'
-                              : 'text-white/70'
-                            : st > 0
-                            ? 'text-emerald-600'
-                            : 'text-slate-400'
-                        }`}
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-slate-900">{sz}</div>
+                        <div
+                          className={`text-[10px] font-semibold ${
+                            st > 0 ? 'text-emerald-600' : 'text-amber-600'
+                          }`}
+                        >
+                          {st > 0 ? 'En stock' : 'Encargo'}
+                        </div>
+                      </div>
+                      <div
+                        className="flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        {st > 0 ? 'En stock' : 'Encargo'}
-                      </span>
-                    </button>
+                        <button
+                          type="button"
+                          disabled={q <= 0}
+                          onClick={() => setSizeQty(sz, q - 1)}
+                          aria-label={`Restar talla ${sz}`}
+                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-700 transition hover:bg-slate-100 active:scale-95 disabled:opacity-30"
+                        >
+                          −
+                        </button>
+                        <span
+                          className={`min-w-[20px] text-center text-xs font-extrabold tabular-nums ${
+                            active ? 'text-slate-900' : 'text-slate-400'
+                          }`}
+                        >
+                          {q}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSizeQty(sz, q + 1)}
+                          aria-label={`Sumar talla ${sz}`}
+                          className={`flex h-7 w-7 items-center justify-center rounded-lg text-sm font-bold transition active:scale-95 ${
+                            active
+                              ? 'bg-slate-900 text-white hover:bg-slate-800'
+                              : 'border border-slate-200 bg-white text-slate-800 hover:bg-slate-100'
+                          }`}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -1891,7 +2005,7 @@ export function CustomerCatalogView({
                         {SIZE_CHART.map((row) => (
                           <tr
                             key={row.size}
-                            className={row.size === size ? 'bg-slate-900/5 font-bold text-slate-900' : ''}
+                            className={(sizeQtys[row.size] || 0) > 0 ? 'bg-slate-900/5 font-bold text-slate-900' : ''}
                           >
                             <td className="px-3 py-1.5">{row.size}</td>
                             <td className="px-3 py-1.5">{row.chest}</td>
@@ -1907,26 +2021,19 @@ export function CustomerCatalogView({
                 </div>
               )}
 
-              <div className="flex items-center justify-between border-t border-slate-100 pt-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">Cantidad</div>
-                  <div className="text-[11px] text-slate-500">{money(unitPrice)} por prenda</div>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/80 px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-900">
+                    {draftTotalQty > 0
+                      ? selectedSizeEntries.map((e) => `${e.qty}× ${e.size}`).join(' · ')
+                      : 'Ninguna talla seleccionada'}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {draftTotalQty} {draftTotalQty === 1 ? 'prenda' : 'prendas'} × {money(unitPrice)}
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-slate-900">
-                    <Stepper
-                      value={qty}
-                      min={1}
-                      onCommit={(v) => {
-                        setQty(v);
-                        setJustAddedToCart(false);
-                      }}
-                      ariaLabel="Cantidad"
-                    />
-                  </div>
-                  <div className="min-w-[76px] text-right text-sm font-extrabold text-slate-900">
-                    {money(total)}
-                  </div>
+                <div className="text-base font-extrabold tabular-nums text-slate-900">
+                  {money(total)}
                 </div>
               </div>
             </section>
@@ -1937,10 +2044,10 @@ export function CustomerCatalogView({
                 onClick={() => handleAddToCart(true)}
                 className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-4 text-xs font-bold text-slate-900 shadow-sm transition hover:border-slate-400 hover:bg-slate-100 active:scale-[0.99]"
               >
-                + Agregar al pedido y elegir otra prenda
+                + Agregar al carrito y elegir otro color o diseño
               </button>
               <p className="mt-1.5 text-[11px] text-slate-500">
-                ¿Llevas otra talla, color o diseño? Agrégala aquí antes de finalizar.
+                ¿Quieres agregar otro diseño o color distinto en el mismo pedido? Agrégalo aquí.
               </p>
             </div>
           </div>
@@ -1998,7 +2105,7 @@ export function CustomerCatalogView({
                           <span className="truncate text-xs font-bold text-slate-900">
                             {it.colorName} · Talla {it.size}
                           </span>
-                          {it.id === '__draft__' && (
+                          {it.id.startsWith('__draft__') && (
                             <button
                               type="button"
                               onClick={() => goToStep(1)}
@@ -2126,31 +2233,34 @@ export function CustomerCatalogView({
               )}
 
               <div className="space-y-1.5">
-                <div className="text-xs font-medium text-slate-500">Forma de pago preferida</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentPending(false)}
-                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                      !paymentPending
-                        ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                    }`}
+                <label
+                  htmlFor="catalog-payment-method"
+                  className="block text-xs font-semibold text-slate-600"
+                >
+                  Forma de pago
+                </label>
+                <div className="relative">
+                  <select
+                    id="catalog-payment-method"
+                    value={selectedPaymentMethod}
+                    onChange={(e) => setSelectedPaymentMethod(e.target.value)}
+                    className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 pr-9 text-sm font-semibold text-slate-900 transition focus:border-slate-900 focus:bg-white focus:outline-none"
                   >
-                    💳 Transferencia / Anticipo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentPending(true)}
-                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                      paymentPending
-                        ? 'border-amber-500 bg-amber-500 text-stone-950 shadow-sm'
-                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    ⏳ Pagar al recoger en tienda
-                  </button>
+                    {paymentOptions.map((method) => (
+                      <option key={method} value={method}>
+                        {method}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">
+                    ▾
+                  </span>
                 </div>
+                {paymentPending && (
+                  <p className="text-[11px] font-medium text-amber-700">
+                    ⏳ Quedará registrado como pago pendiente / contra entrega.
+                  </p>
+                )}
               </div>
 
               <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-600">
@@ -2159,7 +2269,7 @@ export function CustomerCatalogView({
 
               {customerCart.length === 0 && readyMadeMatch && (
                 <div className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
-                  ⚡ Disponible para entrega inmediata en talla {size}.
+                  ⚡ Disponible para entrega inmediata en talla {readyMadeMatch.size}.
                 </div>
               )}
             </section>
