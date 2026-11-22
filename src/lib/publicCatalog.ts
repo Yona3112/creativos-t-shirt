@@ -131,7 +131,8 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
   const chosenSizes = st.storeSizes && st.storeSizes.length > 0
     ? st.sizes.filter((sz) => st.storeSizes!.includes(sz))
     : st.sizes;
-  const sizes = chosenSizes.length > 0 ? chosenSizes : st.sizes;
+  const rawSizes = chosenSizes.length > 0 ? chosenSizes : st.sizes;
+  const sizes = Array.from(new Set(rawSizes.map((sz) => (sz || '').trim().toUpperCase()).filter(Boolean)));
   const { stock } = computeStock(state);
   const stockMap: Record<string, number> = {};
   if (brand) {

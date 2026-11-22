@@ -71,8 +71,10 @@ export default function App() {
         const sizeParts: string[] = [];
         for (const sz of state.settings.sizes) {
           const val = stockInfo.stock.get(vkey(b.id, c.id, sz)) || 0;
-          total += val;
-          if (val > 0) sizeParts.push(`${sz}:${val}`);
+          if (val > 0) {
+            total += val;
+            sizeParts.push(`${sz}:${val}`);
+          }
         }
         currentTotals.set(`${b.id}:${c.id}`, {
           total,
@@ -203,7 +205,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      <Header section={section} onMenu={() => setMenu(true)} onSell={() => navigate('vender')} />
+      <Header
+        section={section}
+        onMenu={() => setMenu(true)}
+        onSell={() => navigate('vender')}
+        onNavigate={navigate}
+        badges={badges}
+      />
       <Drawer open={menu} section={section} onClose={() => setMenu(false)} onNavigate={navigate} badges={badges} />
 
       {incomingOrder && (

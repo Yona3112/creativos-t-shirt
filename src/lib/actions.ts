@@ -2,7 +2,7 @@ import type { Address, AppState, Brand, CartLine, CatalogDesign, Color, Customer
 import { getState, update } from './store';
 import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
-import { compactMovements } from './merge';
+import { normalize } from './merge';
 import { BASE_COLORS } from './seed';
 
 const now = () => Date.now();
@@ -1016,6 +1016,30 @@ export function addCatalogDesign(input: {
 }): CatalogDesign {
   const t = now();
   const existing = getState().catalogDesigns || [];
+  // Evitar duplicar el mismo archivo de diseño si ya existe activo con el mismo photoId
+  const samePhoto = existing.find((d) => !d.deleted && d.photoId === input.photoId);
+  if (samePhoto) {
+    const updated: CatalogDesign = {
+      ...samePhoto,
+      name: input.name.trim() || samePhoto.name,
+      clientVisible: input.clientVisible ?? samePhoto.clientVisible,
+      placement: input.placement || samePhoto.placement,
+      campaign: input.campaign || samePhoto.campaign,
+      tone: input.tone ?? samePhoto.tone,
+      allowedColorMode: input.allowedColorMode || samePhoto.allowedColorMode || 'all',
+      allowedColorIds:
+        input.allowedColorIds && input.allowedColorIds.length > 0
+          ? input.allowedColorIds
+          : samePhoto.allowedColorIds,
+      updatedAt: t
+    };
+    update((s) => ({
+      ...s,
+      catalogDesigns: (s.catalogDesigns || []).map((d) => (d.id === samePhoto.id ? updated : d))
+    }));
+    return updated;
+  }
+
   const maxN = existing.reduce((m, d) => {
     const mm = /^D-(\d+)$/.exec(d.code || '');
     return mm ? Math.max(m, Number(mm[1])) : m;
@@ -1062,8 +1086,8 @@ export function deleteCatalogDesign(id: string): void {
 }
 
 /**
- * Purga registros basura, marcas semilla vacías sin stock, elementos marcados como eliminados (`deleted: true`),
- * diseños huérfanos sin foto y compacta los movimientos redundantes de inventario.
+ * Purga registros basura, unifica tallas/colores/marcas/diseños/clientes duplicados,
+ * remapea sus movimientos/pedidos y compacta movimientos redundantes de inventario.
  */
 export function purgeGarbageData(): {
   removedBrands: number;
@@ -1078,35 +1102,58 @@ export function purgeGarbageData(): {
     compactedMovements: 0
   };
   update((s) => {
-    const stockInfo = computeStock(s);
-    const usedBrandIds = new Set<string>();
-    for (const [k, qty] of stockInfo.stock.entries()) {
-      if (qty > 0) usedBrandIds.add(k.split('|')[0]);
-    }
-    for (const o of s.orders) {
-      if (!o.deleted) {
-        for (const it of o.items) usedBrandIds.add(it.brandId);
+    // 1. Ejecutar normalize(s) que deduplica y remapea marcas, colores, tallas y diseños
+    const norm = normalize(s);
+
+    // 2. Deduplicar clientes activos con el mismo teléfono (últimos 8 dígitos) y nombre
+    const customerRemap = new Map<string, string>();
+    const customerByKey = new Map<string, Customer>();
+    const activeCustomers = norm.customers.filter((c) => !c.deleted);
+    for (const c of activeCustomers) {
+      const digits = (c.phone || '').replace(/\D/g, '').slice(-8);
+      const nameKey = (c.name || '').trim().toLowerCase();
+      const key = digits.length >= 8 ? `tel:${digits}` : `name:${nameKey}`;
+      const prev = customerByKey.get(key);
+      if (!prev) {
+        customerByKey.set(key, c);
+      } else {
+        customerRemap.set(c.id, prev.id);
+        const mergedAddrs = [...prev.addresses];
+        for (const a of c.addresses || []) {
+          if (!mergedAddrs.some((x) => x.line1.trim().toLowerCase() === a.line1.trim().toLowerCase())) {
+            mergedAddrs.push({ ...a, isDefault: mergedAddrs.length === 0 });
+          }
+        }
+        customerByKey.set(key, {
+          ...prev,
+          addresses: mergedAddrs,
+          updatedAt: Math.max(prev.updatedAt || 0, c.updatedAt || 0)
+        });
       }
     }
+    const cleanCustomers = Array.from(customerByKey.values());
 
-    const legacyEmptyBrands = new Set(['b-nx', 'b-pc', 'b-hn']);
-    const cleanBrands = s.brands.filter((b) => {
-      if (b.deleted) return false;
-      if (legacyEmptyBrands.has(b.id) && !usedBrandIds.has(b.id)) return false;
-      return true;
-    });
-    const finalBrands = cleanBrands.length > 0 ? cleanBrands : s.brands.filter((b) => !b.deleted).slice(0, 1);
-    const activeBrandSet = new Set(finalBrands.map((b) => b.id));
-
-    const cleanColors = s.colors.filter((c) => !c.deleted && activeBrandSet.has(c.brandId));
-    const cleanDesigns = (s.catalogDesigns || []).filter((d) => !d.deleted && !!d.photoId);
-    const cleanMovements = compactMovements(s.movements, activeBrandSet);
+    const activeColorsOnly = norm.colors.filter((c) => !c.deleted);
+    const activeDesignsOnly = (norm.catalogDesigns || []).filter((d) => !d.deleted && !!d.photoId);
+    const cleanOrders = norm.orders
+      .filter((o) => !o.deleted)
+      .map((o) =>
+        o.customerId && customerRemap.has(o.customerId)
+          ? { ...o, customerId: customerRemap.get(o.customerId)! }
+          : o
+      );
 
     stats = {
-      removedBrands: s.brands.length - finalBrands.length,
-      removedColors: s.colors.length - cleanColors.length,
-      removedDesigns: (s.catalogDesigns || []).length - cleanDesigns.length,
-      compactedMovements: Math.max(0, s.movements.length - cleanMovements.length)
+      removedBrands: Math.max(0, s.brands.filter((b) => !b.deleted).length - norm.brands.length),
+      removedColors: Math.max(0, s.colors.filter((c) => !c.deleted).length - activeColorsOnly.length),
+      removedDesigns: Math.max(
+        0,
+        (s.catalogDesigns || []).filter((d) => !d.deleted).length - activeDesignsOnly.length
+      ),
+      compactedMovements: Math.max(
+        0,
+        s.movements.length - norm.movements.length + (activeCustomers.length - cleanCustomers.length)
+      )
     };
 
     try {
@@ -1114,14 +1161,11 @@ export function purgeGarbageData(): {
     } catch {}
 
     return {
-      ...s,
-      brands: finalBrands,
-      colors: cleanColors,
-      customers: s.customers.filter((c) => !c.deleted),
-      orders: s.orders.filter((o) => !o.deleted),
-      movements: cleanMovements,
-      catalogDesigns: cleanDesigns,
-      readyMadeStock: (s.readyMadeStock || []).filter((r) => !r.deleted && r.qty > 0)
+      ...norm,
+      colors: norm.colors,
+      customers: cleanCustomers,
+      orders: cleanOrders,
+      catalogDesigns: norm.catalogDesigns
     };
   });
   return stats;

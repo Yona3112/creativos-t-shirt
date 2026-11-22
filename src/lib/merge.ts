@@ -163,10 +163,49 @@ function mergeSettings(a: Settings, b: Settings): Settings {
   return { ...DEFAULT_SETTINGS, ...pick };
 }
 
+const STANDARD_SIZE_ORDER = ['2XS', 'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', 'XXXL', '3XL', '4XL'];
+
+export function deduplicateStrings(list: string[], uppercase = false): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    if (typeof raw !== 'string') continue;
+    const clean = uppercase ? raw.trim().toUpperCase() : raw.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+
+export function normalizeSizesList(list: string[]): string[] {
+  const deduped = deduplicateStrings(list, true);
+  if (deduped.length === 0) return [...DEFAULT_SETTINGS.sizes];
+  return deduped.sort((a, b) => {
+    const ia = STANDARD_SIZE_ORDER.indexOf(a);
+    const ib = STANDARD_SIZE_ORDER.indexOf(b);
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    if (ia >= 0) return -1;
+    if (ib >= 0) return 1;
+    return 0;
+  });
+}
+
+function normalizeTextKey(raw: string): string {
+  return (raw || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
 export function normalize(s: Partial<AppState> | null | undefined): AppState {
   const base = createInitialState();
   if (!s || typeof s !== 'object') return base;
-  const settings = upgradeSettings({ ...DEFAULT_SETTINGS, ...(s.settings || {}) });
+  let settings = upgradeSettings({ ...DEFAULT_SETTINGS, ...(s.settings || {}) });
 
   const rawOrders = (Array.isArray(s.orders) ? s.orders : [])
     .filter(Boolean)
@@ -184,41 +223,191 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     });
   const rawMovements = Array.isArray(s.movements) ? s.movements : [];
 
-  // Identificar qué marcas tienen movimientos reales o pedidos para eliminar las marcas semilla basura (Next Apparel, Pacer, HN)
+  // Identificar qué marcas y colores tienen movimientos reales o pedidos
   const usedBrandIds = new Set<string>();
+  const usedColorIds = new Set<string>();
   for (const m of rawMovements) {
-    if (m?.key && m.delta) usedBrandIds.add(m.key.split('|')[0]);
+    if (m?.key && m.delta) {
+      const [bId, cId] = m.key.split('|');
+      if (bId) usedBrandIds.add(bId);
+      if (cId) usedColorIds.add(cId);
+    }
   }
   for (const o of rawOrders) {
     if (!o?.deleted) {
-      for (const it of o.items || []) if (it.brandId) usedBrandIds.add(it.brandId);
+      for (const it of o.items || []) {
+        if (it.brandId) usedBrandIds.add(it.brandId);
+        if (it.colorId) usedColorIds.add(it.colorId);
+      }
     }
   }
 
   const incomingBrands = Array.isArray(s.brands) && s.brands.length > 0 ? s.brands : base.brands;
-  const cleanBrands = incomingBrands.filter((b) => {
+  const filteredBrands = incomingBrands.filter((b) => {
     if (!b || b.deleted) return false;
     if (UNUSED_SEED_BRAND_IDS.has(b.id) && !usedBrandIds.has(b.id)) return false;
     return true;
   });
-  const finalBrands = cleanBrands.length > 0 ? cleanBrands : base.brands;
+  const candidateBrands = filteredBrands.length > 0 ? filteredBrands : base.brands;
+
+  // 1. Deduplicar marcas activas con el mismo nombre normalizado y mapear IDs duplicados al canónico
+  const brandRemap = new Map<string, string>();
+  const brandByName = new Map<string, typeof candidateBrands[number]>();
+  for (const b of candidateBrands) {
+    const bKey = normalizeTextKey(b.name);
+    const existing = brandByName.get(bKey);
+    if (!existing) {
+      brandByName.set(bKey, { ...b, name: b.name.trim() });
+    } else {
+      const existingUsed = usedBrandIds.has(existing.id);
+      const currentUsed = usedBrandIds.has(b.id);
+      const keepCurrent =
+        (currentUsed && !existingUsed) ||
+        (currentUsed === existingUsed && (b.updatedAt || 0) > (existing.updatedAt || 0));
+      if (keepCurrent) {
+        brandRemap.set(existing.id, b.id);
+        brandByName.set(bKey, { ...b, name: b.name.trim() });
+      } else {
+        brandRemap.set(b.id, existing.id);
+      }
+    }
+  }
+  const finalBrands = Array.from(brandByName.values());
   const activeBrandIdSet = new Set(finalBrands.map((b) => b.id));
+  const resolveBrandId = (id: string) => brandRemap.get(id) || id;
 
+  // 2. Deduplicar colores por (brandId + nombre normalizado) para que no existan colores repetidos
   const incomingColors = Array.isArray(s.colors) && s.colors.length > 0 ? s.colors : base.colors;
-  const cleanColors = upgradeColors(
-    incomingColors.filter((c) => c && activeBrandIdSet.has(c.brandId))
+  const upgradedColors = upgradeColors(
+    incomingColors
+      .filter(Boolean)
+      .map((c) => ({ ...c, brandId: resolveBrandId(c.brandId), name: (c.name || '').trim() }))
+      .filter((c) => activeBrandIdSet.has(c.brandId))
   );
 
+  const colorRemap = new Map<string, string>();
+  const activeColorByBrandAndName = new Map<string, Color>();
+  const deletedColors: Color[] = [];
+
+  for (const c of upgradedColors) {
+    if (c.deleted) {
+      deletedColors.push(c);
+      continue;
+    }
+    const cKey = `${c.brandId}|${normalizeTextKey(c.name)}`;
+    const existing = activeColorByBrandAndName.get(cKey);
+    if (!existing) {
+      activeColorByBrandAndName.set(cKey, c);
+    } else {
+      const existingUsed = usedColorIds.has(existing.id);
+      const currentUsed = usedColorIds.has(c.id);
+      const keepCurrent =
+        (currentUsed && !existingUsed) ||
+        (currentUsed === existingUsed && (c.updatedAt || 0) > (existing.updatedAt || 0));
+      if (keepCurrent) {
+        colorRemap.set(existing.id, c.id);
+        activeColorByBrandAndName.set(cKey, c);
+      } else {
+        colorRemap.set(c.id, existing.id);
+      }
+    }
+  }
+
+  const activeCanonicalColors = Array.from(activeColorByBrandAndName.values());
+  const activeColorNameKeys = new Set(
+    activeCanonicalColors.map((c) => `${c.brandId}|${normalizeTextKey(c.name)}`)
+  );
+  // Conservar lápidas solo de colores que no tienen un homónimo activo
+  const cleanDeletedColors = deletedColors.filter(
+    (c) => !activeColorNameKeys.has(`${c.brandId}|${normalizeTextKey(c.name)}`)
+  );
+  const cleanColors = [...activeCanonicalColors, ...cleanDeletedColors];
+  const resolveColorId = (id: string) => colorRemap.get(id) || id;
+  const remapVKey = (key: string): string => {
+    const [bId = '', cId = '', sz = ''] = (key || '').split('|');
+    return `${resolveBrandId(bId)}|${resolveColorId(cId)}|${sz.trim().toUpperCase()}`;
+  };
+
+  // Remapear settings si apuntaban a marcas o colores duplicados
+  if (settings.storeBrandId && brandRemap.has(settings.storeBrandId)) {
+    settings = { ...settings, storeBrandId: resolveBrandId(settings.storeBrandId) };
+  }
+  if (Array.isArray(settings.storeColorIds) && settings.storeColorIds.length > 0) {
+    settings = {
+      ...settings,
+      storeColorIds: Array.from(new Set(settings.storeColorIds.map(resolveColorId)))
+    };
+  }
+
+  // 3. Deduplicar diseños del catálogo con el mismo photoId o nombre+lado idéntico
   const rawDesigns = Array.isArray(s.catalogDesigns) ? s.catalogDesigns : [];
-  const cleanDesigns = assignDesignCodes(
-    rawDesigns
-      .filter((d) => d && d.photoId && !ORPHAN_DESIGN_IDS.has(d.id))
-      .map((d) => (d.name === 'RANCGHO' ? { ...d, name: 'RANCHO', code: 'D-001' } : d))
-  );
+  const filteredDesigns = rawDesigns
+    .filter((d) => d && d.photoId && !ORPHAN_DESIGN_IDS.has(d.id))
+    .map((d) => {
+      const fixed = d.name === 'RANCGHO' ? { ...d, name: 'RANCHO', code: 'D-001' } : d;
+      return {
+        ...fixed,
+        name: (fixed.name || 'Diseño').trim(),
+        allowedColorIds: Array.isArray(fixed.allowedColorIds)
+          ? Array.from(new Set(fixed.allowedColorIds.map(resolveColorId)))
+          : fixed.allowedColorIds
+      };
+    });
 
-  const stockEntries = (Array.isArray(s.stockEntries) ? s.stockEntries : []).filter(Boolean);
-  const rawReadyMade = (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : []).filter(Boolean);
-  const cleanOrders = rawOrders.filter(Boolean);
+  const activeDesignByPhoto = new Map<string, CatalogDesign>();
+  const deletedDesigns: CatalogDesign[] = [];
+  for (const d of filteredDesigns) {
+    if (d.deleted) {
+      deletedDesigns.push(d);
+      continue;
+    }
+    const pKey = d.photoId;
+    const prev = activeDesignByPhoto.get(pKey);
+    if (!prev || (d.updatedAt || d.createdAt || 0) >= (prev.updatedAt || prev.createdAt || 0)) {
+      activeDesignByPhoto.set(pKey, d);
+    }
+  }
+  const cleanDesigns = assignDesignCodes([
+    ...Array.from(activeDesignByPhoto.values()),
+    ...deletedDesigns.filter((d) => !activeDesignByPhoto.has(d.photoId))
+  ]);
+
+  // 4. Remapear movimientos, lotes de ingreso, pedidos y prendas estampadas con marcas/colores/tallas normalizadas
+  const remappedMovements = rawMovements
+    .filter(Boolean)
+    .map((m) => ({ ...m, key: remapVKey(m.key) }));
+
+  const stockEntries = (Array.isArray(s.stockEntries) ? s.stockEntries : [])
+    .filter(Boolean)
+    .map((e) => ({
+      ...e,
+      lines: Array.isArray(e.lines)
+        ? e.lines.map((l) => ({ ...l, key: remapVKey(l.key) }))
+        : []
+    }));
+
+  const rawReadyMade = (Array.isArray(s.readyMadeStock) ? s.readyMadeStock : [])
+    .filter(Boolean)
+    .map((r) => ({
+      ...r,
+      brandId: resolveBrandId(r.brandId),
+      colorId: resolveColorId(r.colorId),
+      size: (r.size || 'M').trim().toUpperCase()
+    }));
+
+  const cleanOrders = rawOrders
+    .filter(Boolean)
+    .map((o) => ({
+      ...o,
+      items: Array.isArray(o.items)
+        ? o.items.map((it) => ({
+            ...it,
+            brandId: resolveBrandId(it.brandId),
+            colorId: resolveColorId(it.colorId),
+            size: (it.size || 'M').trim().toUpperCase()
+          }))
+        : []
+    }));
 
   return {
     version: 1,
@@ -228,7 +417,7 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     customers: (Array.isArray(s.customers) ? s.customers : []).filter(Boolean),
     orders: cleanOrders,
     movements: dropDeletedOrderMovements(
-      dropDeletedEntryMovements(compactMovements(rawMovements, activeBrandIdSet), stockEntries),
+      dropDeletedEntryMovements(compactMovements(remappedMovements, activeBrandIdSet), stockEntries),
       cleanOrders,
       rawReadyMade
     ),
@@ -272,24 +461,52 @@ function upgradeColors(colors: Color[]): Color[] {
   });
 }
 
-/** Asegura opciones nuevas sin borrar las personalizadas del usuario. */
+/** Asegura opciones nuevas y deduplica tallas, campañas, métodos de pago y transportistas. */
 function upgradeSettings(st: Settings): Settings {
-  let workTypes = Array.isArray(st.workTypes) ? st.workTypes : DEFAULT_SETTINGS.workTypes;
-  if (!workTypes.some((w) => w.trim().toLowerCase() === 'dtf espalda')) workTypes = ['DTF Espalda', ...workTypes];
-  let carriers = Array.isArray(st.carriers) ? st.carriers : DEFAULT_SETTINGS.carriers;
-  if (!carriers.some((c) => c.trim().toLowerCase() === 'boxful')) carriers = ['Boxful', ...carriers];
-  let paymentMethods = Array.isArray(st.paymentMethods) ? st.paymentMethods : DEFAULT_SETTINGS.paymentMethods;
+  const sizes = normalizeSizesList(Array.isArray(st.sizes) ? st.sizes : DEFAULT_SETTINGS.sizes);
+  const validSizeSet = new Set(sizes);
+  const storeSizes = Array.isArray(st.storeSizes)
+    ? normalizeSizesList(st.storeSizes).filter((sz) => validSizeSet.has(sz))
+    : undefined;
+
+  let workTypes = deduplicateStrings(
+    Array.isArray(st.workTypes) ? st.workTypes : DEFAULT_SETTINGS.workTypes
+  );
+  if (!workTypes.some((w) => w.toLowerCase() === 'dtf espalda')) workTypes = ['DTF Espalda', ...workTypes];
+
+  let carriers = deduplicateStrings(
+    Array.isArray(st.carriers) ? st.carriers : DEFAULT_SETTINGS.carriers
+  );
+  if (!carriers.some((c) => c.toLowerCase() === 'boxful')) carriers = ['Boxful', ...carriers];
+
+  let paymentMethods = deduplicateStrings(
+    Array.isArray(st.paymentMethods) ? st.paymentMethods : DEFAULT_SETTINGS.paymentMethods
+  );
   if (!paymentMethods.some((p) => p.toLowerCase().includes('pendiente'))) {
     paymentMethods = ['Pago Pendiente en Tienda', ...paymentMethods];
   }
+
+  const campaigns = Array.isArray(st.campaigns) && st.campaigns.length > 0
+    ? deduplicateStrings(st.campaigns)
+    : st.campaigns;
+
   const lowStock = !st.lowStock || st.lowStock <= 0 ? 10 : st.lowStock;
-  return { ...st, lowStock, workTypes, carriers, paymentMethods, storeTheme: st.storeTheme || 'ranchero' };
+  return {
+    ...st,
+    sizes,
+    ...(storeSizes ? { storeSizes } : {}),
+    ...(campaigns ? { campaigns } : {}),
+    lowStock,
+    workTypes,
+    carriers,
+    paymentMethods,
+    storeTheme: st.storeTheme || 'ranchero'
+  };
 }
 
-/** Asigna códigos D-001, D-002… a los diseños que aún no tienen (orden estable por fecha). */
+/** Asigna códigos únicos D-001, D-002… a los diseños (corrigiendo códigos vacíos o duplicados). */
 function assignDesignCodes(list: CatalogDesign[]): CatalogDesign[] {
-  if (list.every((d) => d.code)) return list;
-  const used = new Set(list.map((d) => d.code).filter(Boolean) as string[]);
+  const used = new Set<string>();
   let n = 0;
   const nextCode = () => {
     let code = '';
@@ -302,15 +519,23 @@ function assignDesignCodes(list: CatalogDesign[]): CatalogDesign[] {
   };
   const order = [...list].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
   const codes = new Map<string, string>();
-  for (const d of order) if (!d.code) codes.set(d.id, nextCode());
-  return list.map((d) => (d.code ? d : { ...d, code: codes.get(d.id) }));
+  for (const d of order) {
+    const cleanCode = (d.code || '').trim().toUpperCase();
+    if (cleanCode && !used.has(cleanCode)) {
+      used.add(cleanCode);
+      codes.set(d.id, cleanCode);
+    } else {
+      codes.set(d.id, nextCode());
+    }
+  }
+  return list.map((d) => ({ ...d, code: codes.get(d.id) || d.code }));
 }
 
 export function mergeStates(local: AppState, remote: AppState): AppState {
   const stockEntries = mergeEntities(local.stockEntries || [], remote.stockEntries || []);
   const orders = fixFolios(mergeEntities(local.orders, remote.orders));
   const readyMadeStock = mergeReadyMade(local.readyMadeStock || [], remote.readyMadeStock || []);
-  return {
+  return normalize({
     version: 1,
     settings: mergeSettings(local.settings, remote.settings),
     brands: mergeEntities(local.brands, remote.brands),
@@ -327,7 +552,7 @@ export function mergeStates(local: AppState, remote: AppState): AppState {
     stockEntries,
     _by: local._by,
     _at: Math.max(local._at || 0, remote._at || 0)
-  };
+  });
 }
 
 /** Firma de contenido (ignora metadatos de escritura y orden de arrays). */

@@ -24,11 +24,29 @@ export function computeStock(state: AppState): StockInfo {
 }
 
 export function activeBrands(state: AppState): Brand[] {
-  return state.brands.filter((b) => !b.deleted).sort((a, b) => a.order - b.order);
+  const seen = new Set<string>();
+  const out: Brand[] = [];
+  for (const b of [...state.brands].filter((x) => !x.deleted).sort((a, b) => a.order - b.order)) {
+    const key = (b.name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(b);
+  }
+  return out;
 }
 
 export function brandColors(state: AppState, brandId: string): Color[] {
-  return state.colors.filter((c) => c.brandId === brandId && !c.deleted).sort((a, b) => a.order - b.order);
+  const seen = new Set<string>();
+  const out: Color[] = [];
+  for (const c of [...state.colors]
+    .filter((x) => x.brandId === brandId && !x.deleted)
+    .sort((a, b) => a.order - b.order)) {
+    const key = (c.name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
 }
 
 export function skuOf(brand: Brand | undefined, color: Color | undefined, size: string): string {

@@ -1012,20 +1012,30 @@ export function CustomerCatalogView({
 
     const hasAuthoritativeBase = Boolean(cloudPayload || onExitPreview);
     const liveBrandColors = matchedBrand ? brandColors(state, matchedBrand.id) : [];
-    const resolvedColors = hasAuthoritativeBase
+    const rawColors = hasAuthoritativeBase
       ? base.colors
       : liveBrandColors.length > 0
       ? liveBrandColors.map((c) => ({ id: c.id, name: c.name, hex: c.hex }))
       : base.colors;
+    const seenColorNames = new Set<string>();
+    const resolvedColors = (rawColors || []).filter((c) => {
+      const k = (c?.name || '').trim().toLowerCase();
+      if (!k || seenColorNames.has(k)) return false;
+      seenColorNames.add(k);
+      return true;
+    });
     const storeVisibleSizes =
       state.settings.storeSizes && state.settings.storeSizes.length > 0
         ? state.settings.sizes.filter((sz) => state.settings.storeSizes!.includes(sz))
         : state.settings.sizes;
-    const resolvedSizes = hasAuthoritativeBase
+    const rawSizes = hasAuthoritativeBase
       ? base.sizes
       : storeVisibleSizes.length > 0
       ? storeVisibleSizes
       : base.sizes;
+    const resolvedSizes = Array.from(
+      new Set((rawSizes || []).map((sz) => (sz || '').trim().toUpperCase()).filter(Boolean))
+    );
 
     return {
       ...base,
@@ -1158,9 +1168,19 @@ export function CustomerCatalogView({
   const availableCampaigns = useMemo(() => {
     const fromDesigns = clientDesigns
       .map((d) => d.campaign?.trim())
-      .filter((c): c is string => Boolean(c) && c !== 'all');
+      .filter((c): c is string => typeof c === 'string' && c.length > 0 && c.toLowerCase() !== 'all');
     const fromState = state.settings.campaigns || [];
-    return Array.from(new Set([...DEFAULT_CAMPAIGNS, ...fromState, ...fromDesigns]));
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const c of [...DEFAULT_CAMPAIGNS, ...fromState, ...fromDesigns]) {
+      const clean = (c || '').trim();
+      if (!clean) continue;
+      const k = clean.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(clean);
+    }
+    return out;
   }, [clientDesigns, state.settings.campaigns]);
 
   useEffect(() => {

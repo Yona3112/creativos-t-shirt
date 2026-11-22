@@ -116,7 +116,9 @@ export default function SettingsPage() {
   const addSize = () => {
     const sz = newSize.trim().toUpperCase();
     if (!sz) return;
-    if (settings.sizes.includes(sz)) return toast('Esa talla ya existe', 'error');
+    if (settings.sizes.some((s) => s.trim().toUpperCase() === sz)) {
+      return toast('Esa talla ya existe', 'error');
+    }
     updateSettings({ sizes: [...settings.sizes, sz] });
     setNewSize('');
     toast(`Talla ${sz} agregada`);
@@ -124,13 +126,20 @@ export default function SettingsPage() {
 
   const removeSize = (sz: string) => {
     if (settings.sizes.length <= 1) return;
-    updateSettings({ sizes: settings.sizes.filter((s) => s !== sz) });
+    updateSettings({
+      sizes: settings.sizes.filter((s) => s !== sz),
+      ...(Array.isArray(settings.storeSizes)
+        ? { storeSizes: settings.storeSizes.filter((s) => s !== sz) }
+        : {})
+    });
   };
 
   const addCarrier = () => {
     const c = newCarrier.trim();
     if (!c) return;
-    if (settings.carriers.includes(c)) return toast('Ese transportista ya existe', 'error');
+    if (settings.carriers.some((x) => x.trim().toLowerCase() === c.toLowerCase())) {
+      return toast('Ese transportista ya existe', 'error');
+    }
     updateSettings({ carriers: [...settings.carriers, c] });
     setNewCarrier('');
     toast(`Transportista "${c}" agregado`);
@@ -139,7 +148,9 @@ export default function SettingsPage() {
   const addPaymentMethod = () => {
     const v = newPaymentMethod.trim();
     if (!v) return;
-    if (settings.paymentMethods.includes(v)) return toast('Ya existe ese método de pago', 'error');
+    if (settings.paymentMethods.some((x) => x.trim().toLowerCase() === v.toLowerCase())) {
+      return toast('Ya existe ese método de pago', 'error');
+    }
     updateSettings({ paymentMethods: [...settings.paymentMethods, v] });
     setNewPaymentMethod('');
     toast(`Método "${v}" agregado`);
