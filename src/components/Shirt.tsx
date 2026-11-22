@@ -1040,36 +1040,54 @@ export function InteractiveShirt3D({
         >
           {/* Barra superior flotante minimalista: Vista/Lado + Zoom */}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="inline-flex rounded-full bg-black/45 p-1 backdrop-blur-md ring-1 ring-white/15">
-              {(
-                [
-                  ['back', 180, 'Espalda'],
-                  ['center', 0, 'Frente'],
-                  ['profile', 38, 'Perfil']
-                ] as const
-              ).map(([sideKey, angle, lbl]) => {
-                const active = targetAngleY === angle;
-                return (
-                  <button
-                    key={lbl}
-                    type="button"
-                    onClick={() => {
-                      setTargetAngleY(angle);
-                      if (sideKey === 'back' || sideKey === 'center') {
-                        onDesignChange?.({ placement: sideKey, offsetX: 0, offsetY: 0 });
-                      }
-                    }}
-                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition sm:px-3.5 sm:text-xs ${
-                      active
-                        ? 'bg-white text-slate-950 shadow-sm'
-                        : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    {lbl}
-                  </button>
-                );
-              })}
-            </div>
+            {wizardStep === 'design' ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setTargetAngleY((prev) =>
+                    prev === 38 ? (placement === 'back' ? 180 : 0) : 38
+                  )
+                }
+                className={`inline-flex h-8 items-center gap-1 rounded-full px-3 text-[11px] font-semibold backdrop-blur-md transition sm:text-xs ${
+                  targetAngleY === 38
+                    ? 'bg-white text-slate-950 shadow-sm'
+                    : 'bg-black/45 text-white/85 ring-1 ring-white/15 hover:text-white'
+                }`}
+              >
+                <span>{targetAngleY === 38 ? 'Ver de frente/espalda' : 'Vista Perfil 3D'}</span>
+              </button>
+            ) : (
+              <div className="inline-flex rounded-full bg-black/45 p-1 backdrop-blur-md ring-1 ring-white/15">
+                {(
+                  [
+                    ['back', 180, 'Espalda'],
+                    ['center', 0, 'Frente'],
+                    ['profile', 38, 'Perfil']
+                  ] as const
+                ).map(([sideKey, angle, lbl]) => {
+                  const active = targetAngleY === angle;
+                  return (
+                    <button
+                      key={lbl}
+                      type="button"
+                      onClick={() => {
+                        setTargetAngleY(angle);
+                        if (sideKey === 'back' || sideKey === 'center') {
+                          onDesignChange?.({ placement: sideKey, offsetX: 0, offsetY: 0 });
+                        }
+                      }}
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition sm:px-3.5 sm:text-xs ${
+                        active
+                          ? 'bg-white text-slate-950 shadow-sm'
+                          : 'text-white/80 hover:text-white'
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <button
               type="button"
@@ -1245,17 +1263,29 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Selector de Color: completo en Paso 1 y rápido (compatibles) en Paso 2 */}
-          {(!wizardStep || wizardStep === 'color' || wizardStep === 'design') &&
+          {/* Aviso discreto si el diseño cambió automáticamente de color en Paso 2 */}
+          {wizardStep === 'design' && colorSwitchNote && (
+            <div className="mt-2 flex justify-center">
+              <div className="rounded-full bg-amber-50 px-3 py-1 text-[11px] font-semibold text-amber-800 shadow-sm">
+                ✨ {colorSwitchNote}
+              </div>
+            </div>
+          )}
+
+          {/* Selector de Color: exclusivo del Paso 1 (sin duplicar en Paso 2) */}
+          {(!wizardStep || wizardStep === 'color') &&
             colorOptions &&
             colorOptions.length > 0 &&
             onSelectColor &&
             (() => {
-              const inDesignStep = wizardStep === 'design';
-              const shownColors = inDesignStep && activeCatalogDesign
-                ? colorOptions.filter((c) => isColorCompatibleWithDesign(c, activeCatalogDesign).allowed)
-                : colorOptions;
-              const hasRestricted = colorOptions.some(
+              const seenNames = new Set<string>();
+              const shownColors = colorOptions.filter((c) => {
+                const k = (c.name || '').trim().toLowerCase();
+                if (!k || seenNames.has(k)) return false;
+                seenNames.add(k);
+                return true;
+              });
+              const hasRestricted = shownColors.some(
                 (c) => !isColorCompatibleWithDesign(c, activeCatalogDesign).allowed
               );
               const restrictionLabel =
@@ -1270,14 +1300,8 @@ export function InteractiveShirt3D({
               return (
                 <div className="mt-3 flex flex-col items-center gap-1.5 rounded-2xl bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur-md">
                   <div className="text-xs font-medium text-slate-500">
-                    {inDesignStep ? 'Color de camisa: ' : 'Color — '}
-                    <strong className="font-semibold text-slate-900">{colorName}</strong>
+                    Color — <strong className="font-semibold text-slate-900">{colorName}</strong>
                   </div>
-                  {colorSwitchNote && inDesignStep && (
-                    <div className="rounded-full bg-amber-50 px-3 py-0.5 text-[11px] font-semibold text-amber-800">
-                      ✨ {colorSwitchNote}
-                    </div>
-                  )}
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     {shownColors.map((c) => {
                       const active = activeColorId ? c.id === activeColorId : c.name === colorName;
@@ -1295,9 +1319,7 @@ export function InteractiveShirt3D({
                           }}
                           title={compat.allowed ? c.name : `${c.name} · ${compat.reason}`}
                           aria-label={compat.allowed ? c.name : `${c.name} no disponible`}
-                          className={`relative rounded-full border transition-transform duration-150 ${
-                            inDesignStep ? 'h-6 w-6' : 'h-8 w-8'
-                          } ${
+                          className={`relative h-8 w-8 rounded-full border transition-transform duration-150 ${
                             !compat.allowed
                               ? 'cursor-not-allowed border-slate-300 opacity-25'
                               : active
@@ -1318,7 +1340,7 @@ export function InteractiveShirt3D({
                       );
                     })}
                   </div>
-                  {!inDesignStep && hasRestricted && activeCatalogDesign && (
+                  {hasRestricted && activeCatalogDesign && (
                     <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-0.5 text-[11px] font-medium text-slate-600">
                       <span>{restrictionLabel}</span>
                     </div>
@@ -1537,35 +1559,58 @@ export function InteractiveShirt3D({
         <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-gradient-to-b from-white via-[#F5F5F7] to-[#ECECEF] p-4 shadow-sm">
           {/* Barra superior flotante: Vista y Stock */}
           <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
-            <div className="inline-flex items-center rounded-full bg-white/90 p-1 shadow-sm ring-1 ring-black/5 backdrop-blur-md">
-              {(
-                [
-                  [180, 'Espalda'],
-                  [0, 'Frente'],
-                  [38, 'Perfil']
-                ] as const
-              ).map(([angle, lbl]) => {
-                const active =
-                  targetAngleY === angle ||
-                  (targetAngleY === null &&
-                    ((angle === 180 && placement === 'back') ||
-                      (angle === 0 && placement !== 'back')));
-                return (
-                  <button
-                    key={lbl}
-                    type="button"
-                    onClick={() => setTargetAngleY(angle)}
-                    className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
-                      active
-                        ? 'bg-slate-900 text-white shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {lbl}
-                  </button>
-                );
-              })}
-            </div>
+            {wizardStep === 'design' ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setTargetAngleY((prev) =>
+                    prev === 38 ? (placement === 'back' ? 180 : 0) : 38
+                  )
+                }
+                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold shadow-sm ring-1 ring-black/5 backdrop-blur-md transition ${
+                  targetAngleY === 38
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-white/90 text-slate-700 hover:bg-white'
+                }`}
+              >
+                {targetAngleY === 38 ? 'Ver de frente/espalda' : 'Vista Perfil 3D'}
+              </button>
+            ) : (
+              <div className="inline-flex items-center rounded-full bg-white/90 p-1 shadow-sm ring-1 ring-black/5 backdrop-blur-md">
+                {(
+                  [
+                    ['back', 180, 'Espalda'],
+                    ['center', 0, 'Frente'],
+                    ['profile', 38, 'Perfil']
+                  ] as const
+                ).map(([sideKey, angle, lbl]) => {
+                  const active =
+                    targetAngleY === angle ||
+                    (targetAngleY === null &&
+                      ((angle === 180 && placement === 'back') ||
+                        (angle === 0 && placement !== 'back')));
+                  return (
+                    <button
+                      key={lbl}
+                      type="button"
+                      onClick={() => {
+                        setTargetAngleY(angle);
+                        if (sideKey === 'back' || sideKey === 'center') {
+                          onDesignChange?.({ placement: sideKey });
+                        }
+                      }}
+                      className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                        active
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="flex items-center gap-1.5">
               {stockBadge && (
@@ -1663,15 +1708,22 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Barra de Color limpia debajo de la camisa */}
-          {colorOptions && colorOptions.length > 0 && onSelectColor && (
+          {/* Barra de Color limpia debajo de la camisa (solo en Paso 1 o Estudio General, sin duplicar en Paso 2) */}
+          {(!wizardStep || wizardStep === 'color') && colorOptions && colorOptions.length > 0 && onSelectColor && (
             <div className="mt-2 rounded-2xl bg-white/90 p-3 shadow-sm ring-1 ring-black/5 backdrop-blur-md">
               {(() => {
-                const activeIdx = colorOptions.findIndex((c) =>
+                const seenNames = new Set<string>();
+                const uniqueColors = colorOptions.filter((c) => {
+                  const k = (c.name || '').trim().toLowerCase();
+                  if (!k || seenNames.has(k)) return false;
+                  seenNames.add(k);
+                  return true;
+                });
+                const activeIdx = uniqueColors.findIndex((c) =>
                   activeColorId ? c.id === activeColorId : c.name === colorName
                 );
                 const curColor =
-                  colorOptions[activeIdx >= 0 ? activeIdx : 0] || colorOptions[0];
+                  uniqueColors[activeIdx >= 0 ? activeIdx : 0] || uniqueColors[0];
                 const curIncluded = curColor.included ?? true;
 
                 return (
@@ -1735,7 +1787,7 @@ export function InteractiveShirt3D({
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
-                      {colorOptions.map((c) => {
+                      {uniqueColors.map((c) => {
                         const active = activeColorId
                           ? c.id === activeColorId
                           : c.name === colorName;

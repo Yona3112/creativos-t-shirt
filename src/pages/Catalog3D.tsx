@@ -628,7 +628,6 @@ export default function Catalog3D() {
             setScale(2.0);
             setOffsetX(0);
             setOffsetY(0);
-            toast(`"${d.name}" aplicado en la Espalda (Tamaño A3 - 200%)`);
           }}
           boutiqueTheme={boutiqueTheme}
           onChangeBoutiqueTheme={(t) => {
@@ -727,138 +726,87 @@ export default function Catalog3D() {
           }}
         />
 
-        {/* Vista rápida de tallas en vivo para el color activo */}
-        <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {settings.sizes.map((sz) => {
-            const st = brand && activeColor ? stock.get(vkey(brand.id, activeColor.id, sz)) || 0 : 0;
-            const isSel = sz === selectedSize;
-            return (
-              <button
-                key={sz}
-                type="button"
-                onClick={() => setSelectedSize(sz)}
-                className={`flex min-h-[54px] flex-col items-center justify-center rounded-xl border-2 px-2 py-1 transition ${
-                  isSel
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                    : st > 0
-                    ? 'border-emerald-200 bg-white text-slate-900'
-                    : 'border-slate-200 bg-slate-50 text-slate-500'
-                }`}
-              >
-                <span className="text-sm font-extrabold">{sz}</span>
-                <span
-                  className={`text-[11px] font-bold ${
+        {/* Panel unificado de Tallas (Stock del color activo + Visibilidad en #tienda, sin duplicar) */}
+        <div className="mt-4 rounded-2xl border border-slate-200/85 bg-slate-50/70 p-3.5">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                Tallas · Stock ({activeColor?.name || 'Color'}) y Visibilidad en #tienda
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Toca una talla para ver su stock en el visor · Usa el botón Visible/Oculta para la tienda del cliente
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
+            {settings.sizes.map((sz) => {
+              const st = brand && activeColor ? stock.get(vkey(brand.id, activeColor.id, sz)) || 0 : 0;
+              const isSel = sz === selectedSize;
+              const activeList = settings.storeSizes || settings.sizes;
+              const isEnabled = activeList.includes(sz);
+              return (
+                <div
+                  key={sz}
+                  onClick={() => setSelectedSize(sz)}
+                  className={`flex cursor-pointer flex-col items-center justify-between gap-1.5 rounded-2xl border p-2.5 transition ${
                     isSel
-                      ? st > 0
-                        ? 'text-emerald-300'
-                        : 'text-amber-300'
-                      : st > 0
-                      ? 'text-emerald-600'
-                      : 'text-amber-600'
+                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                      : isEnabled
+                      ? 'border-slate-200/90 bg-white text-slate-900 hover:border-slate-300'
+                      : 'border-dashed border-slate-200 bg-slate-100/70 text-slate-400'
                   }`}
                 >
-                  {st > 0 ? `${st} en stock` : 'Disponible pronto'}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Colores y Tallas Visibles en #tienda */}
-      <section className="card space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-extrabold text-slate-900">Visibilidad en Tienda (#tienda)</h2>
-          <button
-            type="button"
-            onClick={() => setColorModal(true)}
-            className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-800 hover:bg-slate-200"
-          >
-            + Color
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          {settings.sizes.map((sz) => {
-            const activeList = settings.storeSizes || settings.sizes;
-            const isEnabled = activeList.includes(sz);
-            return (
-              <button
-                key={sz}
-                type="button"
-                onClick={() => {
-                  const next = isEnabled
-                    ? activeList.filter((x) => x !== sz)
-                    : [...activeList, sz];
-                  const finalSizes = next.length > 0 ? next : [sz];
-                  updateSettings({ storeSizes: finalSizes });
-                  void syncLiveCatalogSnapshot();
-                }}
-                className={`rounded-lg border px-2.5 py-1 text-xs font-extrabold transition ${
-                  isEnabled
-                    ? 'border-slate-900 bg-slate-900 text-white'
-                    : 'border-slate-200 bg-slate-50 text-slate-400 line-through'
-                }`}
-              >
-                {sz}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
-          {colors.map((c) => {
-            const isEnabled = enabledColorIds.includes(c.id);
-            return (
-              <div
-                key={c.id}
-                className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition ${
-                  isEnabled
-                    ? 'border-slate-300 bg-white text-slate-800'
-                    : 'border-slate-200 bg-slate-50 text-slate-400'
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleColorIncluded(c.id);
-                    void syncLiveCatalogSnapshot();
-                  }}
-                  className="flex items-center gap-1.5"
-                >
+                  <div className="flex w-full items-center justify-between gap-1">
+                    <span className={`text-sm font-extrabold ${!isEnabled && !isSel ? 'line-through' : ''}`}>
+                      {sz}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const next = isEnabled
+                          ? activeList.filter((x) => x !== sz)
+                          : [...activeList, sz];
+                        const finalSizes = next.length > 0 ? next : [sz];
+                        updateSettings({ storeSizes: finalSizes });
+                        void syncLiveCatalogSnapshot();
+                      }}
+                      className={`rounded-full px-2 py-0.5 text-[9px] font-bold transition ${
+                        isSel
+                          ? isEnabled
+                            ? 'bg-emerald-400/20 text-emerald-300 ring-1 ring-emerald-400/40'
+                            : 'bg-white/15 text-white/70'
+                          : isEnabled
+                          ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                          : 'bg-slate-200/80 text-slate-500'
+                      }`}
+                      title={isEnabled ? 'Visible para clientes en #tienda' : 'Oculta en #tienda'}
+                    >
+                      {isEnabled ? 'Visible' : 'Oculta'}
+                    </button>
+                  </div>
                   <span
-                    className="h-3.5 w-3.5 rounded-full border border-black/20"
-                    style={{ backgroundColor: c.hex }}
-                  />
-                  <span className={isEnabled ? '' : 'line-through'}>{c.name}</span>
-                </button>
-                <button
-                  type="button"
-                  title={`Editar ${c.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setEditingColor({ id: c.id, name: c.name, hex: c.hex });
-                  }}
-                  className="ml-0.5 text-slate-400 hover:text-slate-800"
-                >
-                  ✏️
-                </button>
-                <button
-                  type="button"
-                  title={`Eliminar ${c.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteColor(c.id);
-                    toast(`Color ${c.name} eliminado`);
-                    void syncLiveCatalogSnapshot();
-                  }}
-                  className="text-rose-500 hover:text-rose-700"
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
+                    className={`w-full text-left text-[11px] font-bold tabular-nums ${
+                      isSel
+                        ? st > 0
+                          ? 'text-emerald-300'
+                          : st < 0
+                          ? 'text-rose-300'
+                          : 'text-amber-300'
+                        : st > 0
+                        ? 'text-emerald-600'
+                        : st < 0
+                        ? 'text-rose-600'
+                        : 'text-amber-600'
+                    }`}
+                  >
+                    {st > 0 ? `${st} en stock` : st < 0 ? `Encargo (${st})` : 'Bajo pedido'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
