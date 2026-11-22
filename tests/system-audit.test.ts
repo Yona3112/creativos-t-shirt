@@ -33,6 +33,11 @@ import {
   resolveCampaignName,
   resolveMockupScene
 } from '../src/lib/publicCatalog';
+import {
+  isWebPreviewPhotoId,
+  WEB_PREVIEW_SUFFIX,
+  webPreviewPhotoId
+} from '../src/lib/image';
 import { createInitialState } from '../src/lib/seed';
 import { getState, replaceState, update } from '../src/lib/store';
 import { dayKey } from '../src/lib/time';
@@ -763,4 +768,30 @@ test('22. buildThemeShareUrl, campaignsMatch, resolveCampaignName y resolveMocku
   assert.equal(resolveMockupScene('all', 'Cristiana'), 'cristiana');
   assert.equal(resolveMockupScene('all', 'Turístico'), 'turistico');
   assert.equal(resolveMockupScene('all', null, 'ranchero'), 'ranchero');
+});
+
+test('23. webPreviewPhotoId es idempotente, no colisiona con maestros y buildPublicCatalog conserva photoId maestro para DTF', () => {
+  const masterId = 'photo_rodeo_hd_01';
+  const webId = webPreviewPhotoId(masterId);
+
+  assert.equal(webId, `${masterId}${WEB_PREVIEW_SUFFIX}`);
+  assert.notEqual(webId, masterId);
+  assert.equal(isWebPreviewPhotoId(masterId), false);
+  assert.equal(isWebPreviewPhotoId(webId), true);
+  // Idempotencia: aplicar webPreviewPhotoId dos veces nunca agrega doble sufijo
+  assert.equal(webPreviewPhotoId(webId), webId);
+  assert.equal(webPreviewPhotoId(''), '');
+
+  const d = addCatalogDesign({
+    name: 'Rodeo HD',
+    photoId: masterId,
+    clientVisible: true,
+    placement: 'back',
+    campaign: 'Ranchero'
+  });
+  const pub = buildPublicCatalog(getState());
+  const entry = pub.designs?.find((x) => x.id === d.id);
+  assert.ok(entry);
+  assert.equal(entry!.photoId, masterId);
+  assert.equal(isWebPreviewPhotoId(entry!.photoId), false);
 });

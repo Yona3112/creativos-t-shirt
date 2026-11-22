@@ -18,6 +18,7 @@ import { contentSignature, mergeStates, normalize } from './merge';
 import { db } from './db';
 import { getDeviceId } from './ids';
 import { buildPublicCatalog, LIVE_CATALOG_KEY, WEB_ORDER_LATEST_KEY } from './publicCatalog';
+import { createWebPreviewImage, webPreviewPhotoId } from './image';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -329,16 +330,21 @@ export class FirebaseSyncEngine {
       ])
       .filter((id): id is string => Boolean(id));
 
-    const candidateIds = Array.from(new Set([...catalogPhotoIds, ...orderPhotoIds])).filter(
+    const catalogWebIds = catalogPhotoIds.map(webPreviewPhotoId);
+    const checkIds = Array.from(new Set([...catalogPhotoIds, ...catalogWebIds, ...orderPhotoIds])).filter(
       (id) => !this.verifiedRemotePhotos.has(id)
     );
-    if (!candidateIds.length) return;
+    if (!checkIds.length) return;
 
     // Comprobar en lotes cuáles faltan realmente en Firestore (evita resubir megabytes en cada clic)
-    const remoteExists = new Set<string>();
+    const remoteExists = new Set<string>(
+      [...catalogPhotoIds, ...catalogWebIds, ...orderPhotoIds].filter((id) =>
+        this.verifiedRemotePhotos.has(id)
+      )
+    );
     const photosCol = collection(this.fs, 'cgs_photos');
-    for (let i = 0; i < candidateIds.length; i += 30) {
-      const batch = candidateIds.slice(i, i + 30);
+    for (let i = 0; i < checkIds.length; i += 30) {
+      const batch = checkIds.slice(i, i + 30);
       try {
         const res = await getDocs(query(photosCol, where(documentId(), 'in', batch)));
         for (const d of res.docs) {
@@ -353,16 +359,41 @@ export class FirebaseSyncEngine {
       }
     }
 
-    const toUpload = candidateIds.filter((id) => !remoteExists.has(id));
-    for (const id of toUpload) {
+    const masterIds = Array.from(new Set([...catalogPhotoIds, ...orderPhotoIds]));
+    for (const id of masterIds) {
+      if (remoteExists.has(id)) continue;
       try {
         const local = await db.photos.get(id);
         if (local?.data) {
           const ok = await uploadPhotoNowFirebase(id, local.data);
-          if (ok) this.verifiedRemotePhotos.add(id);
+          if (ok) {
+            remoteExists.add(id);
+            this.verifiedRemotePhotos.add(id);
+          }
         }
       } catch (err) {
         console.warn('[firebase-sync] syncAllCatalogPhotos', id, err);
+      }
+    }
+
+    // Generar y subir vistas ligeras (__web) faltantes para el catálogo público móvil sin tocar maestros 4K
+    for (const id of catalogPhotoIds) {
+      const webId = webPreviewPhotoId(id);
+      if (remoteExists.has(webId)) continue;
+      try {
+        const cachedWeb = await db.photos.get(webId);
+        if (cachedWeb?.data) {
+          const ok = await uploadPhotoNowFirebase(webId, cachedWeb.data);
+          if (ok) this.verifiedRemotePhotos.add(webId);
+          continue;
+        }
+        const local = await db.photos.get(id);
+        if (local?.data) {
+          const uploaded = await ensureWebPreviewUploadedFirebase(id, local.data);
+          if (uploaded) this.verifiedRemotePhotos.add(webId);
+        }
+      } catch (err) {
+        console.warn('[firebase-sync] web preview sync', id, err);
       }
     }
   }
@@ -543,6 +574,182 @@ export async function fetchSharedPhotoFirebase(id: string): Promise<string | nul
     }
   }
   return null;
+}
+
+export async function fetchWebPreviewsBatchFirebase(
+  photoIds: string[]
+): Promise<Record<string, string>> {
+  const uniqueOrigIds = Array.from(new Set(photoIds.filter(Boolean)));
+  const out: Record<string, string> = {};
+  if (!uniqueOrigIds.length) return out;
+  const cfg = getFirebaseConfig();
+  if (!cfg || !navigator.onLine) return out;
+
+  const webToOrig = new Map<string, string>();
+  const webIds: string[] = [];
+  for (const id of uniqueOrigIds) {
+    const wId = webPreviewPhotoId(id);
+    webToOrig.set(wId, id);
+    webIds.push(wId);
+  }
+
+  try {
+    const { fs } = getOrInitFirebase(cfg);
+    const photosCol = collection(fs, 'cgs_photos');
+    const cacheRows: { id: string; data: string; synced: 1; createdAt: number }[] = [];
+    const chunkedWebIds: string[] = [];
+
+    for (let i = 0; i < webIds.length; i += 30) {
+      const batch = webIds.slice(i, i + 30);
+      try {
+        const res = await getDocs(query(photosCol, where(documentId(), 'in', batch)));
+        for (const d of res.docs) {
+          const docData = d.data();
+          const origId = webToOrig.get(d.id);
+          if (!origId) continue;
+          if (docData?.chunks && Number(docData.chunks) > 1) {
+            chunkedWebIds.push(d.id);
+          } else if (typeof docData?.data === 'string' && docData.data.length > 0) {
+            out[origId] = docData.data;
+            cacheRows.push({
+              id: d.id,
+              data: docData.data,
+              synced: 1,
+              createdAt: Date.now()
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[firebase-sync] fetchWebPreviewsBatch batch error:', err);
+      }
+    }
+
+    if (cacheRows.length > 0) {
+      try {
+        await db.photos.bulkPut(cacheRows);
+      } catch {
+        /* ignorar error menor en IndexedDB */
+      }
+    }
+
+    for (const wId of chunkedWebIds) {
+      const origId = webToOrig.get(wId);
+      if (!origId) continue;
+      const assembled = await fetchSharedPhotoFirebase(wId);
+      if (assembled) out[origId] = assembled;
+    }
+  } catch (err) {
+    console.warn('[firebase-sync] fetchWebPreviewsBatchFirebase error:', err);
+  }
+  return out;
+}
+
+export async function ensureWebPreviewUploadedFirebase(
+  photoId: string,
+  fullDataUrl: string
+): Promise<string | null> {
+  if (!photoId || !fullDataUrl) return null;
+  try {
+    const webId = webPreviewPhotoId(photoId);
+    const webData = await createWebPreviewImage(fullDataUrl, 768);
+    try {
+      await db.photos.put({ id: webId, data: webData, synced: 0, createdAt: Date.now() });
+    } catch {
+      /* ignorar error menor en IndexedDB */
+    }
+    const cfg = getFirebaseConfig();
+    if (cfg && navigator.onLine) {
+      await uploadPhotoNowFirebase(webId, webData);
+    }
+    return webData;
+  } catch (err) {
+    console.warn('[firebase-sync] ensureWebPreviewUploadedFirebase error:', photoId, err);
+    return null;
+  }
+}
+
+export async function syncCatalogPhotosSmartFirebase(
+  entries: Array<{ photoId: string; data?: string | null }>
+): Promise<{ uploadedOriginals: number; uploadedPreviews: number }> {
+  const deduped = new Map<string, string | null | undefined>();
+  for (const e of entries) {
+    if (!e?.photoId) continue;
+    if (!deduped.has(e.photoId) || (!deduped.get(e.photoId) && e.data)) {
+      deduped.set(e.photoId, e.data);
+    }
+  }
+  const origIds = Array.from(deduped.keys());
+  if (!origIds.length) return { uploadedOriginals: 0, uploadedPreviews: 0 };
+
+  const cfg = getFirebaseConfig();
+  if (!cfg || !navigator.onLine) return { uploadedOriginals: 0, uploadedPreviews: 0 };
+
+  const remoteExists = new Set<string>();
+  const { fs } = getOrInitFirebase(cfg);
+  const photosCol = collection(fs, 'cgs_photos');
+  const allDocIds = Array.from(new Set([...origIds, ...origIds.map(webPreviewPhotoId)]));
+
+  for (let i = 0; i < allDocIds.length; i += 30) {
+    const batch = allDocIds.slice(i, i + 30);
+    try {
+      const res = await getDocs(query(photosCol, where(documentId(), 'in', batch)));
+      for (const d of res.docs) {
+        const docData = d.data();
+        if (typeof docData?.data === 'string' || (typeof docData?.chunks === 'number' && docData.chunks >= 1)) {
+          remoteExists.add(d.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[firebase-sync] syncCatalogPhotosSmart existence check', err);
+    }
+  }
+
+  let uploadedOriginals = 0;
+  let uploadedPreviews = 0;
+
+  for (const id of origIds) {
+    const webId = webPreviewPhotoId(id);
+    const needOrig = !remoteExists.has(id);
+    const needWeb = !remoteExists.has(webId);
+    if (!needOrig && !needWeb) continue;
+
+    let masterData = deduped.get(id) || null;
+    if (!masterData) {
+      try {
+        masterData = (await db.photos.get(id))?.data || null;
+      } catch {
+        masterData = null;
+      }
+    }
+
+    if (needOrig && masterData) {
+      const ok = await uploadPhotoNowFirebase(id, masterData);
+      if (ok) uploadedOriginals++;
+    }
+
+    if (needWeb) {
+      let cachedWeb: string | null = null;
+      try {
+        cachedWeb = (await db.photos.get(webId))?.data || null;
+      } catch {
+        cachedWeb = null;
+      }
+      if (cachedWeb) {
+        const ok = await uploadPhotoNowFirebase(webId, cachedWeb);
+        if (ok) uploadedPreviews++;
+        continue;
+      }
+      if (!masterData) {
+        masterData = await fetchSharedPhotoFirebase(id);
+      }
+      if (masterData) {
+        const generated = await ensureWebPreviewUploadedFirebase(id, masterData);
+        if (generated) uploadedPreviews++;
+      }
+    }
+  }
+
+  return { uploadedOriginals, uploadedPreviews };
 }
 
 /** Suscripción en tiempo real a la vitrina pública del catálogo oficial */

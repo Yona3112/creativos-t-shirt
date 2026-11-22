@@ -8,6 +8,9 @@ import {
   getFirebaseConfig,
   uploadPhotoNowFirebase,
   fetchSharedPhotoFirebase,
+  fetchWebPreviewsBatchFirebase,
+  ensureWebPreviewUploadedFirebase,
+  syncCatalogPhotosSmartFirebase,
   type FirebaseConfig
 } from './firebaseSync';
 
@@ -384,4 +387,32 @@ export async function fetchSharedPhoto(id: string): Promise<string | null> {
     return fallback?.data || null;
   }
   return null;
+}
+
+export async function fetchWebPreviewsBatch(
+  photoIds: string[]
+): Promise<Record<string, string>> {
+  if (getFirebaseConfig()) {
+    return fetchWebPreviewsBatchFirebase(photoIds);
+  }
+  return {};
+}
+
+export async function ensureWebPreviewUploaded(
+  photoId: string,
+  fullDataUrl: string
+): Promise<string | null> {
+  if (getFirebaseConfig()) {
+    return ensureWebPreviewUploadedFirebase(photoId, fullDataUrl);
+  }
+  return null;
+}
+
+export async function syncCatalogPhotosSmart(
+  entries: Array<{ photoId: string; data?: string | null }>
+): Promise<{ uploadedOriginals: number; uploadedPreviews: number }> {
+  if (getFirebaseConfig()) {
+    return syncCatalogPhotosSmartFirebase(entries);
+  }
+  return { uploadedOriginals: 0, uploadedPreviews: 0 };
 }

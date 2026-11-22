@@ -51,6 +51,9 @@ export function firebasePairingLink() { return ''; }
 export function consumePairingHash() { return false; }
 export async function uploadPhotoNow() {}
 export async function fetchSharedPhoto() { return null; }
+export async function fetchWebPreviewsBatch() { return {}; }
+export async function ensureWebPreviewUploaded() { return null; }
+export async function syncCatalogPhotosSmart() { return { uploadedOriginals: 0, uploadedPreviews: 0 }; }
 export class SyncEngine {
   connected = false;
   constructor() {}
@@ -65,6 +68,9 @@ export function getFirebaseConfig() { return null; }
 export function saveFirebaseConfig() {}
 export async function uploadPhotoNowFirebase() { return true; }
 export async function fetchSharedPhotoFirebase() { return null; }
+export async function fetchWebPreviewsBatchFirebase() { return {}; }
+export async function ensureWebPreviewUploadedFirebase() { return null; }
+export async function syncCatalogPhotosSmartFirebase() { return { uploadedOriginals: 0, uploadedPreviews: 0 }; }
 export function subscribeLiveCatalogFirebase() { return () => {}; }
 export function subscribeLatestWebOrderFirebase() { return () => {}; }
 export class FirebaseSyncEngine {

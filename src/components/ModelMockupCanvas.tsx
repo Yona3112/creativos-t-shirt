@@ -106,6 +106,15 @@ function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
 
+async function yieldToMain(): Promise<void> {
+  const g = globalThis as { scheduler?: { yield?: () => Promise<void> } };
+  if (g.scheduler && typeof g.scheduler.yield === 'function') {
+    await g.scheduler.yield();
+    return;
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 function parseHexRgb(hex: string): [number, number, number] {
   const clean = (hex || '#1A1A1C').replace('#', '').trim();
   const full =
@@ -239,7 +248,7 @@ function loadPreparedScene(asset: MockupViewAsset): Promise<PreparedScene> {
       maskAlpha[i] = a;
       const lum = (0.299 * baseData[idx] + 0.587 * baseData[idx + 1] + 0.114 * baseData[idx + 2]) / 255;
       rawLums[i] = lum;
-      if (a >= 200) sampleLums.push(lum);
+      if ((i & 3) === 0 && a >= 200) sampleLums.push(lum);
     }
 
     sampleLums.sort((a, b) => a - b);
@@ -247,6 +256,8 @@ function loadPreparedScene(asset: MockupViewAsset): Promise<PreparedScene> {
     const p97 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.97)] : 0.96;
     const floor = p03 * 0.55;
     const denom = Math.max(0.25, p97 - floor);
+
+    await yieldToMain();
 
     const shading = new Float32Array(total);
     const detail = new Float32Array(total);
@@ -437,7 +448,8 @@ export function ModelMockupCanvas({
       try {
         const scenePromise = loadPreparedScene(viewAsset);
         const designPromise = designUrl ? loadPreparedDesign(designUrl) : Promise.resolve(null);
-        const [scene, design] = await Promise.all([scenePromise, designPromise]);
+
+        const scene = await scenePromise;
         if (cancelled) return;
 
         const canvas = canvasRef.current;
@@ -451,10 +463,23 @@ export function ModelMockupCanvas({
         if (!ctx) return;
 
         const recolored = getRecoloredBaseCanvas(fullSceneKey, scene, hex, sceneCfg.tint);
-        ctx.clearRect(0, 0, scene.width, scene.height);
-        ctx.drawImage(recolored, 0, 0);
+        const drawBaseShirt = () => {
+          ctx.clearRect(0, 0, scene.width, scene.height);
+          ctx.drawImage(recolored, 0, 0);
+        };
+
+        // Mostrar primero la camiseta en el modelo sin esperar a que decodifique el estampado
+        drawBaseShirt();
+        if (!cancelled) {
+          setReadyKey(fullSceneKey);
+        }
+
+        if (!designUrl) return;
+        const design = await designPromise;
+        if (cancelled) return;
 
         if (design && design.trimW > 0 && design.trimH > 0) {
+          drawBaseShirt();
           const W = scene.width;
           const H = scene.height;
           const box = viewAsset.printBox;
@@ -524,10 +549,6 @@ export function ModelMockupCanvas({
             ctx.drawImage(foldCanvas, 0, 0);
           }
         }
-
-        if (!cancelled) {
-          setReadyKey(fullSceneKey);
-        }
       } catch {
         if (!cancelled) {
           onError?.();
@@ -568,11 +589,23 @@ export function ModelMockupCanvas({
       }}
     >
       {!loaded && (
-        <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-slate-200 via-slate-100 to-slate-200" />
+        <img
+          src={viewAsset.photoUrl}
+          alt={sceneCfg.badge}
+          width={768}
+          height={960}
+          fetchPriority="high"
+          decoding="async"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out"
+          style={{
+            transform: zoomed ? 'scale(1.65)' : 'scale(1)',
+            transformOrigin: `${originX}% ${originY}%`
+          }}
+        />
       )}
       <canvas
         ref={canvasRef}
-        className={`h-full w-full object-cover transition-transform duration-300 ease-out ${
+        className={`relative h-full w-full object-cover transition-opacity duration-200 transition-transform duration-300 ease-out ${
           loaded ? 'opacity-100' : 'opacity-0'
         }`}
         style={{

@@ -10,11 +10,17 @@ import {
   removeBackgroundWithAI,
   upscaleImageTo4K,
   isJpgFile,
-  createDesignThumbnail
+  createDesignThumbnail,
+  isColorCompatibleWithDesign
 } from '../lib/image';
 import { db, savePhoto } from '../lib/db';
-import { fetchSharedPhoto, uploadPhotoNow } from '../lib/sync';
-import { subscribeLiveCatalogFirebase } from '../lib/firebaseSync';
+import {
+  ensureWebPreviewUploaded,
+  fetchSharedPhoto,
+  syncCatalogPhotosSmart,
+  uploadPhotoNow
+} from '../lib/sync';
+import { getFirebaseConfig, subscribeLiveCatalogFirebase } from '../lib/firebaseSync';
 import { copyText, downloadBlob } from '../lib/csv';
 import {
   buildCatalogOrderPdfFile,
@@ -45,27 +51,22 @@ import {
   type SharedCatalogPayload
 } from '../lib/publicCatalog';
 
-const WIZARD_KEYS = ['color', 'design', 'size', 'data'] as const;
+const WIZARD_KEYS = ['studio', 'size', 'data'] as const;
 const WIZARD_STEPS = [
   {
-    short: 'Color',
-    title: 'Escoge color de camiseta',
-    subtitle: 'Selecciona el color de tu camiseta en la vista 3D'
-  },
-  {
-    short: 'Diseño',
-    title: 'Escoge tu diseño y dónde irá',
-    subtitle: 'Elige espalda o frente y selecciona o sube tu diseño'
+    short: 'Diseño y color',
+    title: 'Elige tu diseño y color',
+    subtitle: 'Toca un diseño y prueba colores directo en el modelo'
   },
   {
     short: 'Tallas',
-    title: 'Escoge la cantidad y tallas',
-    subtitle: 'Pide varias unidades de la misma talla o combina tallas para este diseño'
+    title: 'Elige tallas y cantidad',
+    subtitle: 'Combina las tallas que quieras para este diseño'
   },
   {
-    short: 'Carrito',
-    title: 'Carrito y datos',
-    subtitle: 'Revisa tu pedido, elige la forma de pago y confirma'
+    short: 'Confirmar',
+    title: 'Revisa y envía tu pedido',
+    subtitle: 'Completa tus datos y confirma por WhatsApp'
   }
 ] as const;
 const WIZARD_LAST = WIZARD_KEYS.length - 1;
@@ -321,6 +322,7 @@ export default function Catalog3D() {
       if (photoId) {
         await savePhoto(photoId, updated, 0);
         void uploadPhotoNow(photoId, updated);
+        void ensureWebPreviewUploaded(photoId, updated);
       }
     } catch {
       /* mantener actual */
@@ -338,6 +340,7 @@ export default function Catalog3D() {
       if (photoId) {
         await savePhoto(photoId, aiResult, 0);
         void uploadPhotoNow(photoId, aiResult);
+        void ensureWebPreviewUploaded(photoId, aiResult);
       }
       toast('Fondo eliminado con IA preservando todos los detalles del diseño');
     } catch (e) {
@@ -355,6 +358,8 @@ export default function Catalog3D() {
       setDesignUrl(dataUrl);
       if (photoId) {
         await savePhoto(photoId, dataUrl, 0);
+        void uploadPhotoNow(photoId, dataUrl);
+        void ensureWebPreviewUploaded(photoId, dataUrl);
       }
       toast(`Diseño escalado a 4K Ultra HD (${width}×${height} px)`);
     } catch (e) {
@@ -439,11 +444,10 @@ export default function Catalog3D() {
     const rawJson = JSON.stringify(payload);
     await savePhoto(LIVE_CATALOG_KEY, rawJson, 0);
     await uploadPhotoNow(LIVE_CATALOG_KEY, rawJson);
-    const uploads: Promise<void>[] = [];
+    const entries: Array<{ photoId: string; data?: string | null }> = [];
     if (photoId && designUrl) {
-      uploads.push(uploadPhotoNow(photoId, designUrl));
+      entries.push({ photoId, data: designUrl });
     }
-    // Asegurar que TODAS las imágenes de los diseños visibles del catálogo queden en la nube (Firestore)
     for (const d of allDesigns) {
       if (!d.photoId) continue;
       let imgData = d.imageUrl;
@@ -453,11 +457,9 @@ export default function Catalog3D() {
           imgData = row?.data || null;
         } catch {}
       }
-      if (imgData) {
-        uploads.push(uploadPhotoNow(d.photoId, imgData));
-      }
+      entries.push({ photoId: d.photoId, data: imgData });
     }
-    await Promise.all(uploads);
+    return syncCatalogPhotosSmart(entries);
   };
 
   const handleCopyThemeUrl = async (camp: string) => {
@@ -577,16 +579,21 @@ export default function Catalog3D() {
               className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800"
               onClick={async () => {
                 const res = purgeGarbageData();
-                await syncLiveCatalogSnapshot();
+                const syncStats = await syncLiveCatalogSnapshot();
                 const cleaned =
                   res.removedBrands +
                   res.removedColors +
                   res.removedDesigns +
                   res.compactedMovements;
+                const notes: string[] = [];
+                if (cleaned > 0) notes.push(`${cleaned} duplicados limpios`);
+                if (syncStats.uploadedPreviews > 0) {
+                  notes.push(`${syncStats.uploadedPreviews} optimizados para móvil`);
+                }
                 toast(
-                  cleaned > 0
-                    ? `Catálogo sincronizado (${cleaned} duplicados limpios)`
-                    : 'Catálogo sincronizado',
+                  notes.length > 0
+                    ? `Catálogo sincronizado (${notes.join(', ')})`
+                    : 'Catálogo sincronizado y optimizado',
                   'ok'
                 );
               }}
@@ -1067,11 +1074,44 @@ export function CustomerCatalogView({
 
   const [cloudPayload, setCloudPayload] = useState<SharedCatalogPayload | null>(null);
 
-  // Al abrir el enlace corto #tienda, recuperar la configuración activa compartida por el administrador
+  // Al abrir el enlace corto #tienda, restaurar caché local al instante y mantener la vitrina en vivo
   useEffect(() => {
     if (onExitPreview) return;
+    let active = true;
+
+    void db.photos.get(LIVE_CATALOG_KEY).then((cached) => {
+      if (!active || !cached?.data) return;
+      try {
+        const parsed = JSON.parse(cached.data) as SharedCatalogPayload;
+        if (parsed && Array.isArray(parsed.colors) && parsed.colors.length > 0) {
+          setCloudPayload((prev) => prev || parsed);
+        }
+      } catch {
+        /* ignorar caché dañada */
+      }
+    });
+
+    if (getFirebaseConfig()) {
+      const unsub = subscribeLiveCatalogFirebase((latest) => {
+        if (!active) return;
+        setCloudPayload(latest);
+        try {
+          void db.photos.put({
+            id: LIVE_CATALOG_KEY,
+            data: JSON.stringify(latest),
+            synced: 1,
+            createdAt: Date.now()
+          });
+        } catch {}
+      });
+      return () => {
+        active = false;
+        unsub();
+      };
+    }
+
     void fetchSharedPhoto(LIVE_CATALOG_KEY).then((raw) => {
-      if (!raw) return;
+      if (!active || !raw) return;
       try {
         const parsed = JSON.parse(raw) as SharedCatalogPayload;
         if (parsed && Array.isArray(parsed.colors) && parsed.colors.length > 0) {
@@ -1081,12 +1121,9 @@ export function CustomerCatalogView({
         /* usar estado en vivo */
       }
     });
-
-    // Suscripción reactiva en tiempo real a Firebase para reflejar cambios y nuevos diseños al instante
-    const unsub = subscribeLiveCatalogFirebase((latest) => {
-      setCloudPayload(latest);
-    });
-    return () => unsub();
+    return () => {
+      active = false;
+    };
   }, [onExitPreview]);
 
   // Combinar datos en vivo de Supabase con la configuración compartida
@@ -1261,7 +1298,33 @@ export function CustomerCatalogView({
     whatsappHref: string;
   } | null>(null);
 
-  const { clientDesigns } = useCatalogDesigns(payload.designs);
+  const { clientDesigns, isLoadingDesigns } = useCatalogDesigns(payload.designs, {
+    preferWebPreview: true,
+    priorityCampaign: isCampaignLocked ? clientCampaign : null,
+    lockedCampaign: isCampaignLocked
+  });
+
+  const userTouchedDesignRef = useRef<boolean>(Boolean(initialDesignUrl));
+
+  useEffect(() => {
+    if (userTouchedDesignRef.current || designUrl || !clientDesigns.length) return;
+    const scoped =
+      clientCampaign && clientCampaign !== 'all'
+        ? clientDesigns.filter((d) => campaignsMatch(d.campaign, clientCampaign))
+        : clientDesigns;
+    const firstReady = (scoped.length > 0 ? scoped : clientDesigns).find((d) => Boolean(d.imageUrl));
+    if (!firstReady || !firstReady.imageUrl) return;
+    setDesignUrl(firstReady.imageUrl);
+    setActiveCatalogDesignId(firstReady.id);
+    setSelectedDesignName(firstReady.name);
+    setSelectedDesignCode(firstReady.code || null);
+    setSelectedDesignPhotoId(firstReady.photoId);
+    setPlacement(firstReady.placement || 'back');
+    if (selectedColor && !isColorCompatibleWithDesign(selectedColor, firstReady).allowed) {
+      const compatColor = payload.colors.find((c) => isColorCompatibleWithDesign(c, firstReady).allowed);
+      if (compatColor) setSelectedColor(compatColor);
+    }
+  }, [clientDesigns, clientCampaign, designUrl, selectedColor, payload.colors]);
 
   const availableCampaigns = useMemo(() => {
     const fromDesigns = clientDesigns
@@ -1458,6 +1521,7 @@ export function CustomerCatalogView({
     toast(`Agregado: ${summarySizes} (${selectedColor?.name})`, 'ok');
 
     if (startNextShirt) {
+      userTouchedDesignRef.current = true;
       setDesignUrl(null);
       setActiveCatalogDesignId(null);
       setSelectedDesignName(null);
@@ -1579,11 +1643,15 @@ export function CustomerCatalogView({
         } catch {
           itemThumb = null;
         }
+        const isCustomClientPhoto =
+          !it.designId || !it.photoId || it.photoId.startsWith('photo_client_');
         if (!itemPid) {
           itemPid = `photo_${orderId}_${i}`;
         }
-        uploadPromises.push(savePhoto(itemPid, it.photoUrl, 0));
-        uploadPromises.push(uploadPhotoNow(itemPid, it.photoUrl));
+        if (isCustomClientPhoto) {
+          uploadPromises.push(savePhoto(itemPid, it.photoUrl, 0));
+          uploadPromises.push(uploadPhotoNow(itemPid, it.photoUrl));
+        }
       }
 
       if (!mainThumbUrl && itemThumb) mainThumbUrl = itemThumb;
@@ -1790,27 +1858,24 @@ export function CustomerCatalogView({
             )}
 
             <div className="inline-flex shrink-0 items-center rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm">
-              {money(unitPrice)}
+              {money(unitPrice)} c/u
             </div>
           </div>
         </div>
       </header>
 
-      <div ref={wizardTopRef} className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
-        {/* PROGRESO ÚNICO E INSTRUCCIÓN CLARA DEL PASO ACTUAL */}
-        <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+      <div ref={wizardTopRef} className="mx-auto max-w-2xl space-y-3 px-3 pt-3">
+        {/* PROGRESO COMPACTO DEL ASISTENTE EN 3 PASOS */}
+        <div className="rounded-[18px] border border-slate-200/80 bg-white px-3.5 py-2.5 shadow-sm">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <h2 className="truncate text-sm font-extrabold tracking-tight text-slate-900">
+              {WIZARD_STEPS[step].title}
+            </h2>
+            <span className="shrink-0 text-[11px] font-bold text-slate-500 tabular-nums">
               Paso {step + 1} de {WIZARD_LAST + 1}
             </span>
           </div>
-          <h2 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">
-            {WIZARD_STEPS[step].title}
-          </h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {WIZARD_STEPS[step].subtitle}
-          </p>
-          <div className="mt-3 grid grid-cols-4 gap-1.5">
+          <div className="grid grid-cols-3 gap-1.5">
             {WIZARD_STEPS.map((stInfo, i) => {
               const unlocked = i <= maxStepReached || (i === WIZARD_LAST && customerCart.length > 0);
               const active = i === step;
@@ -1846,7 +1911,7 @@ export function CustomerCatalogView({
           </div>
         </div>
 
-        {step <= 1 ? (
+        {step === 0 ? (
           <InteractiveShirt3D
             hex={selectedColor?.hex || '#111827'}
             colorName={selectedColor?.name || ''}
@@ -1857,6 +1922,7 @@ export function CustomerCatalogView({
             designOffsetX={offsetX}
             designOffsetY={offsetY}
             onDesignChange={(patch) => {
+              userTouchedDesignRef.current = true;
               if (patch.placement !== undefined) {
                 setPlacement(patch.placement);
                 setJustAddedToCart(false);
@@ -1871,6 +1937,7 @@ export function CustomerCatalogView({
               if (patch.photoId !== undefined) setSelectedDesignPhotoId(patch.photoId);
             }}
             onClearDesign={() => {
+              userTouchedDesignRef.current = true;
               setDesignUrl(null);
               setActiveCatalogDesignId(null);
               setSelectedDesignName(null);
@@ -1880,6 +1947,7 @@ export function CustomerCatalogView({
             }}
             onUploadFile={async (file) => {
               try {
+                userTouchedDesignRef.current = true;
                 const autoJpg = isJpgFile(file);
                 const raw = await compressImage(file, 2400, 0.96, false);
                 const processed = autoJpg ? await applyBackgroundRemoval(raw, true, 34) : raw;
@@ -1922,8 +1990,10 @@ export function CustomerCatalogView({
             onChangeActiveCampaign={isCampaignLocked ? undefined : setClientCampaign}
             lockedCampaign={isCampaignLocked}
             defaultViewMode="model"
+            isLoadingDesigns={isLoadingDesigns}
             onSelectCatalogDesign={(d) => {
               if (!d.imageUrl) return;
+              userTouchedDesignRef.current = true;
               setDesignUrl(d.imageUrl);
               setActiveCatalogDesignId(d.id);
               setSelectedDesignName(d.name);
@@ -1935,9 +2005,9 @@ export function CustomerCatalogView({
               setOffsetY(0);
             }}
             autoMotion
-            wizardStep={WIZARD_KEYS[step]}
+            wizardStep="studio"
           />
-        ) : step === 2 ? (
+        ) : step === 1 ? (
           <div className="flex items-center gap-3 rounded-[22px] border border-slate-200/80 bg-white p-3 shadow-sm">
             <div
               className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-black/10 p-1.5 shadow-inner"
@@ -1971,16 +2041,16 @@ export function CustomerCatalogView({
             </div>
             <button
               type="button"
-              onClick={() => goToStep(1)}
+              onClick={() => goToStep(0)}
               className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 active:scale-95"
             >
-              Editar 3D
+              Cambiar
             </button>
           </div>
         ) : null}
 
-        {/* PASO 3: SELECCIÓN MULTI-TALLA, CANTIDAD Y GUÍA DE MEDIDAS */}
-        {step === 2 && (
+        {/* PASO 2: SELECCIÓN MULTI-TALLA, CANTIDAD Y GUÍA DE MEDIDAS */}
+        {step === 1 && (
           <div className="space-y-3">
             <section className="space-y-4 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2124,7 +2194,7 @@ export function CustomerCatalogView({
                 onClick={() => handleAddToCart(true)}
                 className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-4 text-xs font-bold text-slate-900 shadow-sm transition hover:border-slate-400 hover:bg-slate-100 active:scale-[0.99]"
               >
-                + Agregar al carrito y elegir otro color o diseño
+                + Agregar otra camisa distinta
               </button>
               <p className="mt-1.5 text-[11px] text-slate-500">
                 ¿Quieres agregar otro diseño o color distinto en el mismo pedido? Agrégalo aquí.
@@ -2133,8 +2203,8 @@ export function CustomerCatalogView({
           </div>
         )}
 
-        {/* PASO 4: RESUMEN DEL PEDIDO Y DATOS DE ENTREGA */}
-        {step === 3 && (
+        {/* PASO 3: RESUMEN DEL PEDIDO Y DATOS DE ENTREGA */}
+        {step === 2 && (
           <div className="space-y-3">
             {/* RESUMEN VISIBLE DEL PEDIDO */}
             <section className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
@@ -2188,7 +2258,7 @@ export function CustomerCatalogView({
                           {it.id.startsWith('__draft__') && (
                             <button
                               type="button"
-                              onClick={() => goToStep(1)}
+                              onClick={() => goToStep(0)}
                               className="text-[11px] font-semibold text-slate-500 underline hover:text-slate-900"
                             >
                               Editar
@@ -2262,48 +2332,66 @@ export function CustomerCatalogView({
               </div>
 
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-                <input
-                  type="text"
-                  autoComplete="name"
-                  maxLength={80}
-                  value={customerName}
-                  onChange={(e) => {
-                    setCustomerName(e.target.value);
-                    setDeliveryError(null);
-                  }}
-                  placeholder="Nombre completo *"
-                  className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
-                    deliveryError && !isNameValid
-                      ? 'border-red-400 bg-red-50/40 focus:border-red-500'
-                      : 'border-slate-200 focus:border-slate-900'
-                  }`}
-                />
-                <input
-                  type="tel"
-                  inputMode="tel"
-                  autoComplete="tel"
-                  maxLength={24}
-                  value={customerPhone}
-                  onChange={(e) => {
-                    setCustomerPhone(e.target.value);
-                    setDeliveryError(null);
-                  }}
-                  placeholder="Teléfono / WhatsApp (ej. 9999-9999) *"
-                  className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
-                    deliveryError && !isPhoneValid
-                      ? 'border-red-400 bg-red-50/40 focus:border-red-500'
-                      : 'border-slate-200 focus:border-slate-900'
-                  }`}
-                />
-                <input
-                  type="text"
-                  autoComplete="street-address"
-                  maxLength={300}
-                  value={customerAddress}
-                  onChange={(e) => setCustomerAddress(e.target.value)}
-                  placeholder="Dirección o ciudad (opcional)"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
-                />
+                <div className="space-y-1">
+                  <label htmlFor="buyer-name" className="block text-xs font-semibold text-slate-600">
+                    Nombre completo *
+                  </label>
+                  <input
+                    id="buyer-name"
+                    type="text"
+                    autoComplete="name"
+                    maxLength={80}
+                    value={customerName}
+                    onChange={(e) => {
+                      setCustomerName(e.target.value);
+                      setDeliveryError(null);
+                    }}
+                    placeholder="Tu nombre *"
+                    className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
+                      deliveryError && !isNameValid
+                        ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+                        : 'border-slate-200 focus:border-slate-900'
+                    }`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="buyer-phone" className="block text-xs font-semibold text-slate-600">
+                    Teléfono / WhatsApp *
+                  </label>
+                  <input
+                    id="buyer-phone"
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    maxLength={24}
+                    value={customerPhone}
+                    onChange={(e) => {
+                      setCustomerPhone(e.target.value);
+                      setDeliveryError(null);
+                    }}
+                    placeholder="Ej. 9999-9999 *"
+                    className={`w-full rounded-xl border bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none ${
+                      deliveryError && !isPhoneValid
+                        ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+                        : 'border-slate-200 focus:border-slate-900'
+                    }`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="buyer-address" className="block text-xs font-semibold text-slate-600">
+                    Dirección o ciudad (opcional)
+                  </label>
+                  <input
+                    id="buyer-address"
+                    type="text"
+                    autoComplete="street-address"
+                    maxLength={300}
+                    value={customerAddress}
+                    onChange={(e) => setCustomerAddress(e.target.value)}
+                    placeholder="Ciudad o referencia"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
+                  />
+                </div>
               </div>
 
               {deliveryError && (
@@ -2395,7 +2483,7 @@ export function CustomerCatalogView({
                 onClick={() => goToStep(step + 1)}
                 className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-slate-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
               >
-                Siguiente →
+                {step === 0 ? 'Elegir tallas →' : 'Revisar pedido →'}
               </button>
             ) : (
               <button
@@ -2403,7 +2491,7 @@ export function CustomerCatalogView({
                 onClick={() => void handleSendOrderWhatsApp()}
                 className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-[#25D366] px-5 text-sm font-bold text-white shadow-md transition hover:bg-[#1ebe5b] active:scale-95"
               >
-                {isDeliveryReady ? '✅ Confirmar y Enviar a WhatsApp' : '🔒 Completa nombre y WhatsApp'}
+                {isDeliveryReady ? '✅ Enviar pedido por WhatsApp' : '🔒 Completa nombre y WhatsApp'}
               </button>
             )}
           </div>

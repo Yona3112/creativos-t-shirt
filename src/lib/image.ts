@@ -24,6 +24,60 @@ export function isJpgFile(file: File): boolean {
  * Crea una miniatura ligera en formato DataURL (PNG con transparencia) para adjuntar a pedidos web
  * y mostrar la fotito diminuta del diseño en el Taller y en WhatsApp sin saturar la base de datos.
  */
+export const WEB_PREVIEW_SUFFIX = '__web';
+
+export function webPreviewPhotoId(photoId: string): string {
+  const clean = (photoId || '').trim();
+  if (!clean) return clean;
+  return clean.endsWith(WEB_PREVIEW_SUFFIX) ? clean : `${clean}${WEB_PREVIEW_SUFFIX}`;
+}
+
+export function isWebPreviewPhotoId(id: string): boolean {
+  return typeof id === 'string' && id.endsWith(WEB_PREVIEW_SUFFIX);
+}
+
+/**
+ * Genera una versión ligera WebP con canal Alpha transparente (ideal para el catálogo web móvil)
+ * que conserva nitidez visual sin reemplazar ni alterar el archivo maestro en alta resolución del Taller.
+ */
+export async function createWebPreviewImage(
+  sourceDataUrl: string,
+  maxSide = 768
+): Promise<string> {
+  const img = await loadImageFromUrl(sourceDataUrl);
+  const srcW = img.naturalWidth || img.width || 1;
+  const srcH = img.naturalHeight || img.height || 1;
+
+  const renderScaled = (limit: number, mime: string, quality?: number): string => {
+    const scale = Math.min(1, limit / Math.max(srcW, srcH));
+    const w = Math.max(1, Math.round(srcW * scale));
+    const h = Math.max(1, Math.round(srcH * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return sourceDataUrl;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return quality !== undefined ? canvas.toDataURL(mime, quality) : canvas.toDataURL(mime);
+  };
+
+  const webpHigh = renderScaled(maxSide, 'image/webp', 0.88);
+  if (webpHigh.startsWith('data:image/webp')) {
+    if (webpHigh.length <= 600_000) return webpHigh;
+    const webpMid = renderScaled(maxSide, 'image/webp', 0.78);
+    if (webpMid.length <= 600_000) return webpMid;
+    return renderScaled(Math.min(maxSide, 560), 'image/webp', 0.78);
+  }
+
+  // Fallback para navegadores sin codificador WebP en canvas (garantiza < 1 doc de Firestore)
+  const pngFallback = renderScaled(Math.min(maxSide, 540), 'image/png');
+  if (pngFallback.length <= 850_000) return pngFallback;
+  return renderScaled(Math.min(maxSide, 420), 'image/png');
+}
+
 export async function createDesignThumbnail(
   sourceDataUrl: string,
   maxSide = 240

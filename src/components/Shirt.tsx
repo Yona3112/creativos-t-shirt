@@ -633,7 +633,8 @@ export function InteractiveShirt3D({
   stockBadge,
   wizardStep,
   lockedCampaign = false,
-  defaultViewMode
+  defaultViewMode,
+  isLoadingDesigns = false
 }: {
   hex: string;
   colorName: string;
@@ -715,11 +716,13 @@ export function InteractiveShirt3D({
   autoMotion?: boolean;
   stockBadge?: { available: boolean; text: string } | null;
   /** Modo asistente (tienda): limita qué controles se muestran por paso */
-  wizardStep?: 'color' | 'design' | 'size' | 'data' | null;
+  wizardStep?: 'studio' | 'color' | 'design' | 'size' | 'data' | null;
   /** True cuando la tienda se abrió desde un enlace dedicado a una temática */
   lockedCampaign?: boolean;
   /** Modo de vista inicial ('model' foto real en escenario o '3d' glb) */
   defaultViewMode?: 'model' | '3d';
+  /** True mientras el catálogo descarga vistas iniciales */
+  isLoadingDesigns?: boolean;
 }) {
   const [mode] = useState<MotionMode>('wind');
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
@@ -1058,7 +1061,7 @@ export function InteractiveShirt3D({
         {/* ESCENARIO 3D COMPACTO TIPO JIRO */}
         <div
           className={`relative overflow-hidden rounded-[24px] shadow-sm transition-colors duration-500 ${
-            wizardStep === 'design' ? 'p-2.5 sm:p-4' : 'p-3.5 sm:p-6'
+            wizardStep === 'design' || wizardStep === 'studio' ? 'p-2.5 sm:p-4' : 'p-3.5 sm:p-6'
           } ${themeStyle.stageClass}`}
         >
           {/* Barra superior flotante: Espalda/Frente(/Perfil), Modelo/3D + Zoom */}
@@ -1163,7 +1166,9 @@ export function InteractiveShirt3D({
             <div className="mt-2 space-y-2">
               <div
                 className={`relative mx-auto w-full ${
-                  wizardStep === 'design' ? 'max-w-[330px] sm:max-w-[370px]' : 'max-w-[350px] sm:max-w-[390px]'
+                  wizardStep === 'design' || wizardStep === 'studio'
+                    ? 'max-w-[330px] sm:max-w-[370px]'
+                    : 'max-w-[350px] sm:max-w-[390px]'
                 }`}
                 style={{ aspectRatio: '4 / 5' }}
               >
@@ -1171,13 +1176,14 @@ export function InteractiveShirt3D({
                   <span>{MOCKUP_SCENES[activeScene].badge}</span>
                 </div>
 
-                {(!wizardStep || wizardStep === 'design') && !designUrl && (
+                {(!wizardStep || wizardStep === 'design' || wizardStep === 'studio') && !designUrl && (
                   <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/40 bg-black/60 px-3 py-0.5 text-[10px] font-semibold text-white shadow-sm backdrop-blur-md">
                     📍 {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
                   </div>
                 )}
 
-                {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
+                {(!wizardStep || wizardStep === 'design' || wizardStep === 'studio') &&
+                  readySlideDesigns.length > 1 && (
                   <>
                     <button
                       type="button"
@@ -1208,7 +1214,8 @@ export function InteractiveShirt3D({
                   designOffsetY={designOffsetY}
                   zoom={zoom}
                   onSwipeDesign={
-                    (!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1
+                    (!wizardStep || wizardStep === 'design' || wizardStep === 'studio') &&
+                    readySlideDesigns.length > 1
                       ? (delta) => stepCatalogDesign(delta)
                       : undefined
                   }
@@ -1235,7 +1242,7 @@ export function InteractiveShirt3D({
                 </div>
               )}
 
-              {wizardStep === 'design' && readySlideDesigns.length > 1 && (
+              {(wizardStep === 'design' || wizardStep === 'studio') && readySlideDesigns.length > 1 && (
                 <p className="text-center text-[10px] font-medium text-slate-500">
                   Desliza sobre el modelo para cambiar diseño
                 </p>
@@ -1244,7 +1251,9 @@ export function InteractiveShirt3D({
           ) : (
             <div
               className={`relative mx-auto flex w-full items-center justify-center ${
-                wizardStep === 'design' ? 'max-w-[215px] sm:max-w-[285px]' : 'max-w-[300px] sm:max-w-[350px]'
+                wizardStep === 'design' || wizardStep === 'studio'
+                  ? 'max-w-[215px] sm:max-w-[285px]'
+                  : 'max-w-[300px] sm:max-w-[350px]'
               }`}
               style={{ aspectRatio: '1 / 1' }}
             >
@@ -1256,13 +1265,14 @@ export function InteractiveShirt3D({
               />
               <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-4 w-36 rounded-full bg-black/25 blur-md" />
 
-              {(!wizardStep || wizardStep === 'design') && !designUrl && (
+              {(!wizardStep || wizardStep === 'design' || wizardStep === 'studio') && !designUrl && (
                 <div className="pointer-events-none absolute bottom-3 z-10 rounded-full border border-slate-200 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 shadow-sm backdrop-blur-md">
                   📍 {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
                 </div>
               )}
 
-              {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
+              {(!wizardStep || wizardStep === 'design' || wizardStep === 'studio') &&
+                readySlideDesigns.length > 1 && (
                 <>
                   <button
                     type="button"
@@ -1301,7 +1311,7 @@ export function InteractiveShirt3D({
           )}
 
           {/* Barra flotante Jiro de 1 línea para ajustar o quitar diseño */}
-          {designUrl && (!wizardStep || wizardStep === 'design') && (
+          {designUrl && (!wizardStep || wizardStep === 'design' || wizardStep === 'studio') && (
             <div className="mt-1 space-y-2">
               <div className="flex justify-center">
                 <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-sm backdrop-blur-md">
@@ -1447,8 +1457,8 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Aviso discreto si el diseño cambió automáticamente de color en Paso 2 */}
-          {wizardStep === 'design' && colorSwitchNote && (
+          {/* Aviso discreto si el diseño cambió automáticamente de color */}
+          {(wizardStep === 'design' || wizardStep === 'studio') && colorSwitchNote && (
             <div className="mt-2 flex justify-center">
               <div className="rounded-full bg-amber-50 px-3 py-1 text-[11px] font-semibold text-amber-800 shadow-sm">
                 ✨ {colorSwitchNote}
@@ -1456,8 +1466,8 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Selector de Color: exclusivo del Paso 1 (sin duplicar en Paso 2) */}
-          {(!wizardStep || wizardStep === 'color') &&
+          {/* Selector de Color */}
+          {(!wizardStep || wizardStep === 'color' || wizardStep === 'studio') &&
             colorOptions &&
             colorOptions.length > 0 &&
             onSelectColor &&
@@ -1546,11 +1556,14 @@ export function InteractiveShirt3D({
         </div>
 
         {/* BANDEJA COMPACTA DE DISEÑOS TIPO JIRO */}
-        {(!wizardStep || wizardStep === 'design') && (
+        {(!wizardStep || wizardStep === 'design' || wizardStep === 'studio') && (
         <div className="rounded-[22px] border border-slate-200/90 bg-white p-3 shadow-sm sm:p-4">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <h3 className="text-sm font-semibold tracking-tight text-slate-900">Elige un diseño</h3>
+              {isLoadingDesigns && filteredCatalogDesigns.some((d) => !d.imageUrl) && (
+                <span className="text-[11px] font-medium text-slate-400">Cargando...</span>
+              )}
               {lockedCampaign && activeCampaign && activeCampaign !== 'all' ? (
                 <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-[11px] font-semibold text-white">
                   Colección {activeCampaign}
@@ -1630,7 +1643,7 @@ export function InteractiveShirt3D({
             ref={clientCarouselRef}
             className="flex snap-x snap-mandatory gap-2.5 overflow-x-auto scroll-smooth pb-0.5"
           >
-            {filteredCatalogDesigns.map((d) => {
+            {filteredCatalogDesigns.map((d, idx) => {
               const isSelected =
                 (activeCatalogDesignId && activeCatalogDesignId === d.id) ||
                 (!!designUrl && !!d.imageUrl && designUrl === d.imageUrl);
@@ -1681,14 +1694,34 @@ export function InteractiveShirt3D({
                     style={{ backgroundColor: thumbBg }}
                   >
                     {d.imageUrl ? (
-                      <img
-                        src={d.imageUrl}
-                        alt={d.name}
-                        className="h-full w-full object-contain drop-shadow-sm"
-                        loading="lazy"
-                      />
+                      idx < 4 ? (
+                        <img
+                          src={d.imageUrl}
+                          alt={d.name}
+                          width={96}
+                          height={96}
+                          decoding="async"
+                          className="h-full w-full object-contain drop-shadow-sm"
+                        />
+                      ) : (
+                        <img
+                          src={d.imageUrl}
+                          alt={d.name}
+                          width={96}
+                          height={96}
+                          decoding="async"
+                          loading="lazy"
+                          fetchPriority="low"
+                          className="h-full w-full object-contain drop-shadow-sm"
+                        />
+                      )
                     ) : (
-                      <span className="text-[10px] font-medium text-slate-400">...</span>
+                      <div
+                        className={`h-full w-full animate-pulse rounded-md ${
+                          isSelected ? 'bg-white/15' : 'bg-slate-200/80'
+                        }`}
+                        aria-label="Cargando diseño"
+                      />
                     )}
                   </div>
                   <div
