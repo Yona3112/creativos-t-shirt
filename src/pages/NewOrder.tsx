@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CartLine, Customer, Order, Section } from '../lib/types';
 import { getState, notifyPhotos, useAppState, useStock } from '../lib/store';
-import { activeBrands, brandColors, isCustomOrderSpec, normalPrice, repriceCart, tierPrice, vkey } from '../lib/inventory';
+import { activeBrands, brandColors, repriceCart, vkey } from '../lib/inventory';
 import { money } from '../lib/money';
 import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K, isJpgFile } from '../lib/image';
@@ -78,7 +78,10 @@ function emptyDraft(): Draft {
     s.paymentMethods.find((p) => !p.toLowerCase().includes('pendiente')) ||
     s.paymentMethods[0] ||
     'Efectivo';
-  const plainWork = s.workTypes.find((w) => w.toLowerCase().includes('lisa')) || 'Camisa Lisa';
+  const defaultWork =
+    s.workTypes.find((w) => w.toLowerCase().includes('espalda')) ||
+    s.workTypes.find((w) => !w.toLowerCase().includes('lisa')) ||
+    'DTF Espalda';
   return {
     lines: [],
     photo: null,
@@ -94,7 +97,7 @@ function emptyDraft(): Draft {
     shipping: s.shipping,
     paymentMethod: nonPendingMethod,
     paymentMode: 'full',
-    workType: plainWork,
+    workType: defaultWork,
     deposit: null,
     notes: ''
   };
@@ -203,9 +206,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
   const lines = useMemo(() => repriceCart(draft.lines, settings, state.brands), [draft.lines, settings, state.brands]);
   const cartQty = lines.reduce((s, l) => s + l.qty, 0);
-  const projectedQty = cartQty + Math.max(1, currentDraftQty);
-  const plainWorkTypeDefault =
-    settings.workTypes.find((w) => w.toLowerCase().includes('lisa')) || 'Camisa Lisa';
   const customWorkTypeDefault =
     settings.workTypes.find((w) => w.toLowerCase().includes('espalda')) ||
     settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) ||
@@ -215,12 +215,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const customFrontWorkType =
     settings.workTypes.find((w) => w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')) ||
     customWorkTypeDefault;
-  const isCustomWork = isCustomOrderSpec({
-    workType: draft.workType,
-    photo: draft.photo,
-    designId: draft.designId,
-    designName: draft.designName
-  });
   const clearDraftDesign = () =>
     set({
       photo: null,
@@ -228,11 +222,9 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       designId: null,
       designName: null,
       designCode: null,
-      workType: plainWorkTypeDefault
+      workType: (draft.placement || 'back') === 'back' ? customBackWorkType : customFrontWorkType
     });
-  const autoPrice = isCustomWork
-    ? (settings.priceCustom || 35000)
-    : tierPrice(settings, brand, projectedQty);
+  const autoPrice = settings.priceCustom || 35000;
   const unitPrice = manualPrice ?? autoPrice;
 
   const subtotal = lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
@@ -273,7 +265,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       return false;
     }
     const isManual = manualPrice !== null;
-    const hasDesignForLine = isCustomWork && Boolean(draft.photo || draft.designId || draft.designName);
+    const hasDesignForLine = Boolean(draft.photo || draft.designId || draft.designName);
     const curDesignId = hasDesignForLine ? draft.designId || null : null;
     const curDesignName = hasDesignForLine ? draft.designName || 'Diseño personalizado' : null;
     const curDesignCode = hasDesignForLine ? draft.designCode || null : null;
@@ -283,6 +275,8 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     const curScale = draft.designScale || 2.0;
     const curOffsetX = draft.designOffsetX || 0;
     const curOffsetY = draft.designOffsetY || 0;
+    const lineWorkType =
+      (draft.placement || 'back') === 'center' ? customFrontWorkType : customBackWorkType;
 
     setDraft((d) => {
       const next = [...d.lines];
@@ -318,7 +312,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             scale: curScale,
             offsetX: curOffsetX,
             offsetY: curOffsetY,
-            workType: draft.workType
+            workType: lineWorkType
           });
         }
       }
@@ -578,22 +572,20 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           }
 
           if (matchedB && matchedC) {
-            const lineHasDesign = Boolean(it.designId || it.designName || it.photoId || it.designThumb || itemPhoto);
             const lineIsBack = (it.placement || 'back') === 'back';
-            const lineWorkType = lineHasDesign
-              ? (settings.workTypes.find((w) =>
-                  lineIsBack
-                    ? w.toLowerCase().includes('espalda')
-                    : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
-                ) || customWorkTypeDefault)
-              : plainWorkTypeDefault;
+            const lineWorkType =
+              settings.workTypes.find((w) =>
+                lineIsBack
+                  ? w.toLowerCase().includes('espalda')
+                  : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+              ) || customWorkTypeDefault;
             importedLines.push({
               id: uid(),
               brandId: matchedB.id,
               colorId: matchedC.id,
               size: it.size || 'M',
               qty: Math.max(1, it.qty || 1),
-              unitPrice: it.unitPrice || (lineHasDesign ? (settings.priceCustom || 35000) : tierPrice(settings, matchedB, it.qty || 1)),
+              unitPrice: it.unitPrice || (settings.priceCustom || 35000),
               manualPrice: false,
               designId: it.designId || matchedCatalogDesign?.id || null,
               designName: it.designName || matchedCatalogDesign?.name || null,
@@ -601,7 +593,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               photoId: resolvedItemPhotoId,
               photo: itemPhoto,
               rawPhoto: itemPhoto,
-              placement: lineHasDesign ? (it.placement || 'back') : null,
+              placement: lineIsBack ? 'back' : 'center',
               scale: it.scale || 2.0,
               offsetX: 0,
               offsetY: 0,
@@ -610,18 +602,14 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           }
         }
 
-        const anyImportedDesign = importedLines.some((l) =>
-          Boolean(l.photo || l.designId || l.designName || l.photoId)
-        );
         const isBack = firstPlacement === 'back';
         const sideExplicit = isBack ? 'Espalda' : 'Frente';
-        const matchedWorkType = anyImportedDesign
-          ? (settings.workTypes.find((w) =>
-              isBack
-                ? w.toLowerCase().includes('espalda')
-                : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
-            ) || customWorkTypeDefault)
-          : plainWorkTypeDefault;
+        const matchedWorkType =
+          settings.workTypes.find((w) =>
+            isBack
+              ? w.toLowerCase().includes('espalda')
+              : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
+          ) || customWorkTypeDefault;
 
         const noteParts = [
           webOrder.customerAddress ? `Nota/Dirección cliente: ${webOrder.customerAddress}` : '',
@@ -629,7 +617,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             ? `Pedido de ${importedLines.length} prendas con diseños variados desde la Tienda 3D`
             : firstDesignName
             ? `Diseño: ${firstDesignCode ? `[${firstDesignCode}] ` : ''}${firstDesignName} (${sideExplicit})`
-            : 'Camisa lisa'
+            : ''
         ].filter(Boolean);
 
         const isPendingPay = Boolean(
@@ -683,7 +671,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         setImportingWebOrder(false);
       }
     },
-    [brands, colors, customWorkTypeDefault, plainWorkTypeDefault, settings, state]
+    [brands, colors, customWorkTypeDefault, settings, state]
   );
 
   const importWebOrderRef = useRef(importCustomerWebOrder);
@@ -973,7 +961,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     setDone(order);
   };
 
-  const normalForBrand = normalPrice(settings, brand);
   const currentDraftLabel = `${color?.name || 'Color'} · ${(draft.placement || 'back') === 'back' ? 'Espalda' : 'Frente'} · ${
     selectedSizeEntries.length > 0
       ? selectedSizeEntries.map((e) => `${e.qty}×${e.size}`).join(', ')
@@ -1020,7 +1007,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                   <span className="rounded bg-amber-400 px-1.5 py-0.5 font-black text-stone-950">
                     {latestWebOrder.designName
                       ? `${latestWebOrder.designName} en ${latestWebOrder.placement === 'back' ? 'ESPALDA (Atrás)' : 'FRENTE (Pecho)'}`
-                      : money(latestWebOrder.unitPrice || normalForBrand)}
+                      : money(latestWebOrder.unitPrice || autoPrice)}
                   </span>
                 </div>
               </div>
@@ -1120,7 +1107,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
 
       {/* PASOS 1 y 2: VISOR 3D + COLOR O DISEÑO Y UBICACIÓN */}
       {wizardStep <= 1 && (
-        <div className="space-y-4">
+        <div className="space-y-2.5">
           {wizardStep === 0 && brands.length > 1 && (
             <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
               <span className="px-2 text-xs font-bold text-slate-500">Marca:</span>
@@ -1140,43 +1127,6 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 </button>
               ))}
             </div>
-          )}
-
-          {wizardStep === 1 && (
-            <section className="rounded-[22px] border border-slate-200/80 bg-white p-3.5 shadow-sm">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-slate-800">¿Dónde irá el diseño?</span>
-                <span className="text-[11px] font-medium text-slate-400">Toca para girar la camisa</span>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100 p-1">
-                {([['back', 'Espalda (Atrás)'], ['center', 'Frente (Pecho)']] as const).map(([k, lbl]) => {
-                  const active = (draft.placement || 'back') === k;
-                  return (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => {
-                        const hasLineDesign = Boolean(draft.photo || draft.designId || draft.designName);
-                        set({
-                          placement: k,
-                          ...(hasLineDesign
-                            ? { workType: k === 'back' ? customBackWorkType : customFrontWorkType }
-                            : {})
-                        });
-                        setJustAddedLine(false);
-                      }}
-                      className={`min-h-[40px] rounded-xl text-xs font-bold transition sm:text-sm ${
-                        active
-                          ? 'bg-slate-900 text-white shadow-sm'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {lbl}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
           )}
 
           <InteractiveShirt3D
@@ -1455,40 +1405,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           </section>
 
           <section className="card space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="section-title mb-0">Precio y resumen</h2>
-              <div className="inline-flex rounded-full bg-slate-100 p-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setManualPrice(null);
-                    clearDraftDesign();
-                    setJustAddedLine(false);
-                  }}
-                  className={`rounded-full px-3 py-1 text-xs font-bold transition ${
-                    !isCustomWork ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  👕 Lisa ({money(normalForBrand)})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setManualPrice(null);
-                    set({
-                      workType:
-                        (draft.placement || 'back') === 'back' ? customBackWorkType : customFrontWorkType
-                    });
-                    setJustAddedLine(false);
-                  }}
-                  className={`rounded-full px-3 py-1 text-xs font-bold transition ${
-                    isCustomWork ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  ✨ Personalizada ({money(settings.priceCustom || 35000)})
-                </button>
-              </div>
-            </div>
+            <h2 className="section-title mb-0">Precio y resumen</h2>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-[160px] flex-1">
@@ -2070,7 +1987,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 onClick={() => goToWizardStep(wizardStep + 1)}
                 className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-slate-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
               >
-                {wizardStep === 1 && !draft.photo ? 'Seguir sin diseño (Lisa) →' : 'Siguiente →'}
+                Siguiente →
               </button>
             ) : (
               <button

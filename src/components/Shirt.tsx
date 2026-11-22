@@ -8,7 +8,6 @@ import {
   type DesignToneAnalysis
 } from '../lib/image';
 import type { AllowedColorMode, DesignTone } from '../lib/types';
-import { WesternDesignModal } from './WesternDesignModal';
 
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
 export type MotionMode = 'wind' | 'walk' | 'orbit';
@@ -724,7 +723,6 @@ export function InteractiveShirt3D({
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
   const clientCarouselRef = useRef<HTMLDivElement>(null);
   const adminCarouselRef = useRef<HTMLDivElement>(null);
-  const [isWesternModalOpen, setIsWesternModalOpen] = useState(false);
   const [showPositionSliders, setShowPositionSliders] = useState(false);
   const [colorSwitchNote, setColorSwitchNote] = useState<string | null>(null);
   const [designSearch, setDesignSearch] = useState('');
@@ -935,18 +933,6 @@ export function InteractiveShirt3D({
     }
   };
 
-  const handleApplyWesternDesign = (dataUrl: string, name: string, targetPlacement: 'back' | 'center') => {
-    onSelectCatalogDesign?.({
-      id: `custom_${Date.now()}`,
-      name,
-      placement: targetPlacement,
-      imageUrl: dataUrl,
-      photoId: `photo_${Date.now()}`,
-      clientVisible: true
-    });
-    onDesignChange?.({ placement: targetPlacement, scale: 2.0, offsetX: 0, offsetY: 0 });
-  };
-
   useEffect(() => {
     if (placement === 'back') setTargetAngleY(180);
     else setTargetAngleY(0);
@@ -1020,7 +1006,7 @@ export function InteractiveShirt3D({
   if (!isStoreOwner || Boolean(wizardStep)) {
     const isBackSide = placement === 'back';
     return (
-      <div className="relative select-none space-y-4">
+      <div className="relative select-none space-y-2.5">
         {onUploadFile && (
           <input
             ref={uploadInputRef}
@@ -1034,68 +1020,56 @@ export function InteractiveShirt3D({
             }}
           />
         )}
-        {/* ESCENARIO 3D ESTILO APPLE STUDIO */}
+        {/* ESCENARIO 3D COMPACTO TIPO JIRO */}
         <div
-          className={`relative overflow-hidden rounded-[28px] p-4 shadow-xl transition-colors duration-500 sm:p-6 ${themeStyle.stageClass}`}
+          className={`relative overflow-hidden rounded-[24px] shadow-sm transition-colors duration-500 ${
+            wizardStep === 'design' ? 'p-2.5 sm:p-4' : 'p-3.5 sm:p-6'
+          } ${themeStyle.stageClass}`}
         >
-          {/* Barra superior flotante minimalista: Vista/Lado + Zoom */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            {wizardStep === 'design' ? (
-              <button
-                type="button"
-                onClick={() =>
-                  setTargetAngleY((prev) =>
-                    prev === 38 ? (placement === 'back' ? 180 : 0) : 38
-                  )
-                }
-                className={`inline-flex h-8 items-center gap-1 rounded-full px-3 text-[11px] font-semibold backdrop-blur-md transition sm:text-xs ${
-                  targetAngleY === 38
-                    ? 'bg-white text-slate-950 shadow-sm'
-                    : 'bg-black/45 text-white/85 ring-1 ring-white/15 hover:text-white'
-                }`}
-              >
-                <span>{targetAngleY === 38 ? 'Ver de frente/espalda' : 'Vista Perfil 3D'}</span>
-              </button>
-            ) : (
-              <div className="inline-flex rounded-full bg-black/45 p-1 backdrop-blur-md ring-1 ring-white/15">
-                {(
-                  [
-                    ['back', 180, 'Espalda'],
-                    ['center', 0, 'Frente'],
-                    ['profile', 38, 'Perfil']
-                  ] as const
-                ).map(([sideKey, angle, lbl]) => {
-                  const active = targetAngleY === angle;
-                  return (
-                    <button
-                      key={lbl}
-                      type="button"
-                      onClick={() => {
-                        setTargetAngleY(angle);
-                        if (sideKey === 'back' || sideKey === 'center') {
-                          onDesignChange?.({ placement: sideKey, offsetX: 0, offsetY: 0 });
-                        }
-                      }}
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition sm:px-3.5 sm:text-xs ${
-                        active
-                          ? 'bg-white text-slate-950 shadow-sm'
-                          : 'text-white/80 hover:text-white'
-                      }`}
-                    >
-                      {lbl}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+          {/* Barra superior flotante: Espalda/Frente/Perfil + Zoom */}
+          <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex rounded-xl border border-slate-200/90 bg-white/95 p-0.5 shadow-sm backdrop-blur-md">
+              {(
+                [
+                  ['back', 180, 'Espalda'],
+                  ['center', 0, 'Frente'],
+                  ['profile', 38, 'Perfil']
+                ] as const
+              ).map(([sideKey, angle, lbl]) => {
+                const active =
+                  targetAngleY === angle ||
+                  (targetAngleY === null &&
+                    ((angle === 180 && placement === 'back') ||
+                      (angle === 0 && placement !== 'back')));
+                return (
+                  <button
+                    key={lbl}
+                    type="button"
+                    onClick={() => {
+                      setTargetAngleY(angle);
+                      if (sideKey === 'back' || sideKey === 'center') {
+                        onDesignChange?.({ placement: sideKey, offsetX: 0, offsetY: 0 });
+                      }
+                    }}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition sm:px-3 sm:text-xs ${
+                      active
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-700 hover:text-slate-950'
+                    }`}
+                  >
+                    {lbl}
+                  </button>
+                );
+              })}
+            </div>
 
             <div className="flex items-center gap-1.5">
               {isStoreOwner && stockBadge && (
                 <span
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold backdrop-blur-md ${
+                  className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1 text-[11px] font-semibold backdrop-blur-md ${
                     stockBadge.available
-                      ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-400/30'
-                      : 'bg-amber-500/20 text-amber-100 ring-1 ring-amber-400/30'
+                      ? 'border-emerald-200 bg-emerald-50/95 text-emerald-800'
+                      : 'border-amber-200 bg-amber-50/95 text-amber-800'
                   }`}
                 >
                   {stockBadge.text}
@@ -1104,10 +1078,10 @@ export function InteractiveShirt3D({
               <button
                 type="button"
                 onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
-                className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-semibold backdrop-blur-md transition sm:text-xs ${
+                className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-xl border px-2.5 text-[11px] font-semibold shadow-sm backdrop-blur-md transition sm:text-xs ${
                   zoom > 1.35
-                    ? 'bg-white text-slate-950 shadow-sm'
-                    : 'bg-black/45 text-white/85 ring-1 ring-white/15 hover:text-white'
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200/90 bg-white/95 text-slate-700 hover:text-slate-950'
                 }`}
               >
                 <span>{zoom > 1.35 ? 'Alejar' : 'Acercar'}</span>
@@ -1115,9 +1089,11 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Lienzo 3D Central con botones laterales tipo Slide */}
+          {/* Lienzo 3D Central compacto para ver camisa + diseños juntos */}
           <div
-            className="relative mx-auto flex w-full max-w-[360px] items-center justify-center"
+            className={`relative mx-auto flex w-full items-center justify-center ${
+              wizardStep === 'design' ? 'max-w-[215px] sm:max-w-[285px]' : 'max-w-[300px] sm:max-w-[350px]'
+            }`}
             style={{ aspectRatio: '1 / 1' }}
           >
             <div
@@ -1126,11 +1102,11 @@ export function InteractiveShirt3D({
                 background: `radial-gradient(circle, ${hex}88 0%, ${themeStyle.auraColor} 55%, transparent 75%)`
               }}
             />
-            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-5 w-44 rounded-full bg-black/60 blur-md" />
+            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-4 w-36 rounded-full bg-black/25 blur-md" />
 
             {(!wizardStep || wizardStep === 'design') && !designUrl && (
-              <div className="pointer-events-none absolute bottom-5 z-10 rounded-full bg-black/55 px-3 py-1 text-[11px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-md">
-                📍 Zona de diseño: {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
+              <div className="pointer-events-none absolute bottom-3 z-10 rounded-full border border-slate-200 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 shadow-sm backdrop-blur-md">
+                📍 {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
               </div>
             )}
 
@@ -1140,7 +1116,7 @@ export function InteractiveShirt3D({
                   type="button"
                   onClick={() => stepCatalogDesign(-1)}
                   aria-label="Diseño anterior"
-                  className="absolute left-0 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-lg font-bold text-white/90 ring-1 ring-white/15 backdrop-blur-md transition hover:bg-black/65 active:scale-95"
+                  className="absolute left-0 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
                 >
                   ‹
                 </button>
@@ -1148,7 +1124,7 @@ export function InteractiveShirt3D({
                   type="button"
                   onClick={() => stepCatalogDesign(1)}
                   aria-label="Siguiente diseño"
-                  className="absolute right-0 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-lg font-bold text-white/90 ring-1 ring-white/15 backdrop-blur-md transition hover:bg-black/65 active:scale-95"
+                  className="absolute right-0 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
                 >
                   ›
                 </button>
@@ -1171,33 +1147,33 @@ export function InteractiveShirt3D({
             />
           </div>
 
-          {/* Ajuste rápido de posición y quitar diseño */}
+          {/* Barra flotante Jiro de 1 línea para ajustar o quitar diseño */}
           {designUrl && (!wizardStep || wizardStep === 'design') && (
             <div className="mt-1 space-y-2">
-              <div className="flex flex-wrap items-center justify-center gap-1.5">
-                <div className="inline-flex flex-wrap items-center justify-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
+              <div className="flex justify-center">
+                <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-sm backdrop-blur-md">
                   <button
                     type="button"
                     onClick={() => setShowPositionSliders((v) => !v)}
-                    className={`rounded-full px-3.5 py-1 text-xs font-semibold transition ${
+                    className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
                       showPositionSliders
-                        ? 'bg-white text-slate-950 shadow-sm'
-                        : 'text-white/85 hover:text-white'
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-700 hover:bg-slate-100'
                     }`}
                   >
-                    ⌖ Ajustar diseño
+                    ⌖ Ajustar
                   </button>
                   {isStoreOwner && onToggleRemoveBg && (
                     <button
                       type="button"
                       onClick={() => onToggleRemoveBg(!removeBg)}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
                         removeBg
-                          ? 'bg-emerald-500/30 text-emerald-200 ring-1 ring-emerald-400/40'
-                          : 'text-white/85 hover:text-white'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'text-slate-700 hover:bg-slate-100'
                       }`}
                     >
-                      {removeBg ? '✓ Sin fondo' : 'Quitar fondo'}
+                      {removeBg ? '✓ Sin fondo' : 'Sin fondo'}
                     </button>
                   )}
                   {isStoreOwner && onAiRemoveBg && (
@@ -1205,9 +1181,9 @@ export function InteractiveShirt3D({
                       type="button"
                       disabled={!!processingText}
                       onClick={onAiRemoveBg}
-                      className="rounded-full px-3 py-1 text-xs font-semibold text-white/85 transition hover:text-white disabled:opacity-40"
+                      className="whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-40"
                     >
-                      ✨ Fondo IA
+                      ✨ IA
                     </button>
                   )}
                   {onClearDesign && (
@@ -1217,9 +1193,9 @@ export function InteractiveShirt3D({
                         setColorSwitchNote(null);
                         onClearDesign();
                       }}
-                      className="rounded-full px-3 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200"
+                      className="whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-50"
                     >
-                      Quitar
+                      ✕ Quitar
                     </button>
                   )}
                 </div>
@@ -1406,14 +1382,14 @@ export function InteractiveShirt3D({
             })()}
         </div>
 
-        {/* GALERÍA DE DISEÑOS TIPO SLIDE ESTILO APPLE / SHOPIFY */}
+        {/* BANDEJA COMPACTA DE DISEÑOS TIPO JIRO */}
         {(!wizardStep || wizardStep === 'design') && (
-        <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="rounded-[22px] border border-slate-200/90 bg-white p-3 shadow-sm sm:p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <h3 className="text-sm font-semibold tracking-tight text-slate-900">Elige un diseño</h3>
               {campaigns && campaigns.length > 0 && onChangeActiveCampaign && (
-                <div className="ml-1 flex flex-wrap items-center gap-1">
+                <div className="ml-0.5 flex flex-wrap items-center gap-1">
                   <button
                     type="button"
                     onClick={() => onChangeActiveCampaign('all')}
@@ -1442,49 +1418,24 @@ export function InteractiveShirt3D({
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {onUploadFile && (
-                <button
-                  type="button"
-                  onClick={() => uploadInputRef.current?.click()}
-                  className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 active:scale-95"
-                >
-                  📤 Subir mi imagen
-                </button>
-              )}
+            {onUploadFile && (
               <button
                 type="button"
-                onClick={() => setIsWesternModalOpen(true)}
-                className="rounded-full border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 active:scale-95"
+                onClick={() => uploadInputRef.current?.click()}
+                className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 active:scale-95"
               >
-                ✎ Texto
+                📤 Subir imagen
               </button>
-              {designUrl && onClearDesign && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setColorSwitchNote(null);
-                    onClearDesign();
-                  }}
-                  className="rounded-full bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
-                >
-                  Camisa lisa
-                </button>
-              )}
-            </div>
+            )}
           </div>
 
-          <p className="mb-2 text-[11px] text-slate-500">
-            Desliza horizontalmente para ver diseños · Si subes imagen propia, ideal PNG sin fondo
-          </p>
-
           {(catalogDesigns?.length || 0) > 4 && (
-            <div className="mb-2.5 flex items-center gap-1.5">
+            <div className="mb-2 flex items-center gap-1.5">
               <input
                 type="search"
                 value={designSearch}
                 onChange={(e) => setDesignSearch(e.target.value)}
-                placeholder="🔍 Buscar diseño por nombre o código (ej. D-001, Toro)..."
+                placeholder="🔍 Buscar diseño por nombre o código (ej. D-001)..."
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:bg-white focus:outline-none"
               />
               {designSearch && (
@@ -1501,7 +1452,7 @@ export function InteractiveShirt3D({
 
           <div
             ref={clientCarouselRef}
-            className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth pb-1"
+            className="flex snap-x snap-mandatory gap-2.5 overflow-x-auto scroll-smooth pb-0.5"
           >
             {filteredCatalogDesigns.map((d) => {
               const isSelected =
@@ -1521,7 +1472,7 @@ export function InteractiveShirt3D({
                 <motion.button
                   key={d.id}
                   type="button"
-                  whileHover={{ scale: 1.04, y: -2 }}
+                  whileHover={{ scale: 1.03, y: -1 }}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: 'spring', stiffness: 420, damping: 25 }}
                   onClick={() => {
@@ -1534,19 +1485,19 @@ export function InteractiveShirt3D({
                     applyCatalogDesignWithColorGuard(d);
                   }}
                   disabled={!d.imageUrl}
-                  className={`group relative flex w-[122px] shrink-0 snap-start flex-col rounded-2xl p-1.5 text-left transition ${
+                  className={`group relative flex w-[96px] shrink-0 snap-start flex-col rounded-xl p-1.5 text-left transition sm:w-[112px] ${
                     isSelected
                       ? 'bg-slate-900 text-white shadow-md'
                       : 'bg-slate-50 text-slate-900 hover:bg-slate-100'
                   }`}
                 >
                   {d.isBestSeller && (
-                    <span className="absolute left-2.5 top-2.5 z-10 inline-flex items-center gap-0.5 rounded-full bg-white/95 px-2 py-0.5 text-[9px] font-bold tracking-tight text-slate-900 shadow-sm ring-1 ring-black/10 backdrop-blur-md">
-                      <span className="text-amber-500">★</span> Más vendido
+                    <span className="absolute left-2 top-2 z-10 inline-flex items-center gap-0.5 rounded-full bg-white/95 px-1.5 py-0.5 text-[8px] font-bold tracking-tight text-slate-900 shadow-sm ring-1 ring-black/10 backdrop-blur-md">
+                      <span className="text-amber-500">★</span> Top
                     </span>
                   )}
                   <div
-                    className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl border border-black/10 p-2 transition duration-200 group-hover:scale-[1.02]"
+                    className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg border border-black/10 p-1.5 transition duration-200 group-hover:scale-[1.02]"
                     style={{ backgroundColor: thumbBg }}
                   >
                     {d.imageUrl ? (
@@ -1561,7 +1512,7 @@ export function InteractiveShirt3D({
                     )}
                   </div>
                   <div
-                    className={`mt-1.5 w-full truncate px-1 text-center text-xs font-semibold ${
+                    className={`mt-1 w-full truncate px-0.5 text-center text-[11px] font-semibold ${
                       isSelected ? 'text-white' : 'text-slate-800'
                     }`}
                   >
@@ -1573,13 +1524,6 @@ export function InteractiveShirt3D({
           </div>
         </div>
         )}
-
-      <WesternDesignModal
-          isOpen={isWesternModalOpen}
-          onClose={() => setIsWesternModalOpen(false)}
-          onApply={handleApplyWesternDesign}
-          initialPlacement={placement === 'back' ? 'back' : 'center'}
-        />
       </div>
     );
   }
@@ -1602,76 +1546,55 @@ export function InteractiveShirt3D({
         />
       )}
 
-      {/* ESCENARIO Y HERRAMIENTAS ESTILO APPLE STUDIO (ADMIN) */}
-      <div
-        className={`grid grid-cols-1 items-start gap-3 ${
-          !wizardStep || wizardStep === 'design' ? 'lg:grid-cols-[1fr_280px]' : ''
-        }`}
-      >
+      {/* ESCENARIO Y GALERÍA UNIFICADA + PANEL DE ESTUDIO (ADMIN CATÁLOGO 3D) */}
+      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[1fr_280px]">
+        <div className="min-w-0 space-y-3">
         {/* LIENZO 3D CENTRAL */}
-        <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-gradient-to-b from-white via-[#F5F5F7] to-[#ECECEF] p-4 shadow-sm">
+        <div className="relative overflow-hidden rounded-[24px] border border-slate-200/80 bg-gradient-to-b from-white via-[#F5F5F7] to-[#ECECEF] p-3 shadow-sm sm:p-4">
           {/* Barra superior flotante: Vista y Stock */}
           <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
-            {wizardStep === 'design' ? (
-              <button
-                type="button"
-                onClick={() =>
-                  setTargetAngleY((prev) =>
-                    prev === 38 ? (placement === 'back' ? 180 : 0) : 38
-                  )
-                }
-                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold shadow-sm ring-1 ring-black/5 backdrop-blur-md transition ${
-                  targetAngleY === 38
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-white/90 text-slate-700 hover:bg-white'
-                }`}
-              >
-                {targetAngleY === 38 ? 'Ver de frente/espalda' : 'Vista Perfil 3D'}
-              </button>
-            ) : (
-              <div className="inline-flex items-center rounded-full bg-white/90 p-1 shadow-sm ring-1 ring-black/5 backdrop-blur-md">
-                {(
-                  [
-                    ['back', 180, 'Espalda'],
-                    ['center', 0, 'Frente'],
-                    ['profile', 38, 'Perfil']
-                  ] as const
-                ).map(([sideKey, angle, lbl]) => {
-                  const active =
-                    targetAngleY === angle ||
-                    (targetAngleY === null &&
-                      ((angle === 180 && placement === 'back') ||
-                        (angle === 0 && placement !== 'back')));
-                  return (
-                    <button
-                      key={lbl}
-                      type="button"
-                      onClick={() => {
-                        setTargetAngleY(angle);
-                        if (sideKey === 'back' || sideKey === 'center') {
-                          onDesignChange?.({ placement: sideKey });
-                        }
-                      }}
-                      className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
-                        active
-                          ? 'bg-slate-900 text-white shadow-sm'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {lbl}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            <div className="inline-flex items-center rounded-xl border border-slate-200/90 bg-white/95 p-0.5 shadow-sm backdrop-blur-md">
+              {(
+                [
+                  ['back', 180, 'Espalda'],
+                  ['center', 0, 'Frente'],
+                  ['profile', 38, 'Perfil']
+                ] as const
+              ).map(([sideKey, angle, lbl]) => {
+                const active =
+                  targetAngleY === angle ||
+                  (targetAngleY === null &&
+                    ((angle === 180 && placement === 'back') ||
+                      (angle === 0 && placement !== 'back')));
+                return (
+                  <button
+                    key={lbl}
+                    type="button"
+                    onClick={() => {
+                      setTargetAngleY(angle);
+                      if (sideKey === 'back' || sideKey === 'center') {
+                        onDesignChange?.({ placement: sideKey });
+                      }
+                    }}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition sm:px-3 sm:text-xs ${
+                      active
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {lbl}
+                  </button>
+                );
+              })}
+            </div>
 
             <div className="flex items-center gap-1.5">
               {stockBadge && (
                 <span
-                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-semibold ${
                     stockBadge.available
-                      ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200'
-                      : 'bg-amber-50 text-amber-800 ring-1 ring-amber-200'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      : 'border-amber-200 bg-amber-50 text-amber-800'
                   }`}
                 >
                   <span
@@ -1685,10 +1608,10 @@ export function InteractiveShirt3D({
               <button
                 type="button"
                 onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm ring-1 ring-black/5 backdrop-blur-md transition ${
+                className={`rounded-xl border px-3 py-1 text-xs font-semibold shadow-sm backdrop-blur-md transition ${
                   zoom > 1.35
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-white/90 text-slate-700 hover:bg-white'
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200/90 bg-white/95 text-slate-700 hover:bg-white'
                 }`}
               >
                 {zoom > 1.35 ? 'Alejar' : 'Acercar'}
@@ -1696,9 +1619,9 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Modelo 3D */}
+          {/* Modelo 3D compacto */}
           <div
-            className="relative mx-auto flex w-full max-w-[400px] items-center justify-center"
+            className="relative mx-auto flex w-full max-w-[245px] items-center justify-center sm:max-w-[330px]"
             style={{ aspectRatio: '1 / 1' }}
           >
             <div
@@ -1914,258 +1837,8 @@ export function InteractiveShirt3D({
           )}
         </div>
 
-        {/* PANEL DERECHO DE ESTUDIO (Ajuste de Diseño A3/A4 y Posición) */}
-        {(!wizardStep || wizardStep === 'design') && (
-        <div className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
-          {onUploadFile && (
-            <div className="space-y-2 border-b border-slate-100 pb-3">
-              <div className="text-xs font-semibold text-slate-900">Arte / Diseño (PNG o JPG)</div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => uploadInputRef.current?.click()}
-                  className="flex-1 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
-                >
-                  {designUrl ? 'Cambiar PNG/JPG' : 'Subir PNG / JPG'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsWesternModalOpen(true)}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-100"
-                >
-                  + Texto
-                </button>
-                {designUrl && onClearDesign && (
-                  <button
-                    type="button"
-                    onClick={onClearDesign}
-                    title="Quitar diseño"
-                    className="rounded-xl bg-rose-50 px-2.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-100"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-
-              {onToggleRemoveBg && (
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-xs text-slate-600">JPG → PNG sin fondo</span>
-                  <button
-                    type="button"
-                    onClick={() => onToggleRemoveBg(!removeBg)}
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
-                      removeBg
-                        ? 'bg-emerald-100 text-emerald-900'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {removeBg ? 'Activo' : 'Activar'}
-                  </button>
-                </div>
-              )}
-
-              {designUrl && removeBg && onChangeBgTolerance && (
-                <div className="rounded-xl bg-slate-50 px-2.5 py-1.5">
-                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                    <span>Recorte fino</span>
-                    <span>{bgTolerance}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="14"
-                    max="78"
-                    step="2"
-                    value={bgTolerance}
-                    onChange={(e) => onChangeBgTolerance(parseInt(e.target.value, 10))}
-                    className="mt-1 w-full accent-slate-900"
-                  />
-                </div>
-              )}
-
-              {designUrl && (onAiRemoveBg || onUpscale4K) && (
-                <div className="grid grid-cols-2 gap-1.5 pt-1">
-                  {onAiRemoveBg && (
-                    <button
-                      type="button"
-                      disabled={!!processingText}
-                      onClick={onAiRemoveBg}
-                      className="rounded-xl bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
-                    >
-                      Fondo IA
-                    </button>
-                  )}
-                  {onUpscale4K && (
-                    <button
-                      type="button"
-                      disabled={!!processingText}
-                      onClick={onUpscale4K}
-                      className="rounded-xl bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
-                    >
-                      Mejorar 4K
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Tamaño de Impresión A3 / A4 */}
-          <div className="space-y-2 border-b border-slate-100 pb-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-900">Tamaño</span>
-              <span className="text-xs font-medium text-slate-500">
-                {designScale >= 1.85
-                  ? `A3 (${Math.round(designScale * 100)}%)`
-                  : designScale >= 1.45
-                  ? `A4 (${Math.round(designScale * 100)}%)`
-                  : `${Math.round(designScale * 100)}%`}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                onClick={() =>
-                  onDesignChange?.({
-                    scale: 2.0,
-                    offsetX: 0,
-                    offsetY: 0
-                  })
-                }
-                className={`rounded-xl py-2 text-xs font-semibold transition disabled:opacity-40 ${
-                  designScale >= 1.85
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                A3 (200%)
-              </button>
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                onClick={() =>
-                  onDesignChange?.({
-                    scale: 1.6,
-                    offsetX: 0,
-                    offsetY: 0
-                  })
-                }
-                className={`rounded-xl py-2 text-xs font-semibold transition disabled:opacity-40 ${
-                  designScale < 1.85 && designScale >= 1.4
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                A4 (160%)
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                onClick={() => adjustScale(-0.15)}
-                className="rounded-xl bg-slate-100 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
-              >
-                − Reducir
-              </button>
-              <button
-                type="button"
-                disabled={!designUrl || !onDesignChange}
-                onClick={() => adjustScale(0.15)}
-                className="rounded-xl bg-slate-100 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
-              >
-                + Ampliar
-              </button>
-            </div>
-          </div>
-
-          {/* Sliders de Posición en la prenda (sin repetir botones Espalda/Frente) */}
-          {onDesignChange && designUrl && (
-            <div className="space-y-2 border-b border-slate-100 pb-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-900">Posición fina</span>
-                {(designOffsetX !== 0 || designOffsetY !== 0) && (
-                  <button
-                    type="button"
-                    onClick={() => onDesignChange({ offsetX: 0, offsetY: 0 })}
-                    className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
-                  >
-                    Centrar
-                  </button>
-                )}
-              </div>
-              <div className="space-y-2 rounded-2xl bg-slate-50 p-2.5">
-                <div>
-                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                    <span>↕ Altura (Arriba / Abajo)</span>
-                    <span>{Math.round(designOffsetY)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-20"
-                    max="22"
-                    step="1"
-                    value={designOffsetY}
-                    onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
-                    className="mt-1 w-full accent-slate-900"
-                  />
-                </div>
-                <div>
-                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                    <span>↔ Lado (Izq. / Der.)</span>
-                    <span>{Math.round(designOffsetX)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-20"
-                    max="20"
-                    step="1"
-                    value={designOffsetX}
-                    onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
-                    className="mt-1 w-full accent-slate-900"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Modo de interacción al arrastrar */}
-          <div className="space-y-2">
-            <div className="text-xs font-semibold text-slate-900">Interacción</div>
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={() => setTouchAction('rotate')}
-                className={`rounded-xl py-2 text-xs font-semibold transition ${
-                  touchAction === 'rotate'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                Girar 3D
-              </button>
-              <button
-                type="button"
-                disabled={!designUrl}
-                onClick={() => setTouchAction('moveDesign')}
-                className={`rounded-xl py-2 text-xs font-semibold transition disabled:opacity-40 ${
-                  touchAction === 'moveDesign'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                Mover Diseño
-              </button>
-            </div>
-          </div>
-        </div>
-        )}
-      </div>
-
-      {/* GALERÍA DE DISEÑOS DEL CATÁLOGO */}
-      {(!wizardStep || wizardStep === 'design') && (isStoreOwner || (catalogDesigns && catalogDesigns.length > 0)) && (
+        {/* GALERÍA DE DISEÑOS DEL CATÁLOGO (inmediatamente debajo del visor 3D) */}
+        {(isStoreOwner || (catalogDesigns && catalogDesigns.length > 0)) && (
         <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm">
           {onUploadCatalogFiles && (
             <input
@@ -2490,6 +2163,248 @@ export function InteractiveShirt3D({
           )}
         </div>
       )}
+        </div>
+
+        {/* PANEL DERECHO DE ESTUDIO (Ajuste de Diseño A3/A4 y Posición) */}
+        <div className="space-y-3 rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-sm lg:sticky lg:top-20">
+          {onUploadFile && (
+            <div className="space-y-2 border-b border-slate-100 pb-3">
+              <div className="text-xs font-semibold text-slate-900">Arte / Diseño (PNG o JPG)</div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => uploadInputRef.current?.click()}
+                  className="flex-1 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 active:scale-95"
+                >
+                  {designUrl ? 'Cambiar PNG/JPG' : 'Subir PNG / JPG'}
+                </button>
+                {designUrl && onClearDesign && (
+                  <button
+                    type="button"
+                    onClick={onClearDesign}
+                    title="Quitar diseño"
+                    className="rounded-xl bg-rose-50 px-2.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-100"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {onToggleRemoveBg && (
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs text-slate-600">JPG → PNG sin fondo</span>
+                  <button
+                    type="button"
+                    onClick={() => onToggleRemoveBg(!removeBg)}
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                      removeBg
+                        ? 'bg-emerald-100 text-emerald-900'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {removeBg ? 'Activo' : 'Activar'}
+                  </button>
+                </div>
+              )}
+
+              {designUrl && removeBg && onChangeBgTolerance && (
+                <div className="rounded-xl bg-slate-50 px-2.5 py-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                    <span>Recorte fino</span>
+                    <span>{bgTolerance}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="14"
+                    max="78"
+                    step="2"
+                    value={bgTolerance}
+                    onChange={(e) => onChangeBgTolerance(parseInt(e.target.value, 10))}
+                    className="mt-1 w-full accent-slate-900"
+                  />
+                </div>
+              )}
+
+              {designUrl && (onAiRemoveBg || onUpscale4K) && (
+                <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  {onAiRemoveBg && (
+                    <button
+                      type="button"
+                      disabled={!!processingText}
+                      onClick={onAiRemoveBg}
+                      className="rounded-xl bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                    >
+                      Fondo IA
+                    </button>
+                  )}
+                  {onUpscale4K && (
+                    <button
+                      type="button"
+                      disabled={!!processingText}
+                      onClick={onUpscale4K}
+                      className="rounded-xl bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                    >
+                      Mejorar 4K
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tamaño de Impresión A3 / A4 */}
+          <div className="space-y-2 border-b border-slate-100 pb-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-900">Tamaño</span>
+              <span className="text-xs font-medium text-slate-500">
+                {designScale >= 1.85
+                  ? `A3 (${Math.round(designScale * 100)}%)`
+                  : designScale >= 1.45
+                  ? `A4 (${Math.round(designScale * 100)}%)`
+                  : `${Math.round(designScale * 100)}%`}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                onClick={() =>
+                  onDesignChange?.({
+                    scale: 2.0,
+                    offsetX: 0,
+                    offsetY: 0
+                  })
+                }
+                className={`rounded-xl py-2 text-xs font-semibold transition disabled:opacity-40 ${
+                  designScale >= 1.85
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                A3 (200%)
+              </button>
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                onClick={() =>
+                  onDesignChange?.({
+                    scale: 1.6,
+                    offsetX: 0,
+                    offsetY: 0
+                  })
+                }
+                className={`rounded-xl py-2 text-xs font-semibold transition disabled:opacity-40 ${
+                  designScale < 1.85 && designScale >= 1.4
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                A4 (160%)
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                onClick={() => adjustScale(-0.15)}
+                className="rounded-xl bg-slate-100 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+              >
+                − Reducir
+              </button>
+              <button
+                type="button"
+                disabled={!designUrl || !onDesignChange}
+                onClick={() => adjustScale(0.15)}
+                className="rounded-xl bg-slate-100 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+              >
+                + Ampliar
+              </button>
+            </div>
+          </div>
+
+          {/* Sliders de Posición en la prenda */}
+          {onDesignChange && designUrl && (
+            <div className="space-y-2 border-b border-slate-100 pb-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-900">Posición fina</span>
+                {(designOffsetX !== 0 || designOffsetY !== 0) && (
+                  <button
+                    type="button"
+                    onClick={() => onDesignChange({ offsetX: 0, offsetY: 0 })}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
+                  >
+                    Centrar
+                  </button>
+                )}
+              </div>
+              <div className="space-y-2 rounded-2xl bg-slate-50 p-2.5">
+                <div>
+                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                    <span>↕ Altura (Arriba / Abajo)</span>
+                    <span>{Math.round(designOffsetY)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-20"
+                    max="22"
+                    step="1"
+                    value={designOffsetY}
+                    onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
+                    className="mt-1 w-full accent-slate-900"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                    <span>↔ Lado (Izq. / Der.)</span>
+                    <span>{Math.round(designOffsetX)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-20"
+                    max="20"
+                    step="1"
+                    value={designOffsetX}
+                    onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
+                    className="mt-1 w-full accent-slate-900"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modo de interacción al arrastrar */}
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-slate-900">Interacción</div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => setTouchAction('rotate')}
+                className={`rounded-xl py-2 text-xs font-semibold transition ${
+                  touchAction === 'rotate'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                Girar 3D
+              </button>
+              <button
+                type="button"
+                disabled={!designUrl}
+                onClick={() => setTouchAction('moveDesign')}
+                className={`rounded-xl py-2 text-xs font-semibold transition disabled:opacity-40 ${
+                  touchAction === 'moveDesign'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                Mover Diseño
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {(uploadModalState || editColorsDesign) && (
         <div
@@ -2957,12 +2872,6 @@ export function InteractiveShirt3D({
         </div>
       )}
 
-      <WesternDesignModal
-        isOpen={isWesternModalOpen}
-        onClose={() => setIsWesternModalOpen(false)}
-        onApply={handleApplyWesternDesign}
-        initialPlacement={placement === 'back' ? 'back' : 'center'}
-      />
     </div>
   );
 }

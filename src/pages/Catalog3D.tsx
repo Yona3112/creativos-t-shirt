@@ -1722,35 +1722,6 @@ export function CustomerCatalogView({
           </div>
         </div>
 
-        {/* PASO 2: SELECTOR DE UBICACIÓN (ESPALDA / FRENTE) ARRIBA DEL VISOR 3D */}
-        {step === 1 && (
-          <section className="rounded-[22px] border border-slate-200/80 bg-white p-3.5 shadow-sm">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-slate-800">¿Dónde irá tu diseño?</span>
-              <span className="text-[11px] font-medium text-slate-400">Toca para girar la camisa</span>
-            </div>
-            <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100 p-1">
-              {([['back', 'Espalda (Atrás)'], ['center', 'Frente (Pecho)']] as const).map(([k, lbl]) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => {
-                    setPlacement(k);
-                    setJustAddedToCart(false);
-                  }}
-                  className={`min-h-[40px] rounded-xl text-xs font-bold transition sm:text-sm ${
-                    placement === k
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {lbl}
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
         {step <= 1 ? (
           <InteractiveShirt3D
             hex={selectedColor?.hex || '#111827'}
@@ -2301,7 +2272,7 @@ export function CustomerCatalogView({
                 onClick={() => goToStep(step + 1)}
                 className="inline-flex min-h-[48px] items-center justify-center rounded-full bg-slate-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-slate-800 active:scale-95"
               >
-                {step === 1 && !designUrl ? 'Seguir sin diseño →' : 'Siguiente →'}
+                Siguiente →
               </button>
             ) : (
               <button
