@@ -1163,7 +1163,7 @@ export function InteractiveShirt3D({
             <div className="mt-2 space-y-2">
               <div
                 className={`relative mx-auto w-full ${
-                  wizardStep === 'design' ? 'max-w-[260px] sm:max-w-[305px]' : 'max-w-[310px] sm:max-w-[360px]'
+                  wizardStep === 'design' ? 'max-w-[330px] sm:max-w-[370px]' : 'max-w-[350px] sm:max-w-[390px]'
                 }`}
                 style={{ aspectRatio: '4 / 5' }}
               >
@@ -1838,7 +1838,7 @@ export function InteractiveShirt3D({
           {useModelStage ? (
             <div className="mt-2 space-y-2">
               <div
-                className="relative mx-auto w-full max-w-[260px] sm:max-w-[330px]"
+                className="relative mx-auto w-full max-w-[320px] sm:max-w-[370px]"
                 style={{ aspectRatio: '4 / 5' }}
               >
                 <div className="pointer-events-none absolute left-2.5 top-2.5 z-10 inline-flex items-center rounded-full bg-black/55 px-2.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-md">

@@ -33,14 +33,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🤠 Rancho',
     tint: [1.02, 0.99, 0.95],
     back: {
-      photoUrl: '/mockups/ranchero-back.jpg',
-      maskUrl: '/mockups/ranchero-back-mask.png',
-      printBox: { x: 0.3691, y: 0.389, w: 0.284, h: 0.2681 }
+      photoUrl: '/mockups/ranchero-back.jpg?v=2',
+      maskUrl: '/mockups/ranchero-back-mask.png?v=2',
+      printBox: { x: 0.3238, y: 0.3718, w: 0.3785, h: 0.3755 }
     },
     front: {
-      photoUrl: '/mockups/ranchero-front.jpg',
-      maskUrl: '/mockups/ranchero-front-mask.png',
-      printBox: { x: 0.3692, y: 0.4173, w: 0.2682, h: 0.2532 }
+      photoUrl: '/mockups/ranchero-front.jpg?v=2',
+      maskUrl: '/mockups/ranchero-front-mask.png?v=2',
+      printBox: { x: 0.3343, y: 0.4204, w: 0.3406, h: 0.327 }
     }
   },
   cristiana: {
@@ -50,14 +50,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '✝️ Cristiana',
     tint: [1.01, 1.0, 0.98],
     back: {
-      photoUrl: '/mockups/cristiana-back.jpg',
-      maskUrl: '/mockups/cristiana-back-mask.png',
-      printBox: { x: 0.3948, y: 0.4247, w: 0.2078, h: 0.1962 }
+      photoUrl: '/mockups/cristiana-back.jpg?v=2',
+      maskUrl: '/mockups/cristiana-back-mask.png?v=2',
+      printBox: { x: 0.3373, y: 0.3806, w: 0.3214, h: 0.3188 }
     },
     front: {
-      photoUrl: '/mockups/cristiana-front.jpg',
-      maskUrl: '/mockups/cristiana-front-mask.png',
-      printBox: { x: 0.3902, y: 0.4575, w: 0.2444, h: 0.2307 }
+      photoUrl: '/mockups/cristiana-front.jpg?v=2',
+      maskUrl: '/mockups/cristiana-front-mask.png?v=2',
+      printBox: { x: 0.353, y: 0.425, w: 0.324, h: 0.311 }
     }
   },
   turistico: {
@@ -67,14 +67,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🇭🇳 Honduras',
     tint: [0.99, 1.0, 1.02],
     back: {
-      photoUrl: '/mockups/turistico-back.jpg',
-      maskUrl: '/mockups/turistico-back-mask.png',
-      printBox: { x: 0.3692, y: 0.395, w: 0.2603, h: 0.2457 }
+      photoUrl: '/mockups/turistico-back.jpg?v=2',
+      maskUrl: '/mockups/turistico-back-mask.png?v=2',
+      printBox: { x: 0.3252, y: 0.3596, w: 0.3483, h: 0.3455 }
     },
     front: {
-      photoUrl: '/mockups/turistico-front.jpg',
-      maskUrl: '/mockups/turistico-front-mask.png',
-      printBox: { x: 0.3693, y: 0.4418, w: 0.2771, h: 0.2616 }
+      photoUrl: '/mockups/turistico-front.jpg?v=2',
+      maskUrl: '/mockups/turistico-front-mask.png?v=2',
+      printBox: { x: 0.3362, y: 0.4145, w: 0.3458, h: 0.332 }
     }
   }
 };
@@ -85,12 +85,21 @@ interface PreparedScene {
   baseData: Uint8ClampedArray;
   maskAlpha: Uint8ClampedArray;
   shading: Float32Array;
+  detail: Float32Array;
   maskCanvas: HTMLCanvasElement;
   shadowOverlayCanvas: HTMLCanvasElement;
 }
 
+interface PreparedDesign {
+  img: HTMLImageElement;
+  trimX: number;
+  trimY: number;
+  trimW: number;
+  trimH: number;
+}
+
 const sceneCache = new Map<string, Promise<PreparedScene>>();
-const designImgCache = new Map<string, Promise<HTMLImageElement>>();
+const designCache = new Map<string, Promise<PreparedDesign>>();
 const recolorCache = new Map<string, HTMLCanvasElement>();
 
 function clamp(v: number, min: number, max: number): number {
@@ -122,18 +131,70 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-function loadDesignImage(url: string): Promise<HTMLImageElement> {
-  const hit = designImgCache.get(url);
-  if (hit) return hit;
-  const p = loadImage(url).catch((err) => {
-    designImgCache.delete(url);
-    throw err;
-  });
-  if (designImgCache.size > 32) {
-    const first = designImgCache.keys().next().value;
-    if (first) designImgCache.delete(first);
+function computeTightTrimBox(img: HTMLImageElement): PreparedDesign {
+  const w = img.naturalWidth || 1;
+  const h = img.naturalHeight || 1;
+  const fallback: PreparedDesign = { img, trimX: 0, trimY: 0, trimW: w, trimH: h };
+  try {
+    const maxDim = 256;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    const tw = Math.max(1, Math.round(w * scale));
+    const th = Math.max(1, Math.round(h * scale));
+    const c = document.createElement('canvas');
+    c.width = tw;
+    c.height = th;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return fallback;
+    ctx.drawImage(img, 0, 0, tw, th);
+    const data = ctx.getImageData(0, 0, tw, th).data;
+
+    let minX = tw;
+    let minY = th;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < th; y++) {
+      const rowOff = y * tw * 4;
+      for (let x = 0; x < tw; x++) {
+        if (data[rowOff + x * 4 + 3] > 16) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return fallback;
+
+    const sx = clamp(Math.floor((minX / tw) * w - w * 0.01), 0, Math.max(0, w - 1));
+    const sy = clamp(Math.floor((minY / th) * h - h * 0.01), 0, Math.max(0, h - 1));
+    const ex = clamp(Math.ceil(((maxX + 1) / tw) * w + w * 0.01), sx + 1, w);
+    const ey = clamp(Math.ceil(((maxY + 1) / th) * h + h * 0.01), sy + 1, h);
+    return {
+      img,
+      trimX: sx,
+      trimY: sy,
+      trimW: Math.max(1, ex - sx),
+      trimH: Math.max(1, ey - sy)
+    };
+  } catch {
+    return fallback;
   }
-  designImgCache.set(url, p);
+}
+
+function loadPreparedDesign(url: string): Promise<PreparedDesign> {
+  const hit = designCache.get(url);
+  if (hit) return hit;
+  const p = loadImage(url)
+    .then(computeTightTrimBox)
+    .catch((err) => {
+      designCache.delete(url);
+      throw err;
+    });
+  if (designCache.size > 32) {
+    const first = designCache.keys().next().value;
+    if (first) designCache.delete(first);
+  }
+  designCache.set(url, p);
   return p;
 }
 
@@ -176,34 +237,55 @@ function loadPreparedScene(asset: MockupViewAsset): Promise<PreparedScene> {
       const idx = i * 4;
       const a = maskRaw[idx + 3];
       maskAlpha[i] = a;
-      const lumRgba = (0.299 * baseData[idx] + 0.587 * baseData[idx + 1] + 0.114 * baseData[idx + 2]) / 255;
-      rawLums[i] = lumRgba;
-      if (a >= 200) sampleLums.push(lumRgba);
+      const lum = (0.299 * baseData[idx] + 0.587 * baseData[idx + 1] + 0.114 * baseData[idx + 2]) / 255;
+      rawLums[i] = lum;
+      if (a >= 200) sampleLums.push(lum);
     }
 
     sampleLums.sort((a, b) => a - b);
-    let p92 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.92)] : 0.92;
-    if (p92 < 0.65) p92 = 0.85;
+    const p03 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.03)] : 0.45;
+    const p97 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.97)] : 0.96;
+    const floor = p03 * 0.55;
+    const denom = Math.max(0.25, p97 - floor);
 
     const shading = new Float32Array(total);
+    const detail = new Float32Array(total);
     const shadowCanvas = document.createElement('canvas');
     shadowCanvas.width = width;
     shadowCanvas.height = height;
     const shadowCtx = shadowCanvas.getContext('2d');
     const shadowImg = shadowCtx ? shadowCtx.createImageData(width, height) : null;
 
-    for (let i = 0; i < total; i++) {
-      const s = clamp(rawLums[i] / p92, 0, 1.08);
-      shading[i] = s;
-      if (shadowImg) {
-        const idx = i * 4;
-        const a = maskAlpha[i];
-        shadowImg.data[idx] = 0;
-        shadowImg.data[idx + 1] = 0;
-        shadowImg.data[idx + 2] = 0;
-        // Solo agregar sombreado donde hay pliegues reales del algodón sin apagar zonas iluminadas
-        const creaseAlpha = a > 0 && s < 0.96 ? clamp(Math.round((0.96 - s) * 190 * (a / 255)), 0, 145) : 0;
-        shadowImg.data[idx + 3] = creaseAlpha;
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      for (let x = 0; x < width; x++) {
+        const i = row + x;
+        const s = clamp((rawLums[i] - floor) / denom, 0.12, 1.08);
+        shading[i] = s;
+        if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
+          const avg =
+            (rawLums[i - width - 1] +
+              rawLums[i - width] +
+              rawLums[i - width + 1] +
+              rawLums[i - 1] +
+              rawLums[i] +
+              rawLums[i + 1] +
+              rawLums[i + width - 1] +
+              rawLums[i + width] +
+              rawLums[i + width + 1]) /
+            9;
+          detail[i] = rawLums[i] - avg;
+        }
+        if (shadowImg) {
+          const idx = i * 4;
+          const a = maskAlpha[i];
+          shadowImg.data[idx] = 0;
+          shadowImg.data[idx + 1] = 0;
+          shadowImg.data[idx + 2] = 0;
+          const creaseAlpha =
+            a > 0 && s < 0.94 ? clamp(Math.round((0.94 - s) * 145 * (a / 255)), 0, 120) : 0;
+          shadowImg.data[idx + 3] = creaseAlpha;
+        }
       }
     }
     if (shadowCtx && shadowImg) {
@@ -216,6 +298,7 @@ function loadPreparedScene(asset: MockupViewAsset): Promise<PreparedScene> {
       baseData,
       maskAlpha,
       shading,
+      detail,
       maskCanvas,
       shadowOverlayCanvas: shadowCanvas
     };
@@ -238,7 +321,7 @@ function getRecoloredBaseCanvas(
   const cached = recolorCache.get(fullKey);
   if (cached) return cached;
 
-  const { width, height, baseData, maskAlpha, shading } = scene;
+  const { width, height, baseData, maskAlpha, shading, detail } = scene;
   const [tr, tg, tb] = parseHexRgb(hex);
   const targetLum = (0.299 * tr + 0.587 * tg + 0.114 * tb) / 255;
 
@@ -263,16 +346,43 @@ function getRecoloredBaseCanvas(
       continue;
     }
 
-    const s = shading[i];
-    const sheen = (1 - targetLum) * Math.pow(clamp(s, 0, 1.05), 2.2) * 34;
-    const nr = clamp(Math.round((tr * s + sheen) * tint[0]), 0, 255);
-    const ng = clamp(Math.round((tg * s + sheen) * tint[1]), 0, 255);
-    const nb = clamp(Math.round((tb * s + sheen) * tint[2]), 0, 255);
+    // Evitar oscurecimiento artificial en el borde suavizado de 1px contra fondos oscuros
+    const s = a < 235 ? Math.max(shading[i], 0.72) : shading[i];
+    const det = a < 235 ? 0 : detail[i];
+
+    let nr: number;
+    let ng: number;
+    let nb: number;
+
+    if (targetLum < 0.22) {
+      // Negro intenso y telas muy oscuras preservando textura y pliegues naturales
+      const darkFactor = 0.4 + 0.6 * (targetLum / 0.22);
+      const sPow = Math.pow(s, 1.75);
+      const ridge = Math.pow(clamp((s - 0.78) / 0.24, 0, 1), 2.2) * 18;
+      const micro = det * 42;
+      nr = clamp(Math.round((tr * darkFactor * sPow + ridge + micro) * tint[0]), 0, 255);
+      ng = clamp(Math.round((tg * darkFactor * sPow + ridge + micro) * tint[1]), 0, 255);
+      nb = clamp(Math.round((tb * darkFactor * sPow + ridge + micro) * tint[2]), 0, 255);
+    } else if (targetLum <= 0.86) {
+      // Colores teñidos intensos y tonos medios
+      const sPow = Math.pow(s, 1.32);
+      const ridge = Math.pow(clamp((s - 0.84) / 0.2, 0, 1), 2.0) * 16;
+      const micro = det * 55;
+      nr = clamp(Math.round((tr * sPow + ridge + micro) * tint[0]), 0, 255);
+      ng = clamp(Math.round((tg * sPow + ridge + micro) * tint[1]), 0, 255);
+      nb = clamp(Math.round((tb * sPow + ridge + micro) * tint[2]), 0, 255);
+    } else {
+      // Blanco y tonos muy claros con iluminación fotográfica natural original
+      nr = clamp(Math.round(baseData[idx] * (tr / 248)), 0, 255);
+      ng = clamp(Math.round(baseData[idx + 1] * (tg / 248)), 0, 255);
+      nb = clamp(Math.round(baseData[idx + 2] * (tb / 248)), 0, 255);
+    }
 
     const f = a / 255;
-    out[idx] = Math.round(baseData[idx] * (1 - f) + nr * f);
-    out[idx + 1] = Math.round(baseData[idx + 1] * (1 - f) + ng * f);
-    out[idx + 2] = Math.round(baseData[idx + 2] * (1 - f) + nb * f);
+    const fEff = targetLum < 0.5 && f < 1 ? Math.min(1, Math.pow(f, 0.82)) : f;
+    out[idx] = Math.round(baseData[idx] * (1 - fEff) + nr * fEff);
+    out[idx + 1] = Math.round(baseData[idx + 1] * (1 - fEff) + ng * fEff);
+    out[idx + 2] = Math.round(baseData[idx + 2] * (1 - fEff) + nb * fEff);
     out[idx + 3] = 255;
   }
 
@@ -318,7 +428,7 @@ export function ModelMockupCanvas({
   const sceneCfg = MOCKUP_SCENES[sceneId] || MOCKUP_SCENES.ranchero;
   const viewKey = placement === 'back' ? 'back' : 'front';
   const viewAsset = sceneCfg[viewKey];
-  const fullSceneKey = `${sceneCfg.id}-${viewKey}`;
+  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v2`;
 
   useEffect(() => {
     let cancelled = false;
@@ -326,8 +436,8 @@ export function ModelMockupCanvas({
     const renderAll = async () => {
       try {
         const scenePromise = loadPreparedScene(viewAsset);
-        const designPromise = designUrl ? loadDesignImage(designUrl) : Promise.resolve(null);
-        const [scene, designImg] = await Promise.all([scenePromise, designPromise]);
+        const designPromise = designUrl ? loadPreparedDesign(designUrl) : Promise.resolve(null);
+        const [scene, design] = await Promise.all([scenePromise, designPromise]);
         if (cancelled) return;
 
         const canvas = canvasRef.current;
@@ -344,7 +454,7 @@ export function ModelMockupCanvas({
         ctx.clearRect(0, 0, scene.width, scene.height);
         ctx.drawImage(recolored, 0, 0);
 
-        if (designImg && designImg.naturalWidth > 0 && designImg.naturalHeight > 0) {
+        if (design && design.trimW > 0 && design.trimH > 0) {
           const W = scene.width;
           const H = scene.height;
           const box = viewAsset.printBox;
@@ -354,14 +464,14 @@ export function ModelMockupCanvas({
           const bh = box.h * H;
 
           const scaleFactor = clamp((designScale || 2.0) / 2.0, 0.45, 1.2);
-          const fitRatio = Math.min(bw / designImg.naturalWidth, bh / designImg.naturalHeight);
-          const drawW = designImg.naturalWidth * fitRatio * scaleFactor;
-          const drawH = designImg.naturalHeight * fitRatio * scaleFactor;
+          const fitRatio = Math.min(bw / design.trimW, bh / design.trimH);
+          const drawW = design.trimW * fitRatio * scaleFactor;
+          const drawH = design.trimH * fitRatio * scaleFactor;
 
           const dxShift = (clamp(designOffsetX || 0, -24, 24) / 20) * bw * 0.24;
           const dyShift = (clamp(designOffsetY || 0, -24, 24) / 22) * bh * 0.28;
           const dx = bx + (bw - drawW) * 0.5 + dxShift;
-          const dy = by + (bh - drawH) * 0.35 + dyShift;
+          const dy = by + (bh - drawH) * 0.28 + dyShift;
 
           let artCanvas = workArtCanvasRef.current;
           if (!artCanvas || artCanvas.width !== W || artCanvas.height !== H) {
@@ -384,13 +494,23 @@ export function ModelMockupCanvas({
           if (artCtx && foldCtx) {
             artCtx.globalCompositeOperation = 'source-over';
             artCtx.clearRect(0, 0, W, H);
-            artCtx.drawImage(designImg, dx, dy, drawW, drawH);
+            artCtx.drawImage(
+              design.img,
+              design.trimX,
+              design.trimY,
+              design.trimW,
+              design.trimH,
+              dx,
+              dy,
+              drawW,
+              drawH
+            );
             artCtx.globalCompositeOperation = 'destination-in';
             artCtx.drawImage(scene.maskCanvas, 0, 0);
             artCtx.globalCompositeOperation = 'source-over';
 
             ctx.save();
-            ctx.globalAlpha = 0.94;
+            ctx.globalAlpha = 0.97;
             ctx.drawImage(artCanvas, 0, 0);
             ctx.restore();
 
