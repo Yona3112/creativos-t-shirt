@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getState, useAppState, useStock, useSyncStatus } from '../lib/store';
 import { activeBrands, brandColors, normalPrice, vkey } from '../lib/inventory';
-import { updateSettings, deleteColor, updateColor } from '../lib/actions';
+import { updateSettings, deleteColor, purgeGarbageData, updateColor } from '../lib/actions';
 import { money } from '../lib/money';
 import { uid } from '../lib/ids';
 import {
@@ -63,6 +63,31 @@ const WIZARD_STEPS = [
   }
 ] as const;
 const WIZARD_LAST = WIZARD_KEYS.length - 1;
+
+function forceScrollWizardTop(anchor?: HTMLElement | null) {
+  try {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  } catch {}
+  const jump = () => {
+    window.scrollTo(0, 0);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    if (anchor) {
+      try {
+        anchor.scrollIntoView({ behavior: 'auto', block: 'start' });
+      } catch {}
+    }
+  };
+  jump();
+  requestAnimationFrame(() => {
+    jump();
+    setTimeout(jump, 45);
+    setTimeout(jump, 130);
+  });
+}
 
 const SIZE_CHART: Array<{ size: string; chest: string; length: string }> = [
   { size: 'XS', chest: '43 cm', length: '66 cm' },
@@ -211,6 +236,11 @@ export default function Catalog3D() {
     setNewCampaignName('');
     toast(`Campaña "${clean}" creada`, 'ok');
   };
+
+  useEffect(() => {
+    // Limpiar automáticamente cualquier color, talla o diseño basura/duplicado al abrir el Catálogo
+    purgeGarbageData();
+  }, []);
 
   useEffect(() => {
     const ids = colors.map((c) => c.id);
@@ -376,9 +406,18 @@ export default function Catalog3D() {
         soldCount: d.soldCount,
         featured: d.featured,
         photoId: d.photoId,
-        placement: d.placement
+        placement: d.placement,
+        tone: d.tone,
+        allowedColorMode: d.allowedColorMode,
+        allowedColorIds: d.allowedColorIds
       })),
       stock: stockMap,
+      paymentMethods: Array.from(
+        new Set([
+          ...(settings.paymentMethods || []).map((m) => m.trim()).filter(Boolean),
+          ...DEFAULT_CATALOG_PAYMENT_METHODS
+        ])
+      ),
       publishedAt: Date.now()
     };
   };
@@ -487,32 +526,28 @@ export default function Catalog3D() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            {/* Selector de Campaña para enviar por WhatsApp */}
-            <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-              <span className="text-[11px] font-semibold text-slate-500">Campaña:</span>
-              <select
-                value={activeCampaign}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '__new__') {
-                    handleAddCampaign();
-                    return;
-                  }
-                  setActiveCampaign(val);
-                  updateSettings({ activeCampaign: val });
-                }}
-                className="bg-transparent text-xs font-bold text-slate-900 outline-none"
-              >
-                <option value="all">Todas</option>
-                {campaigns.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-                <option value="__new__">+ Nueva campaña...</option>
-              </select>
-            </div>
-
+            <button
+              type="button"
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
+              onClick={async () => {
+                const res = purgeGarbageData();
+                await syncLiveCatalogSnapshot();
+                const total =
+                  res.removedBrands +
+                  res.removedColors +
+                  res.removedDesigns +
+                  res.compactedMovements;
+                toast(
+                  total > 0
+                    ? `Catálogo depurado (${total} duplicados eliminados)`
+                    : 'Catálogo limpio y sin duplicados',
+                  'ok'
+                );
+              }}
+              title="Unificar y eliminar colores, tallas o diseños duplicados"
+            >
+              🧹 Limpiar duplicados
+            </button>
             <button
               type="button"
               className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
@@ -1060,6 +1095,7 @@ export function CustomerCatalogView({
   const [customerAddress, setCustomerAddress] = useState(savedBuyer.address);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const deliverySectionRef = useRef<HTMLElement>(null);
+  const wizardTopRef = useRef<HTMLDivElement>(null);
   const [step, setStep] = useState(0);
   const [maxStepReached, setMaxStepReached] = useState(0);
   const [showSizeGuide, setShowSizeGuide] = useState(false);
@@ -1089,10 +1125,11 @@ export function CustomerCatalogView({
     }
     setStep(clamped);
     setMaxStepReached((prev) => Math.max(prev, clamped));
+    forceScrollWizardTop(wizardTopRef.current);
   };
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    forceScrollWizardTop(wizardTopRef.current);
   }, [step]);
 
   const phoneDigitsOnly = customerPhone.replace(/\D/g, '');
@@ -1645,7 +1682,7 @@ export function CustomerCatalogView({
         </div>
       </header>
 
-      <div className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
+      <div ref={wizardTopRef} className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
         {/* PROGRESO E INSTRUCCIÓN CLARA DEL PASO ACTUAL */}
         <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
           <div className="mb-2.5 flex items-center justify-between gap-2">

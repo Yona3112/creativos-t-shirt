@@ -339,7 +339,7 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
     };
   }
 
-  // 3. Deduplicar diseños del catálogo con el mismo photoId o nombre+lado idéntico
+  // 3. Deduplicar diseños del catálogo con el mismo photoId o el mismo nombre normalizado
   const rawDesigns = Array.isArray(s.catalogDesigns) ? s.catalogDesigns : [];
   const filteredDesigns = rawDesigns
     .filter((d) => d && d.photoId && !ORPHAN_DESIGN_IDS.has(d.id))
@@ -367,8 +367,30 @@ export function normalize(s: Partial<AppState> | null | undefined): AppState {
       activeDesignByPhoto.set(pKey, d);
     }
   }
+
+  // Segunda pasada: deduplicar diseños activos que tengan exactamente el mismo nombre normalizado
+  const activeDesignByName = new Map<string, CatalogDesign>();
+  for (const d of activeDesignByPhoto.values()) {
+    const nKey = `${normalizeTextKey(d.name)}|${d.placement || 'back'}`;
+    const prev = activeDesignByName.get(nKey);
+    if (!prev) {
+      activeDesignByName.set(nKey, d);
+    } else {
+      const keepCurrent =
+        (Boolean(d.featured) && !prev.featured) ||
+        (Boolean(d.featured) === Boolean(prev.featured) &&
+          (d.updatedAt || d.createdAt || 0) >= (prev.updatedAt || prev.createdAt || 0));
+      if (keepCurrent) {
+        deletedDesigns.push({ ...prev, deleted: true, updatedAt: Date.now() });
+        activeDesignByName.set(nKey, d);
+      } else {
+        deletedDesigns.push({ ...d, deleted: true, updatedAt: Date.now() });
+      }
+    }
+  }
+
   const cleanDesigns = assignDesignCodes([
-    ...Array.from(activeDesignByPhoto.values()),
+    ...Array.from(activeDesignByName.values()),
     ...deletedDesigns.filter((d) => !activeDesignByPhoto.has(d.photoId))
   ]);
 

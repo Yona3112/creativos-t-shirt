@@ -13,6 +13,7 @@ export type { SharedCatalogDesignRef };
 
 // Caché en memoria para evitar llamadas redundantes y permitir render instantáneo en 0ms
 const MEM_PHOTO_CACHE = new Map<string, string>();
+const MISSING_PHOTO_IDS = new Set<string>();
 
 export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
   const state = useAppState();
@@ -22,6 +23,11 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
     for (const [k, v] of MEM_PHOTO_CACHE.entries()) {
       init[k] = v;
     }
+    return init;
+  });
+  const [missingIds, setMissingIds] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const id of MISSING_PHOTO_IDS) init[id] = true;
     return init;
   });
 
@@ -132,9 +138,15 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
           try {
             const data = await fetchSharedPhoto(item.photoId);
             if (data) {
+              MISSING_PHOTO_IDS.delete(item.photoId);
               MEM_PHOTO_CACHE.set(item.photoId, data);
               if (!cancelled) {
                 setUrlMap((prev) => ({ ...prev, [item.photoId]: data }));
+              }
+            } else {
+              MISSING_PHOTO_IDS.add(item.photoId);
+              if (!cancelled) {
+                setMissingIds((prev) => ({ ...prev, [item.photoId]: true }));
               }
             }
           } catch (err) {
@@ -151,11 +163,33 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
   }, [rawListKey, photoVer]);
 
   const allDesigns: CatalogQuickDesign[] = useMemo(() => {
-    const anySoldOrFeatured = rawList.some(
+    // Filtrar diseños huérfanos sin imagen en la nube y deduplicar por nombre o contenido de imagen idéntico
+    const seenNames = new Set<string>();
+    const seenImageSigs = new Set<string>();
+    const uniqueRaw = rawList.filter((d) => {
+      if (!d.photoId) return false;
+      const img = urlMap[d.photoId] || MEM_PHOTO_CACHE.get(d.photoId) || null;
+      if (!img && (missingIds[d.photoId] || MISSING_PHOTO_IDS.has(d.photoId))) {
+        return false;
+      }
+      const nameKey = `${(d.name || '').trim().toLowerCase()}|${d.placement || 'back'}`;
+      if (seenNames.has(nameKey)) return false;
+      if (img) {
+        // Firma rápida de la imagen (longitud + muestra central) para detectar la misma foto subida dos veces
+        const mid = Math.floor(img.length / 2);
+        const imgSig = `${img.length}:${img.slice(mid, mid + 64)}`;
+        if (seenImageSigs.has(imgSig)) return false;
+        seenImageSigs.add(imgSig);
+      }
+      seenNames.add(nameKey);
+      return true;
+    });
+
+    const anySoldOrFeatured = uniqueRaw.some(
       (d) => Boolean(d.featured) || (soldByDesign.get(d.id) || 0) > 0
     );
     let bestSellerRank = 0;
-    return rawList.map((d, idx) => {
+    return uniqueRaw.map((d, idx) => {
       const soldCount = soldByDesign.get(d.id) || 0;
       const featured = Boolean(d.featured);
       let isBestSeller = false;
@@ -184,7 +218,7 @@ export function useCatalogDesigns(fallbackRefs?: SharedCatalogDesignRef[]) {
         allowedColorIds: d.allowedColorIds
       };
     });
-  }, [rawList, urlMap, soldByDesign]);
+  }, [rawList, urlMap, missingIds, soldByDesign]);
 
   const clientDesigns: CatalogQuickDesign[] = useMemo(
     () => allDesigns.filter((d) => d.clientVisible !== false),

@@ -421,6 +421,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [consumidorNote, setConsumidorNote] = useState('');
   const [customerError, setCustomerError] = useState<string | null>(null);
   const customerSectionRef = useRef<HTMLDivElement>(null);
+  const wizardTopRef = useRef<HTMLDivElement>(null);
   const [wizardStep, setWizardStep] = useState<0 | 1 | 2 | 3>(() =>
     draft.lines.length > 0 ? 3 : 0
   );
@@ -430,6 +431,31 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const [justAddedLine, setJustAddedLine] = useState<boolean>(() => draft.lines.length > 0);
   const [pdfModalOrder, setPdfModalOrder] = useState<Order | null>(null);
 
+  const scrollPosTop = useCallback(() => {
+    try {
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    } catch {}
+    const jump = () => {
+      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      if (wizardTopRef.current) {
+        try {
+          wizardTopRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+        } catch {}
+      }
+    };
+    jump();
+    requestAnimationFrame(() => {
+      jump();
+      setTimeout(jump, 45);
+      setTimeout(jump, 130);
+    });
+  }, []);
+
   const goToWizardStep = (next: number) => {
     const clamped = Math.max(0, Math.min(POS_WIZARD_LAST, next)) as 0 | 1 | 2 | 3;
     if (clamped === POS_WIZARD_LAST && (!justAddedLine || lines.length === 0)) {
@@ -437,8 +463,12 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     }
     setWizardStep(clamped);
     setMaxStepReached((prev) => Math.max(prev, clamped));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollPosTop();
   };
+
+  useEffect(() => {
+    scrollPosTop();
+  }, [wizardStep, scrollPosTop]);
 
   const handleAddAnotherShirt = (fromStep3 = false) => {
     if (!fromStep3 || !justAddedLine || lines.length === 0) {
@@ -449,7 +479,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     setManualPrice(null);
     setJustAddedLine(true);
     setWizardStep(0);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollPosTop();
   };
   const [latestWebOrder, setLatestWebOrder] = useState<CustomerWebOrderPayload | null>(null);
   const [importingWebOrder, setImportingWebOrder] = useState(false);
@@ -960,7 +990,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       : subtotal + currentDraftQty * unitPrice;
 
   return (
-    <div className="space-y-4 pb-36 sm:pb-32">
+    <div ref={wizardTopRef} className="space-y-4 pb-36 sm:pb-32">
       {/* Banner 1-Clic cuando un cliente envía un pedido desde la Tienda 3D */}
       {latestWebOrder && (
         <section className="rounded-[24px] border border-white/10 bg-slate-900/95 p-4 text-white shadow-lg backdrop-blur-xl">

@@ -1540,9 +1540,6 @@ export function InteractiveShirt3D({
             const f = e.target.files?.[0];
             if (f) {
               onUploadFile(f);
-              if (onUploadCatalogFiles) {
-                openUploadDialog({ mode: 'files', files: [f] });
-              }
             }
             e.target.value = '';
           }}
@@ -2028,12 +2025,12 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Ubicación y Sliders de Posición en la prenda */}
-          {onDesignChange && (
-            <div className="space-y-2.5 border-b border-slate-100 pb-3">
+          {/* Sliders de Posición en la prenda (sin repetir botones Espalda/Frente) */}
+          {onDesignChange && designUrl && (
+            <div className="space-y-2 border-b border-slate-100 pb-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-900">Ubicación y Posición</span>
-                {designUrl && (designOffsetX !== 0 || designOffsetY !== 0) && (
+                <span className="text-xs font-semibold text-slate-900">Posición fina</span>
+                {(designOffsetX !== 0 || designOffsetY !== 0) && (
                   <button
                     type="button"
                     onClick={() => onDesignChange({ offsetX: 0, offsetY: 0 })}
@@ -2043,64 +2040,38 @@ export function InteractiveShirt3D({
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {(
-                  [
-                    ['back', 'Espalda'],
-                    ['center', 'Frente'],
-                    ['pocket', 'Logo Izq.']
-                  ] as const
-                ).map(([id, lbl]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => onDesignChange({ placement: id, offsetX: 0, offsetY: 0 })}
-                    className={`rounded-xl py-1.5 text-xs font-semibold transition ${
-                      placement === id
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-
-              {/* Sliders tipo Apple para mover el diseño arriba/abajo e izquierda/derecha */}
-              {designUrl && (
-                <div className="space-y-2 rounded-2xl bg-slate-50 p-2.5">
-                  <div>
-                    <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                      <span>↕ Altura (Arriba / Abajo)</span>
-                      <span>{Math.round(designOffsetY)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="-20"
-                      max="22"
-                      step="1"
-                      value={designOffsetY}
-                      onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
-                      className="mt-1 w-full accent-slate-900"
-                    />
+              <div className="space-y-2 rounded-2xl bg-slate-50 p-2.5">
+                <div>
+                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                    <span>↕ Altura (Arriba / Abajo)</span>
+                    <span>{Math.round(designOffsetY)}</span>
                   </div>
-                  <div>
-                    <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                      <span>↔ Lado (Izq. / Der.)</span>
-                      <span>{Math.round(designOffsetX)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="-20"
-                      max="20"
-                      step="1"
-                      value={designOffsetX}
-                      onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
-                      className="mt-1 w-full accent-slate-900"
-                    />
-                  </div>
+                  <input
+                    type="range"
+                    min="-20"
+                    max="22"
+                    step="1"
+                    value={designOffsetY}
+                    onChange={(e) => onDesignChange({ offsetY: Number(e.target.value) })}
+                    className="mt-1 w-full accent-slate-900"
+                  />
                 </div>
-              )}
+                <div>
+                  <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
+                    <span>↔ Lado (Izq. / Der.)</span>
+                    <span>{Math.round(designOffsetX)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-20"
+                    max="20"
+                    step="1"
+                    value={designOffsetX}
+                    onChange={(e) => onDesignChange({ offsetX: Number(e.target.value) })}
+                    className="mt-1 w-full accent-slate-900"
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -2265,52 +2236,6 @@ export function InteractiveShirt3D({
                   ✕
                 </button>
               )}
-            </div>
-          )}
-
-          {/* Barra tipo Slide para recorrer diseños del catálogo */}
-          {readySlideDesigns.length > 1 && (
-            <div className="mb-3 flex items-center gap-3 rounded-2xl bg-slate-50 px-3 py-2">
-              <button
-                type="button"
-                onClick={() => stepCatalogDesign(-1)}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
-              >
-                ‹
-              </button>
-              <div className="flex flex-1 flex-col gap-1">
-                <div className="flex items-center justify-between text-[11px] font-medium text-slate-600">
-                  <span className="truncate font-semibold text-slate-900">
-                    {currentSlideIdx >= 0 ? readySlideDesigns[currentSlideIdx].name : 'Desliza para cambiar diseño'}
-                  </span>
-                  <span>
-                    {currentSlideIdx >= 0 ? currentSlideIdx + 1 : 0} / {readySlideDesigns.length}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={readySlideDesigns.length - 1}
-                  step={1}
-                  value={currentSlideIdx >= 0 ? currentSlideIdx : 0}
-                  onChange={(e) => {
-                    const idx = Number(e.target.value);
-                    const target = readySlideDesigns[idx];
-                    if (target && onSelectCatalogDesign) {
-                      setShowcaseActive(false);
-                      applyCatalogDesignWithColorGuard(target);
-                    }
-                  }}
-                  className="w-full accent-slate-900"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => stepCatalogDesign(1)}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-slate-700 shadow-sm ring-1 ring-black/5 hover:bg-slate-100"
-              >
-                ›
-              </button>
             </div>
           )}
 

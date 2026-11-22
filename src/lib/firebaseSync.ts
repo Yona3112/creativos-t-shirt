@@ -194,8 +194,9 @@ export class FirebaseSyncEngine {
 
   private async absorb(remoteRaw: AppState, remoteAt: string | null) {
     const local = this.opts.getState();
+    const rawRemoteSig = contentSignature(remoteRaw);
     const remote = normalize(remoteRaw);
-    this.lastRemoteSig = contentSignature(remote);
+    this.lastRemoteSig = rawRemoteSig;
     const merged = mergeStates(local, remote);
     if (remoteAt) {
       const parsed = Date.parse(remoteAt);
@@ -204,7 +205,7 @@ export class FirebaseSyncEngine {
     if (contentSignature(merged) !== contentSignature(local)) {
       this.opts.applyRemote(merged);
     }
-    if (contentSignature(merged) !== this.lastRemoteSig) {
+    if (contentSignature(merged) !== rawRemoteSig) {
       await this.write(merged);
     } else {
       this.setStatus('live');
