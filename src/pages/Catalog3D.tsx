@@ -29,8 +29,14 @@ import { Modal, toast } from '../components/ui';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
 import {
   buildPublicCatalog,
+  buildThemeShareUrl,
+  campaignsMatch,
+  campaignSlug,
+  DEFAULT_CAMPAIGNS,
   DEFAULT_CATALOG_PAYMENT_METHODS,
   LIVE_CATALOG_KEY,
+  parseStorefrontHash,
+  resolveCampaignName,
   WEB_ORDER_LATEST_KEY,
   type CustomerWebOrderItem,
   type CustomerWebOrderPayload,
@@ -148,24 +154,22 @@ function decodeCatalog(token: string): SharedCatalogPayload | null {
 }
 
 export function readSharedCatalogHash(): SharedCatalogPayload | null {
-  const h = location.hash.replace(/^#\/?/, '').trim();
-  if (!h) return null;
-  // Enlace corto de Tienda Oficial (#tienda, #tienda?camp=Ranchero, #catalogo)
-  if (h === 'tienda' || h.startsWith('tienda?') || h === 'catalogo' || h.startsWith('c=')) {
-    const base = buildDefaultLivePayload();
-    const campMatch = h.match(/[?&]camp=([^&]+)/);
-    if (campMatch && campMatch[1]) {
-      base.activeCampaign = decodeURIComponent(campMatch[1]);
-    }
-    return base;
+  const parsed = parseStorefrontHash(location.hash);
+  if (!parsed.isPublic) return null;
+  if (parsed.legacyToken) {
+    return decodeCatalog(parsed.legacyToken) || buildDefaultLivePayload();
   }
-  // Compatibilidad con enlaces anteriores (#catalogo=eyJ...)
-  const m = location.hash.match(/catalogo=([A-Za-z0-9_-]+)/);
-  if (!m) return null;
-  return decodeCatalog(m[1]) || buildDefaultLivePayload();
+  const base = buildDefaultLivePayload();
+  if (parsed.campaign) {
+    base.activeCampaign =
+      resolveCampaignName(parsed.campaign, base.campaigns || DEFAULT_CAMPAIGNS) || parsed.campaign;
+    base.lockedCampaign = true;
+  } else {
+    base.activeCampaign = 'all';
+    base.lockedCampaign = false;
+  }
+  return base;
 }
-
-const DEFAULT_CAMPAIGNS = ['Ranchero', 'Turístico', 'Cristiana'];
 
 export default function Catalog3D() {
   const state = useAppState();
@@ -174,7 +178,10 @@ export default function Catalog3D() {
   const brands = activeBrands(state);
 
   const campaigns = useMemo(() => {
-    const list = settings.campaigns && settings.campaigns.length > 0 ? settings.campaigns : DEFAULT_CAMPAIGNS;
+    const list =
+      settings.campaigns && settings.campaigns.length > 0
+        ? settings.campaigns
+        : [...DEFAULT_CAMPAIGNS];
     return Array.from(new Set(list));
   }, [settings.campaigns]);
 
@@ -357,7 +364,7 @@ export default function Catalog3D() {
     }
   };
 
-  const buildPayload = (): SharedCatalogPayload => {
+  const buildPayload = (opts?: { campaign?: string; lockedCampaign?: boolean }): SharedCatalogPayload => {
     const selectedColors = colors
       .filter((c) => enabledColorIds.includes(c.id))
       .map((c) => ({ id: c.id, name: c.name, hex: c.hex }));
@@ -397,7 +404,9 @@ export default function Catalog3D() {
       offsetX,
       offsetY,
       boutiqueTheme,
-      activeCampaign,
+      campaigns,
+      activeCampaign: opts?.campaign ?? 'all',
+      lockedCampaign: Boolean(opts?.lockedCampaign),
       designs: clientDesigns.map((d) => ({
         id: d.id,
         name: d.name,
@@ -422,16 +431,11 @@ export default function Catalog3D() {
     };
   };
 
-  const buildShareUrl = (camp = activeCampaign): string => {
-    const base = `${location.origin}${location.pathname}#tienda`;
-    if (camp && camp !== 'all') {
-      return `${base}?camp=${encodeURIComponent(camp)}`;
-    }
-    return base;
-  };
+  const buildShareUrl = (camp = activeCampaign): string =>
+    buildThemeShareUrl(`${location.origin}${location.pathname}`, camp);
 
   const syncLiveCatalogSnapshot = async () => {
-    const payload = buildPayload();
+    const payload = buildPayload({ campaign: 'all', lockedCampaign: false });
     const rawJson = JSON.stringify(payload);
     await savePhoto(LIVE_CATALOG_KEY, rawJson, 0);
     await uploadPhotoNow(LIVE_CATALOG_KEY, rawJson);
@@ -456,15 +460,41 @@ export default function Catalog3D() {
     await Promise.all(uploads);
   };
 
+  const handleCopyThemeUrl = async (camp: string) => {
+    void syncLiveCatalogSnapshot();
+    const url = buildShareUrl(camp);
+    await copyText(url);
+    toast(
+      camp !== 'all'
+        ? `Link de "${camp}" copiado (${url.slice(url.indexOf('#'))})`
+        : 'Link de Catálogo completo (#tienda) copiado',
+      'ok'
+    );
+  };
+
+  const handleWhatsAppTheme = (camp: string) => {
+    void syncLiveCatalogSnapshot();
+    const url = buildShareUrl(camp);
+    const campLine =
+      camp !== 'all' ? `\n✨ *Colección ${camp}*` : '\n✨ *Todas las colecciones disponibles*';
+    const text = `¡Hola! 👋 Mira nuestro *Catálogo Interactivo* de *${settings.storeName}*:${campLine}\n👉 ${url}\n\nElige tu color, diseño en vivo y talla para enviarnos tu pedido.`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handlePreviewTheme = (camp: string) => {
+    void syncLiveCatalogSnapshot();
+    setPreviewClient(buildPayload({ campaign: camp, lockedCampaign: camp !== 'all' }));
+  };
+
   const handleShareLink = async () => {
     void syncLiveCatalogSnapshot();
     const url = buildShareUrl(activeCampaign);
-    const campLabel = activeCampaign !== 'all' ? ` · Campaña ${activeCampaign}` : '';
+    const campLabel = activeCampaign !== 'all' ? ` · Colección ${activeCampaign}` : '';
     if (navigator.share) {
       try {
         await navigator.share({
           title: `${settings.storeName}${campLabel}`,
-          text: `Mira nuestro catálogo 3D${campLabel}:`,
+          text: `Mira nuestro catálogo${campLabel}:`,
           url
         });
         return;
@@ -475,18 +505,13 @@ export default function Catalog3D() {
     await copyText(url);
     toast(
       activeCampaign !== 'all'
-        ? `Enlace de campaña "${activeCampaign}" copiado`
-        : 'Enlace corto (#tienda) copiado'
+        ? `Link de temática "${activeCampaign}" copiado`
+        : 'Link corto (#tienda) copiado'
     );
   };
 
-  const handleShareWhatsApp = async () => {
-    void syncLiveCatalogSnapshot();
-    const url = buildShareUrl(activeCampaign);
-    const campLine =
-      activeCampaign !== 'all' ? `\n✨ *Colección / Campaña: ${activeCampaign}*` : '';
-    const text = `¡Hola! 👋 Entra a nuestro *Catálogo 3D* de *${settings.storeName}*:${campLine}\n👉 ${url}\n\nElige tu diseño, color y talla en vivo y envíanos tu pedido.`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+  const handleShareWhatsApp = () => {
+    handleWhatsAppTheme(activeCampaign);
   };
 
   if (previewClient) {
@@ -529,10 +554,7 @@ export default function Catalog3D() {
             <button
               type="button"
               className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
-              onClick={() => {
-                void syncLiveCatalogSnapshot();
-                setPreviewClient(buildPayload());
-              }}
+              onClick={() => handlePreviewTheme(activeCampaign)}
             >
               Vista Cliente
             </button>
@@ -832,6 +854,98 @@ export default function Catalog3D() {
             })}
           </div>
         </div>
+
+        {/* Links por Temática para compartir directo al cliente */}
+        <div className="mt-4 rounded-2xl border border-slate-200/85 bg-white p-3.5 shadow-sm">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
+                Links por Temática
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Envía un link directo para cada colección o el catálogo completo sin que el cliente vea otras temáticas
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAddCampaign}
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-bold text-slate-800 transition hover:bg-slate-100"
+            >
+              + Nueva temática
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {[
+              {
+                key: 'all',
+                label: 'Catálogo Completo (Todas)',
+                emoji: '🛍️',
+                count: clientDesigns.length,
+                shortHash: '#tienda'
+              },
+              ...campaigns.map((camp) => {
+                const s = campaignSlug(camp);
+                const emoji = /(cristian|fe|iglesia|dios|biblia)/.test(s)
+                  ? '✝️'
+                  : /(turist|honduras|playa|roatan|copan)/.test(s)
+                  ? '🇭🇳'
+                  : /(ranch|vaquer|montur|ganad|caball)/.test(s)
+                  ? '🤠'
+                  : '✨';
+                const count = clientDesigns.filter((d) => campaignsMatch(d.campaign, camp)).length;
+                return {
+                  key: camp,
+                  label: camp,
+                  emoji,
+                  count,
+                  shortHash: `#tienda/${s}`
+                };
+              })
+            ].map((row) => (
+              <div
+                key={row.key}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                    <span>{row.emoji}</span>
+                    <span className="truncate">{row.label}</span>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                      {row.count} {row.count === 1 ? 'diseño' : 'diseños'}
+                    </span>
+                  </div>
+                  <div className="truncate font-mono text-[10px] text-slate-500">
+                    {row.shortHash}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyThemeUrl(row.key)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-800 transition hover:bg-slate-100"
+                  >
+                    Copiar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleWhatsAppTheme(row.key)}
+                    className="rounded-lg bg-[#25D366] px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-[#1ebe5b]"
+                  >
+                    WhatsApp
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePreviewTheme(row.key)}
+                    className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-slate-800"
+                  >
+                    Ver
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       {brand && (
@@ -1035,14 +1149,22 @@ export function CustomerCatalogView({
       wholesaleMin: hasAuthoritativeBase
         ? base.wholesaleMin
         : state.settings.wholesaleMin || base.wholesaleMin,
-      activeCampaign: initialPayload.activeCampaign || base.activeCampaign
+      campaigns: base.campaigns || [...DEFAULT_CAMPAIGNS],
+      activeCampaign: initialPayload.lockedCampaign ? initialPayload.activeCampaign || 'all' : 'all',
+      lockedCampaign: Boolean(initialPayload.lockedCampaign)
     };
   }, [cloudPayload, initialPayload, onExitPreview, state]);
 
+  const isCampaignLocked = Boolean(initialPayload.lockedCampaign);
   const [selectedColor, setSelectedColor] = useState<SharedCatalogColor>(payload.colors[0]);
   const [designUrl, setDesignUrl] = useState<string | null>(initialDesignUrl);
-  const [clientCampaign, setClientCampaign] = useState<string>(
-    initialPayload.activeCampaign || payload.activeCampaign || 'all'
+  const [clientCampaign, setClientCampaign] = useState<string>(() =>
+    isCampaignLocked && initialPayload.activeCampaign
+      ? resolveCampaignName(
+          initialPayload.activeCampaign,
+          payload.campaigns || [...DEFAULT_CAMPAIGNS]
+        ) || initialPayload.activeCampaign
+      : 'all'
   );
   const [activeCatalogDesignId, setActiveCatalogDesignId] = useState<string | null>(null);
   const [selectedDesignName, setSelectedDesignName] = useState<string | null>(null);
@@ -1051,7 +1173,7 @@ export function CustomerCatalogView({
     initialDesignUrl ? payload.photoId || null : null
   );
   const [placement, setPlacement] = useState<DecalPlacement>(payload.placement || 'back');
-  const [scale, setScale] = useState(payload.scale || 2.0);
+  const scale = 2.0;
   const [offsetX, setOffsetX] = useState(payload.offsetX || 0);
   const [offsetY, setOffsetY] = useState(payload.offsetY ?? 0);
   const boutiqueTheme: BoutiqueTheme = payload.boutiqueTheme || 'ranchero';
@@ -1146,26 +1268,30 @@ export function CustomerCatalogView({
       .map((d) => d.campaign?.trim())
       .filter((c): c is string => typeof c === 'string' && c.length > 0 && c.toLowerCase() !== 'all');
     const fromState = state.settings.campaigns || [];
+    const fromPayload = payload.campaigns || [];
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const c of [...DEFAULT_CAMPAIGNS, ...fromState, ...fromDesigns]) {
+    for (const c of [...DEFAULT_CAMPAIGNS, ...fromPayload, ...fromState, ...fromDesigns]) {
       const clean = (c || '').trim();
       if (!clean) continue;
-      const k = clean.toLowerCase();
-      if (seen.has(k)) continue;
+      const k = campaignSlug(clean);
+      if (!k || seen.has(k)) continue;
       seen.add(k);
       out.push(clean);
     }
     return out;
-  }, [clientDesigns, state.settings.campaigns]);
+  }, [clientDesigns, payload.campaigns, state.settings.campaigns]);
 
   useEffect(() => {
-    if (initialPayload.activeCampaign) {
-      setClientCampaign(initialPayload.activeCampaign);
-    } else if (payload.activeCampaign && clientCampaign === 'all') {
-      setClientCampaign(payload.activeCampaign);
+    if (isCampaignLocked && initialPayload.activeCampaign) {
+      setClientCampaign(
+        resolveCampaignName(initialPayload.activeCampaign, availableCampaigns) ||
+          initialPayload.activeCampaign
+      );
+    } else if (!isCampaignLocked && !availableCampaigns.some((c) => campaignsMatch(c, clientCampaign))) {
+      setClientCampaign('all');
     }
-  }, [initialPayload.activeCampaign, payload.activeCampaign]);
+  }, [isCampaignLocked, initialPayload.activeCampaign, availableCampaigns]);
 
   useEffect(() => {
     if (!payload.colors.some((c) => c.name === selectedColor?.name)) {
@@ -1549,9 +1675,7 @@ export function CustomerCatalogView({
       const codePrefix = firstItem.designCode ? `[${firstItem.designCode}] ` : '';
       const sideText = firstItem.placement === 'back' ? 'ESPALDA' : 'FRENTE';
       const dBlock = firstItem.designName
-        ? `\n• Precio: *${money(firstItem.unitPrice)}*\n• Diseño: *${codePrefix}${firstItem.designName}* (${
-            firstItem.scale && firstItem.scale >= 1.85 ? 'Tamaño A3' : 'Tamaño A4'
-          })\n• 📍 LADO: *${sideText}*`
+        ? `\n• Precio: *${money(firstItem.unitPrice)}*\n• Diseño: *${codePrefix}${firstItem.designName}*\n• 📍 LADO: *${sideText}*`
         : `\n• Precio: *${money(firstItem.unitPrice)}*`;
       itemsDetailsText = `\n👕 *DETALLE DE LA CAMISA:*\n• Marca: ${firstItem.brandName}\n• Color: ${firstItem.colorName}\n• Talla: ${firstItem.size}\n• Cantidad: ${firstItem.qty} uds (${money(firstItem.unitPrice)} c/u)${dBlock}\n• Total: *${money(finalTotal)}*`;
     }
@@ -1737,7 +1861,6 @@ export function CustomerCatalogView({
                 setPlacement(patch.placement);
                 setJustAddedToCart(false);
               }
-              if (patch.scale !== undefined) setScale(patch.scale);
               if (patch.offsetX !== undefined) setOffsetX(patch.offsetX);
               if (patch.offsetY !== undefined) setOffsetY(patch.offsetY);
               if (patch.designUrl !== undefined) {
@@ -1769,7 +1892,6 @@ export function CustomerCatalogView({
                 setSelectedDesignPhotoId(customPid);
                 setJustAddedToCart(false);
 
-                setScale(2.0);
                 setOffsetX(0);
                 setOffsetY(0);
               } catch (e) {
@@ -1797,7 +1919,9 @@ export function CustomerCatalogView({
             activeCatalogDesignId={activeCatalogDesignId}
             campaigns={availableCampaigns}
             activeCampaign={clientCampaign}
-            onChangeActiveCampaign={setClientCampaign}
+            onChangeActiveCampaign={isCampaignLocked ? undefined : setClientCampaign}
+            lockedCampaign={isCampaignLocked}
+            defaultViewMode="model"
             onSelectCatalogDesign={(d) => {
               if (!d.imageUrl) return;
               setDesignUrl(d.imageUrl);
@@ -1807,7 +1931,6 @@ export function CustomerCatalogView({
               setSelectedDesignPhotoId(d.photoId);
               setJustAddedToCart(false);
 
-              setScale(2.0);
               setOffsetX(0);
               setOffsetY(0);
             }}

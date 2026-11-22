@@ -30,6 +30,20 @@ export default defineConfig({
         clientsClaim: true,
         cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest,glb}'],
+        globIgnores: ['mockups/**'],
+        runtimeCaching: [
+          {
+            urlPattern: /\/mockups\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'mockup-assets-v1',
+              expiration: {
+                maxEntries: 20,
+                maxAgeSeconds: 60 * 60 * 24 * 30
+              }
+            }
+          }
+        ],
         navigateFallback: '/index.html',
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024
       }

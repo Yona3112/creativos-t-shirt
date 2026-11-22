@@ -193,7 +193,10 @@ export default function App() {
   if (sharedCatalog) {
     return (
       <>
-        <CustomerCatalogView payload={sharedCatalog} />
+        <CustomerCatalogView
+          key={`${sharedCatalog.lockedCampaign ? 'locked' : 'all'}:${sharedCatalog.activeCampaign || 'all'}`}
+          payload={sharedCatalog}
+        />
         <Toasts />
       </>
     );

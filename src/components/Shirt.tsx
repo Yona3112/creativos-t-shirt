@@ -8,6 +8,8 @@ import {
   type DesignToneAnalysis
 } from '../lib/image';
 import type { AllowedColorMode, DesignTone } from '../lib/types';
+import { ModelMockupCanvas, MOCKUP_SCENES } from './ModelMockupCanvas';
+import { campaignsMatch, resolveMockupScene, type MockupSceneId } from '../lib/publicCatalog';
 
 export type DecalPlacement = 'center' | 'pocket' | 'full' | 'back';
 export type MotionMode = 'wind' | 'walk' | 'orbit';
@@ -629,7 +631,9 @@ export function InteractiveShirt3D({
   onChangeBoutiqueTheme: _onChangeBoutiqueTheme,
   autoMotion = true,
   stockBadge,
-  wizardStep
+  wizardStep,
+  lockedCampaign = false,
+  defaultViewMode
 }: {
   hex: string;
   colorName: string;
@@ -712,12 +716,21 @@ export function InteractiveShirt3D({
   stockBadge?: { available: boolean; text: string } | null;
   /** Modo asistente (tienda): limita qué controles se muestran por paso */
   wizardStep?: 'color' | 'design' | 'size' | 'data' | null;
+  /** True cuando la tienda se abrió desde un enlace dedicado a una temática */
+  lockedCampaign?: boolean;
+  /** Modo de vista inicial ('model' foto real en escenario o '3d' glb) */
+  defaultViewMode?: 'model' | '3d';
 }) {
   const [mode] = useState<MotionMode>('wind');
   const [touchAction, setTouchAction] = useState<'rotate' | 'moveDesign'>('rotate');
   const [targetAngleY, setTargetAngleY] = useState<number | null>(placement === 'back' ? 180 : 0);
   const [zoom, setZoom] = useState<number>(1);
   const [showcaseActive, setShowcaseActive] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<'model' | '3d'>(
+    defaultViewMode || (!isStoreOwner ? 'model' : '3d')
+  );
+  const [manualScene, setManualScene] = useState<MockupSceneId | null>(null);
+  const [modelFailed, setModelFailed] = useState(false);
   const themeStyle = BOUTIQUE_THEMES[boutiqueTheme] || BOUTIQUE_THEMES.ranchero;
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const catalogBatchInputRef = useRef<HTMLInputElement>(null);
@@ -763,6 +776,27 @@ export function InteractiveShirt3D({
         (!!designUrl && !!d.imageUrl && d.imageUrl === designUrl)
     ) || null;
 
+  const activeScene: MockupSceneId = (() => {
+    if (lockedCampaign && activeCampaign && activeCampaign !== 'all') {
+      return resolveMockupScene(activeCampaign, null, 'ranchero');
+    }
+    if (manualScene && !lockedCampaign) {
+      return manualScene;
+    }
+    if (activeCampaign && activeCampaign !== 'all') {
+      return resolveMockupScene(activeCampaign, activeCatalogDesign?.campaign, 'ranchero');
+    }
+    if (activeCatalogDesign?.campaign) {
+      return resolveMockupScene(null, activeCatalogDesign.campaign, 'ranchero');
+    }
+    return 'ranchero';
+  })();
+  const useModelStage = viewMode === 'model' && !modelFailed;
+
+  useEffect(() => {
+    setManualScene(null);
+  }, [activeCampaign]);
+
   const findCompatibleColor = (
     design: CatalogQuickDesign | null,
     preferCurrentFirst = true
@@ -802,6 +836,7 @@ export function InteractiveShirt3D({
   ]);
 
   const applyCatalogDesignWithColorGuard = (d: CatalogQuickDesign) => {
+    setManualScene(null);
     if (colorOptions && onSelectColor) {
       const current = colorOptions.find((c) =>
         activeColorId ? c.id === activeColorId : c.name === colorName
@@ -968,7 +1003,7 @@ export function InteractiveShirt3D({
     const campOk =
       !activeCampaign || activeCampaign === 'all'
         ? true
-        : (d.campaign || '').toLowerCase() === activeCampaign.toLowerCase();
+        : campaignsMatch(d.campaign, activeCampaign);
     if (!campOk) return false;
     const sq = designSearch.trim().toLowerCase();
     if (!sq) return true;
@@ -1026,21 +1061,29 @@ export function InteractiveShirt3D({
             wizardStep === 'design' ? 'p-2.5 sm:p-4' : 'p-3.5 sm:p-6'
           } ${themeStyle.stageClass}`}
         >
-          {/* Barra superior flotante: Espalda/Frente/Perfil + Zoom */}
+          {/* Barra superior flotante: Espalda/Frente(/Perfil), Modelo/3D + Zoom */}
           <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex rounded-xl border border-slate-200/90 bg-white/95 p-0.5 shadow-sm backdrop-blur-md">
               {(
-                [
-                  ['back', 180, 'Espalda'],
-                  ['center', 0, 'Frente'],
-                  ['profile', 38, 'Perfil']
-                ] as const
+                useModelStage
+                  ? ([
+                      ['back', 180, 'Espalda'],
+                      ['center', 0, 'Frente']
+                    ] as const)
+                  : ([
+                      ['back', 180, 'Espalda'],
+                      ['center', 0, 'Frente'],
+                      ['profile', 38, 'Perfil']
+                    ] as const)
               ).map(([sideKey, angle, lbl]) => {
-                const active =
-                  targetAngleY === angle ||
-                  (targetAngleY === null &&
-                    ((angle === 180 && placement === 'back') ||
-                      (angle === 0 && placement !== 'back')));
+                const active = useModelStage
+                  ? sideKey === 'back'
+                    ? placement === 'back'
+                    : placement !== 'back'
+                  : targetAngleY === angle ||
+                    (targetAngleY === null &&
+                      ((angle === 180 && placement === 'back') ||
+                        (angle === 0 && placement !== 'back')));
                 return (
                   <button
                     key={lbl}
@@ -1075,6 +1118,32 @@ export function InteractiveShirt3D({
                   {stockBadge.text}
                 </span>
               )}
+              {!modelFailed && (
+                <div className="inline-flex rounded-xl border border-slate-200/90 bg-white/95 p-0.5 shadow-sm backdrop-blur-md">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('model')}
+                    className={`rounded-lg px-2 py-0.5 text-[11px] font-semibold transition ${
+                      useModelStage
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Modelo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('3d')}
+                    className={`rounded-lg px-2 py-0.5 text-[11px] font-semibold transition ${
+                      !useModelStage
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    3D
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
@@ -1089,63 +1158,147 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Lienzo 3D Central compacto para ver camisa + diseños juntos */}
-          <div
-            className={`relative mx-auto flex w-full items-center justify-center ${
-              wizardStep === 'design' ? 'max-w-[215px] sm:max-w-[285px]' : 'max-w-[300px] sm:max-w-[350px]'
-            }`}
-            style={{ aspectRatio: '1 / 1' }}
-          >
-            <div
-              className="studio-aura-pulse pointer-events-none absolute inset-6 rounded-full blur-2xl transition-colors duration-700"
-              style={{
-                background: `radial-gradient(circle, ${hex}88 0%, ${themeStyle.auraColor} 55%, transparent 75%)`
-              }}
-            />
-            <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-4 w-36 rounded-full bg-black/25 blur-md" />
+          {/* Escenario Principal: Probador en Modelo Real (4:5) o Vista 3D */}
+          {useModelStage ? (
+            <div className="mt-2 space-y-2">
+              <div
+                className={`relative mx-auto w-full ${
+                  wizardStep === 'design' ? 'max-w-[260px] sm:max-w-[305px]' : 'max-w-[310px] sm:max-w-[360px]'
+                }`}
+                style={{ aspectRatio: '4 / 5' }}
+              >
+                <div className="pointer-events-none absolute left-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full bg-black/55 px-2.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-md">
+                  <span>{MOCKUP_SCENES[activeScene].badge}</span>
+                </div>
 
-            {(!wizardStep || wizardStep === 'design') && !designUrl && (
-              <div className="pointer-events-none absolute bottom-3 z-10 rounded-full border border-slate-200 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 shadow-sm backdrop-blur-md">
-                📍 {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
+                {(!wizardStep || wizardStep === 'design') && !designUrl && (
+                  <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/40 bg-black/60 px-3 py-0.5 text-[10px] font-semibold text-white shadow-sm backdrop-blur-md">
+                    📍 {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
+                  </div>
+                )}
+
+                {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => stepCatalogDesign(-1)}
+                      aria-label="Diseño anterior"
+                      className="absolute left-1.5 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepCatalogDesign(1)}
+                      aria-label="Siguiente diseño"
+                      className="absolute right-1.5 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
+                    >
+                      ›
+                    </button>
+                  </>
+                )}
+
+                <ModelMockupCanvas
+                  sceneId={activeScene}
+                  placement={placement}
+                  hex={hex}
+                  designUrl={designUrl || null}
+                  designScale={isStoreOwner ? designScale : 2.0}
+                  designOffsetX={designOffsetX}
+                  designOffsetY={designOffsetY}
+                  zoom={zoom}
+                  onSwipeDesign={
+                    (!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1
+                      ? (delta) => stepCatalogDesign(delta)
+                      : undefined
+                  }
+                  onError={() => setModelFailed(true)}
+                />
               </div>
-            )}
 
-            {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => stepCatalogDesign(-1)}
-                  aria-label="Diseño anterior"
-                  className="absolute left-0 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
-                >
-                  ‹
-                </button>
-                <button
-                  type="button"
-                  onClick={() => stepCatalogDesign(1)}
-                  aria-label="Siguiente diseño"
-                  className="absolute right-0 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
-                >
-                  ›
-                </button>
-              </>
-            )}
+              {!lockedCampaign && (
+                <div className="flex flex-wrap items-center justify-center gap-1.5">
+                  {(['ranchero', 'cristiana', 'turistico'] as const).map((scId) => (
+                    <button
+                      key={scId}
+                      type="button"
+                      onClick={() => setManualScene(scId)}
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                        activeScene === scId
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'border border-slate-200 bg-white/90 text-slate-700 hover:bg-white'
+                      }`}
+                    >
+                      {MOCKUP_SCENES[scId].chipLabel}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-            <WebGLShirtCanvas
-              hex={hex}
-              designUrl={designUrl || null}
-              placement={placement}
-              designScale={designScale}
-              designOffsetX={designOffsetX}
-              designOffsetY={designOffsetY}
-              zoom={zoom}
-              onZoomChange={(nextZ) => setZoom(nextZ)}
-              autoMotion={autoMotion && zoom <= 1.25}
-              mode={mode}
-              targetAngleY={targetAngleY}
-              touchAction="rotate"
-            />
-          </div>
+              {wizardStep === 'design' && readySlideDesigns.length > 1 && (
+                <p className="text-center text-[10px] font-medium text-slate-500">
+                  Desliza sobre el modelo para cambiar diseño
+                </p>
+              )}
+            </div>
+          ) : (
+            <div
+              className={`relative mx-auto flex w-full items-center justify-center ${
+                wizardStep === 'design' ? 'max-w-[215px] sm:max-w-[285px]' : 'max-w-[300px] sm:max-w-[350px]'
+              }`}
+              style={{ aspectRatio: '1 / 1' }}
+            >
+              <div
+                className="studio-aura-pulse pointer-events-none absolute inset-6 rounded-full blur-2xl transition-colors duration-700"
+                style={{
+                  background: `radial-gradient(circle, ${hex}88 0%, ${themeStyle.auraColor} 55%, transparent 75%)`
+                }}
+              />
+              <div className="floor-shadow-breath pointer-events-none absolute bottom-3 h-4 w-36 rounded-full bg-black/25 blur-md" />
+
+              {(!wizardStep || wizardStep === 'design') && !designUrl && (
+                <div className="pointer-events-none absolute bottom-3 z-10 rounded-full border border-slate-200 bg-white/95 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 shadow-sm backdrop-blur-md">
+                  📍 {isBackSide ? 'Espalda (Atrás)' : 'Frente (Pecho)'}
+                </div>
+              )}
+
+              {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => stepCatalogDesign(-1)}
+                    aria-label="Diseño anterior"
+                    className="absolute left-0 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepCatalogDesign(1)}
+                    aria-label="Siguiente diseño"
+                    className="absolute right-0 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-base font-bold text-slate-800 shadow-sm backdrop-blur-md transition hover:bg-white active:scale-95"
+                  >
+                    ›
+                  </button>
+                </>
+              )}
+
+              <WebGLShirtCanvas
+                hex={hex}
+                designUrl={designUrl || null}
+                placement={placement}
+                designScale={isStoreOwner ? designScale : 2.0}
+                designOffsetX={designOffsetX}
+                designOffsetY={designOffsetY}
+                zoom={zoom}
+                onZoomChange={(nextZ) => setZoom(nextZ)}
+                autoMotion={autoMotion && zoom <= 1.25}
+                mode={mode}
+                targetAngleY={targetAngleY}
+                touchAction="rotate"
+              />
+            </div>
+          )}
 
           {/* Barra flotante Jiro de 1 línea para ajustar o quitar diseño */}
           {designUrl && (!wizardStep || wizardStep === 'design') && (
@@ -1212,17 +1365,25 @@ export function InteractiveShirt3D({
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[11px] font-semibold text-slate-700">
-                        Ajusta altura, centrado o tamaño
+                        {isStoreOwner ? 'Ajusta altura, centrado o tamaño' : 'Ajusta altura o centrado'}
                       </span>
                       <button
                         type="button"
-                        onClick={() => onDesignChange({ offsetX: 0, offsetY: 0, scale: 2.0 })}
+                        onClick={() =>
+                          onDesignChange(
+                            isStoreOwner ? { offsetX: 0, offsetY: 0, scale: 2.0 } : { offsetX: 0, offsetY: 0 }
+                          )
+                        }
                         className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-200"
                       >
                         Centrar
                       </button>
                     </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div
+                      className={`grid grid-cols-1 gap-2 ${
+                        isStoreOwner ? 'sm:grid-cols-3' : 'sm:grid-cols-2'
+                      }`}
+                    >
                       <div>
                         <div className="flex justify-between text-[10px] font-medium text-slate-500">
                           <span>↕ Altura</span>
@@ -1253,21 +1414,23 @@ export function InteractiveShirt3D({
                           className="w-full accent-slate-900"
                         />
                       </div>
-                      <div>
-                        <div className="flex justify-between text-[10px] font-medium text-slate-500">
-                          <span>⤢ Tamaño</span>
-                          <span>{Math.round(designScale * 100)}%</span>
+                      {isStoreOwner && (
+                        <div>
+                          <div className="flex justify-between text-[10px] font-medium text-slate-500">
+                            <span>⤢ Tamaño</span>
+                            <span>{Math.round(designScale * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="1.0"
+                            max="2.2"
+                            step="0.05"
+                            value={designScale}
+                            onChange={(e) => onDesignChange({ scale: Number(e.target.value) })}
+                            className="w-full accent-slate-900"
+                          />
                         </div>
-                        <input
-                          type="range"
-                          min="1.0"
-                          max="2.2"
-                          step="0.05"
-                          value={designScale}
-                          onChange={(e) => onDesignChange({ scale: Number(e.target.value) })}
-                          className="w-full accent-slate-900"
-                        />
-                      </div>
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -1388,34 +1551,42 @@ export function InteractiveShirt3D({
           <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <h3 className="text-sm font-semibold tracking-tight text-slate-900">Elige un diseño</h3>
-              {campaigns && campaigns.length > 0 && onChangeActiveCampaign && (
-                <div className="ml-0.5 flex flex-wrap items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onChangeActiveCampaign('all')}
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
-                      activeCampaign === 'all'
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Todos
-                  </button>
-                  {campaigns.map((camp) => (
+              {lockedCampaign && activeCampaign && activeCampaign !== 'all' ? (
+                <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                  Colección {activeCampaign}
+                </span>
+              ) : (
+                campaigns &&
+                campaigns.length > 0 &&
+                onChangeActiveCampaign && (
+                  <div className="ml-0.5 flex flex-wrap items-center gap-1">
                     <button
-                      key={camp}
                       type="button"
-                      onClick={() => onChangeActiveCampaign(camp)}
+                      onClick={() => onChangeActiveCampaign('all')}
                       className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
-                        activeCampaign.toLowerCase() === camp.toLowerCase()
+                        activeCampaign === 'all'
                           ? 'bg-slate-900 text-white'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                     >
-                      {camp}
+                      Todos
                     </button>
-                  ))}
-                </div>
+                    {campaigns.map((camp) => (
+                      <button
+                        key={camp}
+                        type="button"
+                        onClick={() => onChangeActiveCampaign(camp)}
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                          campaignsMatch(activeCampaign, camp)
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {camp}
+                      </button>
+                    ))}
+                  </div>
+                )
               )}
             </div>
             {onUploadFile && (
@@ -1450,6 +1621,11 @@ export function InteractiveShirt3D({
             </div>
           )}
 
+          {filteredCatalogDesigns.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs font-medium text-slate-500">
+              Aún no hay diseños publicados en esta colección. Puedes subir tu propia imagen arriba.
+            </div>
+          ) : (
           <div
             ref={clientCarouselRef}
             className="flex snap-x snap-mandatory gap-2.5 overflow-x-auto scroll-smooth pb-0.5"
@@ -1491,11 +1667,15 @@ export function InteractiveShirt3D({
                       : 'bg-slate-50 text-slate-900 hover:bg-slate-100'
                   }`}
                 >
-                  {d.isBestSeller && (
+                  {isSelected ? (
+                    <span className="absolute left-2 top-2 z-10 inline-flex items-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[8px] font-bold tracking-tight text-white shadow-sm">
+                      EN MODELO
+                    </span>
+                  ) : d.isBestSeller ? (
                     <span className="absolute left-2 top-2 z-10 inline-flex items-center gap-0.5 rounded-full bg-white/95 px-1.5 py-0.5 text-[8px] font-bold tracking-tight text-slate-900 shadow-sm ring-1 ring-black/10 backdrop-blur-md">
                       <span className="text-amber-500">★</span> Top
                     </span>
-                  )}
+                  ) : null}
                   <div
                     className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg border border-black/10 p-1.5 transition duration-200 group-hover:scale-[1.02]"
                     style={{ backgroundColor: thumbBg }}
@@ -1522,6 +1702,7 @@ export function InteractiveShirt3D({
               );
             })}
           </div>
+          )}
         </div>
         )}
       </div>
@@ -1551,21 +1732,29 @@ export function InteractiveShirt3D({
         <div className="min-w-0 space-y-3">
         {/* LIENZO 3D CENTRAL */}
         <div className="relative overflow-hidden rounded-[24px] border border-slate-200/80 bg-gradient-to-b from-white via-[#F5F5F7] to-[#ECECEF] p-3 shadow-sm sm:p-4">
-          {/* Barra superior flotante: Vista y Stock */}
+          {/* Barra superior flotante: Vista, Modelo/3D y Stock */}
           <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex items-center rounded-xl border border-slate-200/90 bg-white/95 p-0.5 shadow-sm backdrop-blur-md">
               {(
-                [
-                  ['back', 180, 'Espalda'],
-                  ['center', 0, 'Frente'],
-                  ['profile', 38, 'Perfil']
-                ] as const
+                useModelStage
+                  ? ([
+                      ['back', 180, 'Espalda'],
+                      ['center', 0, 'Frente']
+                    ] as const)
+                  : ([
+                      ['back', 180, 'Espalda'],
+                      ['center', 0, 'Frente'],
+                      ['profile', 38, 'Perfil']
+                    ] as const)
               ).map(([sideKey, angle, lbl]) => {
-                const active =
-                  targetAngleY === angle ||
-                  (targetAngleY === null &&
-                    ((angle === 180 && placement === 'back') ||
-                      (angle === 0 && placement !== 'back')));
+                const active = useModelStage
+                  ? sideKey === 'back'
+                    ? placement === 'back'
+                    : placement !== 'back'
+                  : targetAngleY === angle ||
+                    (targetAngleY === null &&
+                      ((angle === 180 && placement === 'back') ||
+                        (angle === 0 && placement !== 'back')));
                 return (
                   <button
                     key={lbl}
@@ -1588,7 +1777,7 @@ export function InteractiveShirt3D({
               })}
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {stockBadge && (
                 <span
                   className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-semibold ${
@@ -1605,6 +1794,32 @@ export function InteractiveShirt3D({
                   {stockBadge.text}
                 </span>
               )}
+              {!modelFailed && (
+                <div className="inline-flex rounded-xl border border-slate-200/90 bg-white/95 p-0.5 shadow-sm backdrop-blur-md">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('model')}
+                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                      useModelStage
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Modelo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('3d')}
+                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                      !useModelStage
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    3D
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
@@ -1619,61 +1834,124 @@ export function InteractiveShirt3D({
             </div>
           </div>
 
-          {/* Modelo 3D compacto */}
-          <div
-            className="relative mx-auto flex w-full max-w-[245px] items-center justify-center sm:max-w-[330px]"
-            style={{ aspectRatio: '1 / 1' }}
-          >
+          {/* Escenario Admin: Vista Modelo Real o 3D */}
+          {useModelStage ? (
+            <div className="mt-2 space-y-2">
+              <div
+                className="relative mx-auto w-full max-w-[260px] sm:max-w-[330px]"
+                style={{ aspectRatio: '4 / 5' }}
+              >
+                <div className="pointer-events-none absolute left-2.5 top-2.5 z-10 inline-flex items-center rounded-full bg-black/55 px-2.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-md">
+                  {MOCKUP_SCENES[activeScene].badge}
+                </div>
+                {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => stepCatalogDesign(-1)}
+                      aria-label="Diseño anterior"
+                      className="absolute left-1.5 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepCatalogDesign(1)}
+                      aria-label="Siguiente diseño"
+                      className="absolute right-1.5 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
+                    >
+                      ›
+                    </button>
+                  </>
+                )}
+                <ModelMockupCanvas
+                  sceneId={activeScene}
+                  placement={placement}
+                  hex={hex}
+                  designUrl={designUrl || null}
+                  designScale={designScale}
+                  designOffsetX={designOffsetX}
+                  designOffsetY={designOffsetY}
+                  zoom={zoom}
+                  onSwipeDesign={
+                    readySlideDesigns.length > 1 ? (delta) => stepCatalogDesign(delta) : undefined
+                  }
+                  onError={() => setModelFailed(true)}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                {(['ranchero', 'cristiana', 'turistico'] as const).map((scId) => (
+                  <button
+                    key={scId}
+                    type="button"
+                    onClick={() => setManualScene(scId)}
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                      activeScene === scId
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'border border-slate-200 bg-white/90 text-slate-700 hover:bg-white'
+                    }`}
+                  >
+                    {MOCKUP_SCENES[scId].chipLabel}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
             <div
-              className="pointer-events-none absolute inset-10 rounded-full blur-3xl transition-colors duration-700"
-              style={{
-                background: `radial-gradient(circle, ${hex}30 0%, transparent 70%)`
-              }}
-            />
-            <div className="pointer-events-none absolute bottom-4 h-4 w-44 rounded-full bg-black/15 blur-md" />
+              className="relative mx-auto flex w-full max-w-[245px] items-center justify-center sm:max-w-[330px]"
+              style={{ aspectRatio: '1 / 1' }}
+            >
+              <div
+                className="pointer-events-none absolute inset-10 rounded-full blur-3xl transition-colors duration-700"
+                style={{
+                  background: `radial-gradient(circle, ${hex}30 0%, transparent 70%)`
+                }}
+              />
+              <div className="pointer-events-none absolute bottom-4 h-4 w-44 rounded-full bg-black/15 blur-md" />
 
-            {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => stepCatalogDesign(-1)}
-                  aria-label="Diseño anterior"
-                  className="absolute left-1 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
-                >
-                  ‹
-                </button>
-                <button
-                  type="button"
-                  onClick={() => stepCatalogDesign(1)}
-                  aria-label="Siguiente diseño"
-                  className="absolute right-1 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
-                >
-                  ›
-                </button>
-              </>
-            )}
+              {(!wizardStep || wizardStep === 'design') && readySlideDesigns.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => stepCatalogDesign(-1)}
+                    aria-label="Diseño anterior"
+                    className="absolute left-1 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepCatalogDesign(1)}
+                    aria-label="Siguiente diseño"
+                    className="absolute right-1 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-bold text-slate-800 shadow-sm ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white active:scale-95"
+                  >
+                    ›
+                  </button>
+                </>
+              )}
 
-            <WebGLShirtCanvas
-              hex={hex}
-              designUrl={designUrl || null}
-              placement={placement}
-              designScale={designScale}
-              designOffsetX={designOffsetX}
-              designOffsetY={designOffsetY}
-              zoom={zoom}
-              onZoomChange={(nextZ) => setZoom(nextZ)}
-              autoMotion={autoMotion && touchAction !== 'moveDesign' && zoom <= 1.25}
-              mode={mode}
-              targetAngleY={targetAngleY}
-              touchAction={touchAction}
-              onMoveDesign={(dx, dy) => {
-                onDesignChange?.({
-                  offsetX: clamp(designOffsetX + dx, -24, 24),
-                  offsetY: clamp(designOffsetY + dy, -24, 26)
-                });
-              }}
-            />
-          </div>
+              <WebGLShirtCanvas
+                hex={hex}
+                designUrl={designUrl || null}
+                placement={placement}
+                designScale={designScale}
+                designOffsetX={designOffsetX}
+                designOffsetY={designOffsetY}
+                zoom={zoom}
+                onZoomChange={(nextZ) => setZoom(nextZ)}
+                autoMotion={autoMotion && touchAction !== 'moveDesign' && zoom <= 1.25}
+                mode={mode}
+                targetAngleY={targetAngleY}
+                touchAction={touchAction}
+                onMoveDesign={(dx, dy) => {
+                  onDesignChange?.({
+                    offsetX: clamp(designOffsetX + dx, -24, 24),
+                    offsetY: clamp(designOffsetY + dy, -24, 26)
+                  });
+                }}
+              />
+            </div>
+          )}
 
           {processingText && (
             <div className="mt-1 flex justify-center">
@@ -1881,7 +2159,7 @@ export function InteractiveShirt3D({
                       type="button"
                       onClick={() => onChangeActiveCampaign(camp)}
                       className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
-                        activeCampaign.toLowerCase() === camp.toLowerCase()
+                        campaignsMatch(activeCampaign, camp)
                           ? 'bg-slate-900 text-white'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
@@ -2544,7 +2822,7 @@ export function InteractiveShirt3D({
                       ? campaigns
                       : ['Ranchero', 'Turístico', 'Cristiana']
                     ).map((camp) => {
-                      const sel = uploadTargetCampaign.toLowerCase() === camp.toLowerCase();
+                      const sel = campaignsMatch(uploadTargetCampaign, camp);
                       return (
                         <button
                           key={camp}

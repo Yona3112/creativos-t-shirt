@@ -29,6 +29,134 @@ export interface SharedCatalogDesignRef {
   allowedColorIds?: string[];
 }
 
+export const DEFAULT_CAMPAIGNS = ['Ranchero', 'Turístico', 'Cristiana'] as const;
+
+export type MockupSceneId = 'ranchero' | 'cristiana' | 'turistico';
+
+export function campaignSlug(name: string): string {
+  return (name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export function campaignsMatch(a?: string | null, b?: string | null): boolean {
+  const sa = campaignSlug(a || '');
+  const sb = campaignSlug(b || '');
+  return Boolean(sa) && sa === sb;
+}
+
+export function resolveCampaignName(
+  raw: string | null | undefined,
+  knownCampaigns: readonly string[] = DEFAULT_CAMPAIGNS
+): string | null {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return null;
+  const pool = [...knownCampaigns, ...DEFAULT_CAMPAIGNS];
+  const hit = pool.find((c) => campaignsMatch(c, trimmed));
+  if (hit) return hit;
+  const slug = campaignSlug(trimmed);
+  if (!slug) return trimmed;
+  if (/[-\s_]/.test(trimmed) && !/[A-ZÁÉÍÓÚÑ]/.test(trimmed)) {
+    return trimmed
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+  return trimmed;
+}
+
+function matchSceneKeyword(value?: string | null): MockupSceneId | null {
+  const slug = campaignSlug(value || '');
+  if (!slug || slug === 'all' || slug === 'todas' || slug === 'todos') return null;
+  if (/(cristian|fe|iglesia|dios|biblia|adoracion|evangel)/.test(slug)) return 'cristiana';
+  if (/(turist|honduras|playa|roatan|copan|viaj|caribe|catrach|isla)/.test(slug)) return 'turistico';
+  if (/(ranch|vaquer|ganad|caball|western|montur|finca)/.test(slug)) return 'ranchero';
+  return null;
+}
+
+export function resolveMockupScene(
+  campaign?: string | null,
+  designCampaign?: string | null,
+  fallback: MockupSceneId = 'ranchero'
+): MockupSceneId {
+  const cSlug = campaignSlug(campaign || '');
+  const isScoped = Boolean(campaign && cSlug && cSlug !== 'all' && cSlug !== 'todas' && cSlug !== 'todos');
+  if (isScoped) {
+    return matchSceneKeyword(campaign) || matchSceneKeyword(designCampaign) || fallback;
+  }
+  return matchSceneKeyword(designCampaign) || fallback;
+}
+
+export function parseStorefrontHash(hash: string): {
+  isPublic: boolean;
+  campaign: string | null;
+  legacyToken: string | null;
+} {
+  const h = (hash || '').replace(/^#\/?/, '').trim();
+  if (!h) {
+    return { isPublic: false, campaign: null, legacyToken: null };
+  }
+
+  const legacyMatch = h.match(/^catalogo=([A-Za-z0-9_-]+)/);
+  if (legacyMatch) {
+    return { isPublic: true, campaign: null, legacyToken: legacyMatch[1] };
+  }
+
+  const isStorefront =
+    h === 'tienda' ||
+    h.startsWith('tienda/') ||
+    h.startsWith('tienda?') ||
+    h === 'catalogo' ||
+    h.startsWith('catalogo/') ||
+    h.startsWith('catalogo?') ||
+    h.startsWith('c=');
+
+  if (!isStorefront) {
+    return { isPublic: false, campaign: null, legacyToken: null };
+  }
+
+  let rawCamp: string | null = null;
+  const campQuery = h.match(/[?&]camp=([^&#]+)/);
+  if (campQuery && campQuery[1]) {
+    try {
+      rawCamp = decodeURIComponent(campQuery[1].replace(/\+/g, ' '));
+    } catch {
+      rawCamp = campQuery[1];
+    }
+  } else {
+    const pathPart = h.split('?')[0];
+    const segMatch = pathPart.match(/^(?:tienda|catalogo)\/([^/]+)/i);
+    if (segMatch && segMatch[1]) {
+      try {
+        rawCamp = decodeURIComponent(segMatch[1]);
+      } catch {
+        rawCamp = segMatch[1];
+      }
+    }
+  }
+
+  const normalizedCamp = rawCamp ? rawCamp.trim() : null;
+  const campKey = normalizedCamp ? campaignSlug(normalizedCamp) : '';
+  const campaign =
+    normalizedCamp && campKey && campKey !== 'all' && campKey !== 'todas' && campKey !== 'todos'
+      ? normalizedCamp
+      : null;
+
+  return { isPublic: true, campaign, legacyToken: null };
+}
+
+export function buildThemeShareUrl(originAndPath: string, campaign?: string | null): string {
+  const base = `${originAndPath}#tienda`;
+  const slug = campaignSlug(campaign || '');
+  if (!campaign || !slug || slug === 'all' || slug === 'todas' || slug === 'todos') {
+    return base;
+  }
+  return `${base}/${slug}`;
+}
+
 export interface SharedCatalogPayload {
   storeName: string;
   storePhone: string;
@@ -48,8 +176,12 @@ export interface SharedCatalogPayload {
   offsetX?: number;
   offsetY: number;
   boutiqueTheme?: BoutiqueTheme;
+  /** Lista de campañas/temáticas publicadas */
+  campaigns?: string[];
   /** Campaña activa enviada por WhatsApp (ej. 'Ranchero', 'Turístico', 'Cristiana' o 'all') */
   activeCampaign?: string;
+  /** True cuando el cliente abrió un link dedicado a una temática específica */
+  lockedCampaign?: boolean;
   designs?: SharedCatalogDesignRef[];
   /** Disponibilidad por `${colorId}|${talla}` (solo cantidades, sin costos). */
   stock?: Record<string, number>;
@@ -234,7 +366,11 @@ export function buildPublicCatalog(state: AppState): SharedCatalogPayload {
     offsetX: 0,
     offsetY: 0,
     boutiqueTheme: st.storeTheme || 'ranchero',
-    activeCampaign: st.activeCampaign || 'all',
+    campaigns:
+      st.campaigns && st.campaigns.length > 0
+        ? Array.from(new Set(st.campaigns))
+        : [...DEFAULT_CAMPAIGNS],
+    activeCampaign: 'all',
     designs,
     stock: stockMap,
     paymentMethods: mergedPaymentMethods

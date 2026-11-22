@@ -24,7 +24,15 @@ import {
   vkey
 } from '../src/lib/inventory';
 import { compactMovements, mergeStates, normalize } from '../src/lib/merge';
-import { buildPublicCatalog } from '../src/lib/publicCatalog';
+import {
+  buildPublicCatalog,
+  buildThemeShareUrl,
+  campaignsMatch,
+  DEFAULT_CAMPAIGNS,
+  parseStorefrontHash,
+  resolveCampaignName,
+  resolveMockupScene
+} from '../src/lib/publicCatalog';
 import { createInitialState } from '../src/lib/seed';
 import { getState, replaceState, update } from '../src/lib/store';
 import { dayKey } from '../src/lib/time';
@@ -713,4 +721,46 @@ test('20. buildPublicCatalog excluye negativos, protege datos privados y refleja
   assert.equal(pub.designs?.[0].soldCount, 2);
   assert.equal('customers' in pub, false);
   assert.equal('orders' in pub, false);
+  assert.equal(pub.activeCampaign, 'all');
+  assert.deepEqual(pub.campaigns, [...DEFAULT_CAMPAIGNS]);
+});
+
+test('21. parseStorefrontHash aísla enlaces públicos por temática y rechaza hashes internos/admin', () => {
+  assert.deepEqual(parseStorefrontHash('#tienda'), { isPublic: true, campaign: null, legacyToken: null });
+  assert.deepEqual(parseStorefrontHash('#tienda/ranchero'), { isPublic: true, campaign: 'ranchero', legacyToken: null });
+  assert.deepEqual(parseStorefrontHash('#tienda/turistico'), { isPublic: true, campaign: 'turistico', legacyToken: null });
+  assert.deepEqual(parseStorefrontHash('#tienda/cristiana'), { isPublic: true, campaign: 'cristiana', legacyToken: null });
+  assert.deepEqual(parseStorefrontHash('#tienda?camp=Cristiana'), { isPublic: true, campaign: 'Cristiana', legacyToken: null });
+  assert.deepEqual(parseStorefrontHash('#catalogo/ranchero'), { isPublic: true, campaign: 'ranchero', legacyToken: null });
+  assert.deepEqual(parseStorefrontHash('#catalogo=eyJhIjoxfQ'), { isPublic: true, campaign: null, legacyToken: 'eyJhIjoxfQ' });
+  assert.deepEqual(parseStorefrontHash('#tienda/todas'), { isPublic: true, campaign: null, legacyToken: null });
+
+  assert.equal(parseStorefrontHash('').isPublic, false);
+  assert.equal(parseStorefrontHash('#pedido=abc123').isPublic, false);
+  assert.equal(parseStorefrontHash('#inventario').isPublic, false);
+});
+
+test('22. buildThemeShareUrl, campaignsMatch, resolveCampaignName y resolveMockupScene funcionan con o sin tildes', () => {
+  const origin = 'https://creativos-t-shirt.web.app/';
+  assert.equal(buildThemeShareUrl(origin, 'all'), 'https://creativos-t-shirt.web.app/#tienda');
+  assert.equal(buildThemeShareUrl(origin, 'Ranchero'), 'https://creativos-t-shirt.web.app/#tienda/ranchero');
+  assert.equal(buildThemeShareUrl(origin, 'Turístico'), 'https://creativos-t-shirt.web.app/#tienda/turistico');
+  assert.equal(buildThemeShareUrl(origin, 'Cristiana'), 'https://creativos-t-shirt.web.app/#tienda/cristiana');
+  assert.equal(buildThemeShareUrl(origin, 'Día del Padre'), 'https://creativos-t-shirt.web.app/#tienda/dia-del-padre');
+
+  assert.equal(campaignsMatch('turistico', 'Turístico'), true);
+  assert.equal(campaignsMatch('CRISTIANA', 'Cristiana'), true);
+  assert.equal(campaignsMatch('ranchero', 'Cristiana'), false);
+
+  assert.equal(resolveCampaignName('turistico', DEFAULT_CAMPAIGNS), 'Turístico');
+  assert.equal(resolveCampaignName('cristiana', DEFAULT_CAMPAIGNS), 'Cristiana');
+  assert.equal(resolveCampaignName('dia-del-padre', DEFAULT_CAMPAIGNS), 'Dia Del Padre');
+
+  assert.equal(resolveMockupScene('Ranchero', null), 'ranchero');
+  assert.equal(resolveMockupScene('Cristiana', null), 'cristiana');
+  assert.equal(resolveMockupScene('Turístico', null), 'turistico');
+  assert.equal(resolveMockupScene('Honduras', null), 'turistico');
+  assert.equal(resolveMockupScene('all', 'Cristiana'), 'cristiana');
+  assert.equal(resolveMockupScene('all', 'Turístico'), 'turistico');
+  assert.equal(resolveMockupScene('all', null, 'ranchero'), 'ranchero');
 });

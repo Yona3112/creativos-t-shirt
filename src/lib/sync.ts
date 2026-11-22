@@ -3,7 +3,7 @@ import type { AppState, SyncStatus } from './types';
 import { contentSignature, mergeStates, normalize } from './merge';
 import { db } from './db';
 import { getDeviceId } from './ids';
-import { buildPublicCatalog, LIVE_CATALOG_KEY, WEB_ORDER_LATEST_KEY } from './publicCatalog';
+import { buildPublicCatalog, LIVE_CATALOG_KEY, parseStorefrontHash, WEB_ORDER_LATEST_KEY } from './publicCatalog';
 import {
   getFirebaseConfig,
   uploadPhotoNowFirebase,
@@ -19,9 +19,7 @@ export type { FirebaseConfig };
  * los datos privados de clientes, teléfonos, direcciones, pedidos y costos.
  */
 export function isPublicStorefrontHash(): boolean {
-  const h = location.hash.replace(/^#\/?/, '').trim();
-  if (!h) return false;
-  return h === 'tienda' || h === 'catalogo' || h.startsWith('c=') || h.startsWith('catalogo=');
+  return parseStorefrontHash(location.hash).isPublic;
 }
 
 export interface SupaConfig {
