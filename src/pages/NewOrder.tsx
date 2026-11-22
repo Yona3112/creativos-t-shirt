@@ -7,7 +7,7 @@ import { uid, folioLabel } from '../lib/ids';
 import { compressImage, applyBackgroundRemoval, removeBackgroundWithAI, upscaleImageTo4K, isJpgFile } from '../lib/image';
 import { savePhoto } from '../lib/db';
 import { fetchSharedPhoto } from '../lib/sync';
-import { addressOneLine, createOrder, deleteColor, quickCustomer, reconcileBackorderStock, saveCustomer, updateBrand, updateColor, updateSettings } from '../lib/actions';
+import { addressOneLine, createOrder, deleteColor, quickCustomer, reconcileBackorderStock, saveCustomer, updateColor } from '../lib/actions';
 import { ColorDot, Modal, MoneyInput, PhotoViewer, Stepper, toast } from '../components/ui';
 import { InteractiveShirt3D, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
@@ -210,6 +210,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
     settings.workTypes.find((w) => w.toLowerCase().includes('espalda')) ||
     settings.workTypes.find((w) => !w.toLowerCase().includes('lisa')) ||
     'DTF Espalda';
+  const customBackWorkType =
+    settings.workTypes.find((w) => w.toLowerCase().includes('espalda')) || customWorkTypeDefault;
+  const customFrontWorkType =
+    settings.workTypes.find((w) => w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')) ||
+    customWorkTypeDefault;
   const isCustomWork = isCustomOrderSpec({
     workType: draft.workType,
     photo: draft.photo,
@@ -334,16 +339,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
   const removeLine = (id: string) => setDraft((d) => ({ ...d, lines: d.lines.filter((l) => l.id !== id) }));
 
   const [procMsg, setProcMsg] = useState<string | null>(null);
-  const {
-    allDesigns,
-    saveCurrentToCatalog,
-    uploadFilesToCatalog,
-    toggleVisible,
-    renameDesign,
-    setDesignCampaign,
-    setDesignColors,
-    deleteDesign
-  } = useCatalogDesigns();
+  const { allDesigns } = useCatalogDesigns();
 
   const onPhoto = async (f: File | undefined) => {
     if (!f) return;
@@ -353,6 +349,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
       const raw = await compressImage(f, 2400, 0.96, false);
       const processed = shouldRemoveBg ? await applyBackgroundRemoval(raw, true, 34) : raw;
       const cleanFileName = f.name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim();
+      const sideWork = (draft.placement || 'back') === 'back' ? customBackWorkType : customFrontWorkType;
       set({
         rawPhoto: raw,
         photo: processed,
@@ -363,7 +360,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         designScale: 2.0,
         designOffsetX: 0,
         designOffsetY: 0,
-        workType: draft.workType.toLowerCase().includes('lisa') ? customWorkTypeDefault : draft.workType
+        workType: draft.workType.toLowerCase().includes('lisa') ? sideWork : draft.workType
       });
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -1057,38 +1054,12 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
         </section>
       )}
 
-      {/* Barra de progreso e instrucción clara del paso actual */}
+      {/* Barra de progreso única e instrucción clara del paso actual */}
       <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
-              Paso {wizardStep + 1} de {POS_WIZARD_LAST + 1}
-            </span>
-            <div className="hidden items-center gap-1 sm:flex">
-              {POS_WIZARD_STEPS.map((stInfo, i) => {
-                const unlocked = i <= maxStepReached || (i === POS_WIZARD_LAST && lines.length > 0);
-                const active = i === wizardStep;
-                return (
-                  <button
-                    key={stInfo.short}
-                    type="button"
-                    disabled={!unlocked && i > wizardStep}
-                    aria-label={`Ir al paso ${i + 1}: ${stInfo.title}`}
-                    onClick={() => (unlocked || i <= wizardStep) && goToWizardStep(i)}
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition disabled:cursor-default ${
-                      active
-                        ? 'bg-slate-900/10 text-slate-900'
-                        : unlocked || i <= wizardStep
-                        ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-                        : 'text-slate-300'
-                    }`}
-                  >
-                    {i + 1}. {stInfo.short}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+        <div className="mb-2.5 flex items-center justify-between gap-2">
+          <span className="inline-flex items-center rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+            Paso {wizardStep + 1} de {POS_WIZARD_LAST + 1}
+          </span>
           {cartQty > 0 && (
             <button
               type="button"
@@ -1117,6 +1088,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 type="button"
                 disabled={!unlocked && i > wizardStep}
                 aria-label={`Ir al paso ${i + 1}: ${stInfo.title}`}
+                aria-current={active ? 'step' : undefined}
                 onClick={() => (unlocked || i <= wizardStep) && goToWizardStep(i)}
                 className="group flex flex-col items-start gap-1 text-left disabled:cursor-default"
               >
@@ -1130,11 +1102,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                   }`}
                 />
                 <span
-                  className={`truncate text-[10px] font-semibold sm:hidden ${
+                  className={`truncate text-[10px] font-semibold ${
                     active
                       ? 'text-slate-900'
                       : unlocked || i <= wizardStep
-                      ? 'text-slate-500'
+                      ? 'text-slate-500 group-hover:text-slate-800'
                       : 'text-slate-300'
                   }`}
                 >
@@ -1184,7 +1156,13 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                       key={k}
                       type="button"
                       onClick={() => {
-                        set({ placement: k });
+                        const hasLineDesign = Boolean(draft.photo || draft.designId || draft.designName);
+                        set({
+                          placement: k,
+                          ...(hasLineDesign
+                            ? { workType: k === 'back' ? customBackWorkType : customFrontWorkType }
+                            : {})
+                        });
                         setJustAddedLine(false);
                       }}
                       className={`min-h-[40px] rounded-xl text-xs font-bold transition sm:text-sm ${
@@ -1218,6 +1196,10 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
               if (patch.offsetY !== undefined) next.designOffsetY = patch.offsetY;
               if (patch.placement !== undefined) {
                 next.placement = patch.placement;
+                const hasLineDesign = Boolean(draft.photo || draft.designId || draft.designName);
+                if (hasLineDesign) {
+                  next.workType = patch.placement === 'back' ? customBackWorkType : customFrontWorkType;
+                }
                 setJustAddedLine(false);
               }
               set(next);
@@ -1267,11 +1249,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             onSelectCatalogDesign={(d) => {
               if (!d.imageUrl) return;
               const curSide = draft.placement || 'back';
-              const sideWork = settings.workTypes.find((w) =>
-                curSide === 'back'
-                  ? w.toLowerCase().includes('espalda')
-                  : w.toLowerCase().includes('frontal') || w.toLowerCase().includes('pecho')
-              ) || customWorkTypeDefault;
+              const sideWork = curSide === 'back' ? customBackWorkType : customFrontWorkType;
               set({
                 photo: d.imageUrl,
                 rawPhoto: d.imageUrl,
@@ -1282,74 +1260,11 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                 designScale: 2.0,
                 designOffsetX: 0,
                 designOffsetY: 0,
-                workType: draft.workType.toLowerCase().includes('lisa')
-                  ? sideWork
-                  : draft.workType
+                workType: sideWork
               });
               setJustAddedLine(false);
             }}
-            onRenameCatalogDesign={(id, name, code) => {
-              renameDesign(id, name, code);
-              if (draft.designId === id) {
-                set({ designName: name, designCode: code });
-              }
-              toast('Nombre y código del diseño actualizados');
-            }}
             campaigns={settings.campaigns}
-            onChangeDesignCampaign={(id, camp) => {
-              setDesignCampaign(id, camp);
-              toast(camp === 'all' ? 'Campaña actualizada a General' : `Movido a campaña ${camp}`);
-            }}
-            onChangeDesignColors={(id, mode, ids, tone) => {
-              setDesignColors(id, mode, ids, tone);
-              toast('Colores disponibles actualizados para este diseño');
-            }}
-            onSaveCurrentToCatalog={(opts) => {
-              if (!draft.photo) return;
-              const o = typeof opts === 'string' ? { campaign: opts } : opts || {};
-              void saveCurrentToCatalog({
-                dataUrl: draft.photo,
-                name: o.name || draft.designName || undefined,
-                code: draft.designCode || undefined,
-                campaign: o.campaign,
-                placement: draft.placement || 'back',
-                allowedColorMode: o.allowedColorMode,
-                allowedColorIds: o.allowedColorIds,
-                tone: o.tone
-              }).then((saved) => {
-                set({ designId: saved.id, designName: saved.name, designCode: saved.code });
-                toast(`"${saved.name}" guardado en el catálogo (visible al cliente)`);
-              });
-            }}
-            onUploadCatalogFiles={(files, opts) => {
-              const o = typeof opts === 'string' ? { campaign: opts } : opts || {};
-              setProcMsg('Agregando diseños al catálogo...');
-              void uploadFilesToCatalog(files, {
-                removeBg: draft.removeBg ?? false,
-                tolerance: 32,
-                placement: 'back',
-                campaign: o.campaign,
-                customName: o.customName,
-                allowedColorMode: o.allowedColorMode,
-                allowedColorIds: o.allowedColorIds
-              })
-                .then((n) => {
-                  if (n > 0) toast(`${n} diseño(s) agregado(s) al catálogo en Tamaño A3`);
-                })
-                .finally(() => setProcMsg(null));
-            }}
-            onToggleCatalogDesignVisible={(id, nextVis) => {
-              toggleVisible(id, nextVis);
-              toast(
-                nextVis
-                  ? 'Diseño habilitado para que el cliente lo vea'
-                  : 'Diseño oculto para el cliente'
-              );
-            }}
-            onDeleteCatalogDesign={(id) => {
-              deleteDesign(id);
-              toast('Diseño eliminado del catálogo');
-            }}
             stockBadge={
               brand && color
                 ? (() => {
@@ -1369,15 +1284,18 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
             }
           />
 
-          {wizardStep === 1 && (
-            <section className="card space-y-3">
-              {draft.photo && (
-                <div className="grid grid-cols-1 gap-2 rounded-xl border border-amber-200 bg-amber-50/70 p-2.5 sm:grid-cols-3">
+          {wizardStep === 1 && draft.photo && (
+            <details className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
+              <summary className="cursor-pointer select-none text-xs font-bold text-slate-700">
+                Opciones avanzadas del diseño (nombre, código o mejora 4K)
+              </summary>
+              <div className="mt-3 space-y-3 border-t border-slate-100 pt-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <div>
-                    <label className="label text-xs">Código de Diseño (Reporte)</label>
+                    <label className="label text-xs">Código (Reporte)</label>
                     <input
                       className="input font-mono font-bold uppercase"
-                      placeholder="Ej. D-001, TORO-01"
+                      placeholder="Ej. D-001"
                       value={draft.designCode || ''}
                       onChange={(e) => {
                         set({ designCode: e.target.value.toUpperCase() });
@@ -1386,7 +1304,7 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                     />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="label text-xs">Nombre del Diseño / Estilo de Camisa (Reporte)</label>
+                    <label className="label text-xs">Nombre del Diseño (Reporte)</label>
                     <input
                       className="input font-bold"
                       placeholder="Ej. Establo Silla, Toro Honduras..."
@@ -1398,27 +1316,26 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
                     />
                   </div>
                 </div>
-              )}
-
-              <div>
-                <label className="label" htmlFor="wt">
-                  Tipo de trabajo
-                </label>
-                <select
-                  id="wt"
-                  className="input"
-                  value={draft.workType}
-                  onChange={(e) => {
-                    set({ workType: e.target.value });
-                    setJustAddedLine(false);
-                  }}
-                >
-                  {settings.workTypes.map((w) => (
-                    <option key={w}>{w}</option>
-                  ))}
-                </select>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={!!procMsg}
+                    onClick={() => void handleAiBgNewOrder()}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    ✨ Quitar fondo con IA
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!procMsg}
+                    onClick={() => void handleUpscale4KNewOrder()}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    🔍 Mejorar resolución 4K
+                  </button>
+                </div>
               </div>
-            </section>
+            </details>
           )}
         </div>
       )}
@@ -1538,124 +1455,76 @@ export default function NewOrder({ navigate }: { navigate: (s: Section) => void 
           </section>
 
           <section className="card space-y-3">
-            <h2 className="section-title">Precio y resumen</h2>
-            <div className="grid grid-cols-2 gap-2">
-              <div
-                role="button"
-                tabIndex={0}
-                className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
-                  !isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
-                }`}
-                onClick={() => {
-                  setManualPrice(null);
-                  clearDraftDesign();
-                  setJustAddedLine(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="section-title mb-0">Precio y resumen</h2>
+              <div className="inline-flex rounded-full bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
                     setManualPrice(null);
                     clearDraftDesign();
                     setJustAddedLine(false);
-                  }
-                }}
-              >
-                <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
-                  <span>👕 Camisa Lisa</span>
-                  {!isCustomWork && (
-                    <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                      Activo
-                    </span>
-                  )}
-                </div>
-                <div onClick={(e) => e.stopPropagation()}>
-                  <MoneyInput
-                    ariaLabel="Precio camisa lisa"
-                    value={normalForBrand}
-                    onChange={(c) => {
-                      if (c === null) return;
-                      if (brand && brand.priceOverride !== null) updateBrand(brand.id, { priceOverride: c });
-                      else updateSettings({ priceNormal: c });
-                    }}
-                  />
-                </div>
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                className={`cursor-pointer rounded-xl border-2 p-2.5 transition ${
-                  isCustomWork ? 'border-brand-600 bg-brand-50 shadow-sm ring-1 ring-brand-600/20' : 'border-slate-200 hover:border-slate-300'
-                }`}
-                onClick={() => {
-                  setManualPrice(null);
-                  set({ workType: customWorkTypeDefault });
-                  setJustAddedLine(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
+                  }}
+                  className={`rounded-full px-3 py-1 text-xs font-bold transition ${
+                    !isCustomWork ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  👕 Lisa ({money(normalForBrand)})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setManualPrice(null);
-                    set({ workType: customWorkTypeDefault });
-                    setJustAddedLine(false);
-                  }
-                }}
-              >
-                <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700">
-                  <span>✨ Personalizada A3</span>
-                  {isCustomWork && (
-                    <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                      Activo
-                    </span>
-                  )}
-                </div>
-                <div onClick={(e) => e.stopPropagation()}>
-                  <MoneyInput
-                    ariaLabel="Precio personalizada"
-                    value={settings.priceCustom || 35000}
-                    onChange={(c) => c !== null && updateSettings({ priceCustom: c })}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="label">Precio aplicado a esta prenda (L)</label>
-              <div className="flex gap-2">
-                <MoneyInput
-                  className="flex-1"
-                  ariaLabel="Precio por camisa"
-                  value={unitPrice}
-                  onChange={(c) => {
-                    setManualPrice(c);
+                    set({
+                      workType:
+                        (draft.placement || 'back') === 'back' ? customBackWorkType : customFrontWorkType
+                    });
                     setJustAddedLine(false);
                   }}
-                />
-                {manualPrice !== null && (
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => setManualPrice(null)}
-                    title="Restablecer precio sugerido"
-                  >
-                    ↺
-                  </button>
-                )}
+                  className={`rounded-full px-3 py-1 text-xs font-bold transition ${
+                    isCustomWork ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  ✨ Personalizada ({money(settings.priceCustom || 35000)})
+                </button>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/80 px-3.5 py-2.5">
-              <div className="min-w-0">
-                <div className="text-xs font-bold text-slate-900">
-                  {currentDraftQty > 0
-                    ? selectedSizeEntries.map((e) => `${e.qty}× ${e.size}`).join(' · ')
-                    : 'Ninguna talla seleccionada'}
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  {currentDraftQty} {currentDraftQty === 1 ? 'prenda' : 'prendas'} × {money(unitPrice)}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-[160px] flex-1">
+                <label className="label">Precio unitario para esta prenda (L)</label>
+                <div className="flex gap-1.5">
+                  <MoneyInput
+                    className="flex-1"
+                    ariaLabel="Precio unitario de la prenda"
+                    value={unitPrice}
+                    onChange={(c) => {
+                      setManualPrice(c);
+                      setJustAddedLine(false);
+                    }}
+                  />
+                  {manualPrice !== null && (
+                    <button
+                      type="button"
+                      className="btn-ghost px-3"
+                      onClick={() => setManualPrice(null)}
+                      title="Restablecer precio automático"
+                    >
+                      ↺
+                    </button>
+                  )}
                 </div>
               </div>
-              <div className="text-lg font-extrabold tabular-nums text-slate-900">
-                {money(currentDraftQty * unitPrice)}
+
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-2.5 text-right">
+                <div className="text-[11px] font-semibold text-slate-500">
+                  {currentDraftQty > 0
+                    ? selectedSizeEntries.map((e) => `${e.qty}×${e.size}`).join(' · ')
+                    : 'Elige talla(s)'}
+                </div>
+                <div className="text-lg font-extrabold tabular-nums text-slate-900">
+                  {money(currentDraftQty * unitPrice)}
+                </div>
               </div>
             </div>
           </section>

@@ -207,10 +207,9 @@ export default function App() {
     <div className="min-h-screen">
       <Header
         section={section}
+        open={menu}
         onMenu={() => setMenu(true)}
         onSell={() => navigate('vender')}
-        onNavigate={navigate}
-        badges={badges}
       />
       <Drawer open={menu} section={section} onClose={() => setMenu(false)} onNavigate={navigate} badges={badges} />
 

@@ -1017,7 +1017,7 @@ export function InteractiveShirt3D({
     ref.current.scrollBy({ left: dir * 280, behavior: 'smooth' });
   };
 
-  if (!isStoreOwner) {
+  if (!isStoreOwner || Boolean(wizardStep)) {
     const isBackSide = placement === 'back';
     return (
       <div className="relative select-none space-y-4">
@@ -1089,17 +1089,30 @@ export function InteractiveShirt3D({
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
-              className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-semibold backdrop-blur-md transition sm:text-xs ${
-                zoom > 1.35
-                  ? 'bg-white text-slate-950 shadow-sm'
-                  : 'bg-black/45 text-white/85 ring-1 ring-white/15 hover:text-white'
-              }`}
-            >
-              <span>{zoom > 1.35 ? 'Alejar' : 'Acercar'}</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              {isStoreOwner && stockBadge && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold backdrop-blur-md ${
+                    stockBadge.available
+                      ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-400/30'
+                      : 'bg-amber-500/20 text-amber-100 ring-1 ring-amber-400/30'
+                  }`}
+                >
+                  {stockBadge.text}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setZoom((z) => (z > 1.35 ? 1 : 1.7))}
+                className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-semibold backdrop-blur-md transition sm:text-xs ${
+                  zoom > 1.35
+                    ? 'bg-white text-slate-950 shadow-sm'
+                    : 'bg-black/45 text-white/85 ring-1 ring-white/15 hover:text-white'
+                }`}
+              >
+                <span>{zoom > 1.35 ? 'Alejar' : 'Acercar'}</span>
+              </button>
+            </div>
           </div>
 
           {/* Lienzo 3D Central con botones laterales tipo Slide */}
@@ -1162,7 +1175,7 @@ export function InteractiveShirt3D({
           {designUrl && (!wizardStep || wizardStep === 'design') && (
             <div className="mt-1 space-y-2">
               <div className="flex flex-wrap items-center justify-center gap-1.5">
-                <div className="inline-flex items-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
+                <div className="inline-flex flex-wrap items-center justify-center gap-1 rounded-full bg-black/50 p-1 backdrop-blur-md ring-1 ring-white/15">
                   <button
                     type="button"
                     onClick={() => setShowPositionSliders((v) => !v)}
@@ -1174,6 +1187,29 @@ export function InteractiveShirt3D({
                   >
                     ⌖ Ajustar diseño
                   </button>
+                  {isStoreOwner && onToggleRemoveBg && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleRemoveBg(!removeBg)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                        removeBg
+                          ? 'bg-emerald-500/30 text-emerald-200 ring-1 ring-emerald-400/40'
+                          : 'text-white/85 hover:text-white'
+                      }`}
+                    >
+                      {removeBg ? '✓ Sin fondo' : 'Quitar fondo'}
+                    </button>
+                  )}
+                  {isStoreOwner && onAiRemoveBg && (
+                    <button
+                      type="button"
+                      disabled={!!processingText}
+                      onClick={onAiRemoveBg}
+                      className="rounded-full px-3 py-1 text-xs font-semibold text-white/85 transition hover:text-white disabled:opacity-40"
+                    >
+                      ✨ Fondo IA
+                    </button>
+                  )}
                   {onClearDesign && (
                     <button
                       type="button"
@@ -1263,6 +1299,15 @@ export function InteractiveShirt3D({
             </div>
           )}
 
+          {processingText && (
+            <div className="mt-2 flex justify-center">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3.5 py-1 text-xs font-medium text-slate-900 shadow-sm">
+                <span className="h-2 w-2 animate-ping rounded-full bg-sky-500" />
+                <span>{processingText}</span>
+              </div>
+            </div>
+          )}
+
           {/* Aviso discreto si el diseño cambió automáticamente de color en Paso 2 */}
           {wizardStep === 'design' && colorSwitchNote && (
             <div className="mt-2 flex justify-center">
@@ -1299,8 +1344,19 @@ export function InteractiveShirt3D({
 
               return (
                 <div className="mt-3 flex flex-col items-center gap-1.5 rounded-2xl bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur-md">
-                  <div className="text-xs font-medium text-slate-500">
-                    Color — <strong className="font-semibold text-slate-900">{colorName}</strong>
+                  <div className="flex w-full items-center justify-center gap-2 text-xs font-medium text-slate-500">
+                    <span>
+                      Color — <strong className="font-semibold text-slate-900">{colorName}</strong>
+                    </span>
+                    {isStoreOwner && onAddNewColor && (
+                      <button
+                        type="button"
+                        onClick={onAddNewColor}
+                        className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-bold text-slate-800 transition hover:bg-slate-100"
+                      >
+                        + Color
+                      </button>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     {shownColors.map((c) => {

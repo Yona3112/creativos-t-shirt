@@ -25,7 +25,7 @@ import {
 import { whatsappUrl } from '../lib/whatsapp';
 import { InteractiveShirt3D, type BoutiqueTheme, type DecalPlacement } from '../components/Shirt';
 import { NewColorModal } from '../components/NewColorModal';
-import { Confirm, Modal, toast } from '../components/ui';
+import { Modal, toast } from '../components/ui';
 import { useCatalogDesigns } from '../lib/catalogDesigns';
 import {
   buildPublicCatalog,
@@ -528,28 +528,6 @@ export default function Catalog3D() {
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
-              onClick={async () => {
-                const res = purgeGarbageData();
-                await syncLiveCatalogSnapshot();
-                const total =
-                  res.removedBrands +
-                  res.removedColors +
-                  res.removedDesigns +
-                  res.compactedMovements;
-                toast(
-                  total > 0
-                    ? `Catálogo depurado (${total} duplicados eliminados)`
-                    : 'Catálogo limpio y sin duplicados',
-                  'ok'
-                );
-              }}
-              title="Unificar y eliminar colores, tallas o diseños duplicados"
-            >
-              🧹 Limpiar duplicados
-            </button>
-            <button
-              type="button"
               className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100"
               onClick={() => {
                 void syncLiveCatalogSnapshot();
@@ -576,11 +554,22 @@ export default function Catalog3D() {
               type="button"
               className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800"
               onClick={async () => {
+                const res = purgeGarbageData();
                 await syncLiveCatalogSnapshot();
-                toast('Catálogo sincronizado', 'ok');
+                const cleaned =
+                  res.removedBrands +
+                  res.removedColors +
+                  res.removedDesigns +
+                  res.compactedMovements;
+                toast(
+                  cleaned > 0
+                    ? `Catálogo sincronizado (${cleaned} duplicados limpios)`
+                    : 'Catálogo sincronizado',
+                  'ok'
+                );
               }}
             >
-              Sincronizar
+              🔄 Sincronizar
             </button>
           </div>
         </div>
@@ -1104,7 +1093,6 @@ export function CustomerCatalogView({
   const [maxStepReached, setMaxStepReached] = useState(0);
   const [showSizeGuide, setShowSizeGuide] = useState(false);
   const [justAddedToCart, setJustAddedToCart] = useState(false);
-  const [confirmClearCart, setConfirmClearCart] = useState(false);
 
   const setSizeQty = (sz: string, nextQty: number) => {
     const clamped = Math.max(0, Math.min(99, nextQty));
@@ -1143,7 +1131,6 @@ export function CustomerCatalogView({
 
   // Carrito de compras para el cliente: permite agregar múltiples prendas y diferentes diseños
   const [customerCart, setCustomerCart] = useState<CustomerCartItem[]>([]);
-  const [isCartModalOpen, setIsCartModalOpen] = useState(false);
 
   const [orderSheetModal, setOrderSheetModal] = useState<{
     orderId: string;
@@ -1323,7 +1310,6 @@ export function CustomerCatalogView({
   const effectiveTotalPrice = effectiveOrderItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
 
   const cartTotalQty = customerCart.reduce((sum, it) => sum + it.qty, 0);
-  const cartTotalPrice = customerCart.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
 
   const handleAddToCart = (startNextShirt = false) => {
     if (currentDraftItems.length === 0) {
@@ -1667,12 +1653,12 @@ export function CustomerCatalogView({
 
           {/* Precio único minimalista estilo Apple (L 350.00) + Botón Carrito */}
           <div className="flex items-center gap-2">
-            {customerCart.length > 0 && (
+            {customerCart.length > 0 && step < WIZARD_LAST && (
               <button
                 type="button"
-                onClick={() => setIsCartModalOpen(true)}
+                onClick={() => goToStep(WIZARD_LAST)}
                 className="flex items-center gap-1.5 rounded-full bg-slate-900 px-3 py-1 text-xs font-bold text-white shadow-sm transition hover:bg-slate-800 active:scale-95"
-                title="Ver prendas de mi pedido"
+                title="Ir a mi pedido y confirmar"
               >
                 <span>🛒</span>
                 <span>{cartTotalQty}</span>
@@ -1687,36 +1673,12 @@ export function CustomerCatalogView({
       </header>
 
       <div ref={wizardTopRef} className="mx-auto max-w-2xl space-y-4 px-3 pt-4">
-        {/* PROGRESO E INSTRUCCIÓN CLARA DEL PASO ACTUAL */}
+        {/* PROGRESO ÚNICO E INSTRUCCIÓN CLARA DEL PASO ACTUAL */}
         <div className="rounded-[22px] border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
-          <div className="mb-2.5 flex items-center justify-between gap-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <span className="inline-flex items-center rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
               Paso {step + 1} de {WIZARD_LAST + 1}
             </span>
-            <div className="flex items-center gap-1">
-              {WIZARD_STEPS.map((stInfo, i) => {
-                const unlocked = i <= maxStepReached;
-                const active = i === step;
-                return (
-                  <button
-                    key={stInfo.short}
-                    type="button"
-                    disabled={!unlocked}
-                    aria-label={`Ir al paso ${i + 1}: ${stInfo.title}`}
-                    onClick={() => unlocked && goToStep(i)}
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition disabled:cursor-default ${
-                      active
-                        ? 'bg-slate-900/10 text-slate-900'
-                        : unlocked
-                        ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-                        : 'text-slate-300'
-                    }`}
-                  >
-                    {i + 1}. {stInfo.short}
-                  </button>
-                );
-              })}
-            </div>
           </div>
           <h2 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">
             {WIZARD_STEPS[step].title}
@@ -1726,20 +1688,35 @@ export function CustomerCatalogView({
           </p>
           <div className="mt-3 grid grid-cols-4 gap-1.5">
             {WIZARD_STEPS.map((stInfo, i) => {
-              const unlocked = i <= maxStepReached;
+              const unlocked = i <= maxStepReached || (i === WIZARD_LAST && customerCart.length > 0);
+              const active = i === step;
               return (
                 <button
                   key={stInfo.short}
                   type="button"
                   disabled={!unlocked}
                   aria-label={`Paso ${i + 1}: ${stInfo.title}`}
+                  aria-current={active ? 'step' : undefined}
                   onClick={() => unlocked && goToStep(i)}
-                  className="h-1.5 w-full rounded-full transition-colors disabled:cursor-default"
-                  style={{
-                    backgroundColor:
-                      i <= step ? '#0f172a' : unlocked ? '#94a3b8' : '#e2e8f0'
-                  }}
-                />
+                  className="group flex flex-col items-start gap-1 text-left disabled:cursor-default"
+                >
+                  <span
+                    className={`h-1.5 w-full rounded-full transition-colors ${
+                      i <= step ? 'bg-slate-900' : unlocked ? 'bg-slate-400' : 'bg-slate-200'
+                    }`}
+                  />
+                  <span
+                    className={`truncate text-[10px] font-semibold ${
+                      active
+                        ? 'text-slate-900'
+                        : unlocked
+                        ? 'text-slate-500 group-hover:text-slate-800'
+                        : 'text-slate-300'
+                    }`}
+                  >
+                    {i + 1}. {stInfo.short}
+                  </span>
+                </button>
               );
             })}
           </div>
@@ -2339,157 +2316,7 @@ export function CustomerCatalogView({
         </div>
       </div>
 
-      {/* MODAL DE MI PEDIDO / CARRITO (Permite ordenar múltiples diseños y prendas) */}
-      <Modal
-        open={isCartModalOpen}
-        onClose={() => setIsCartModalOpen(false)}
-        title={`Mi Pedido (${cartTotalQty} ${cartTotalQty === 1 ? 'prenda' : 'prendas'})`}
-      >
-        <div className="space-y-3.5">
-          {customerCart.length === 0 ? (
-            <div className="py-8 text-center text-slate-400">
-              <span className="text-3xl">🛒</span>
-              <p className="mt-2 text-xs font-medium">Aún no has agregado prendas al pedido</p>
-            </div>
-          ) : (
-            <ul className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto pr-1">
-              {customerCart.map((it) => {
-                const isBack = it.placement === 'back';
-                const sideText = isBack ? 'Espalda' : 'Frente';
-                return (
-                  <li key={it.id} className="flex items-start gap-3 py-3">
-                    {/* Miniatura de la prenda y diseño */}
-                    <div
-                      className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-black/10 p-1 shadow-sm"
-                      style={{ backgroundColor: it.colorHex || '#111827' }}
-                    >
-                      {it.photoUrl ? (
-                        <img
-                          src={it.photoUrl}
-                          alt={it.designName || 'Diseño'}
-                          className="h-full w-full object-contain"
-                        />
-                      ) : (
-                        <span className="text-xl">👕</span>
-                      )}
-                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[8px] font-bold text-white text-center">
-                        {sideText}
-                      </span>
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-xs font-extrabold text-slate-900">
-                          {it.colorName} · Talla {it.size}
-                        </span>
-                      </div>
-
-                      <div className="mt-0.5 truncate text-xs font-semibold text-slate-700">
-                        {it.designName ? `${it.designCode ? `[${it.designCode}] ` : ''}${it.designName}` : 'Camisa Lisa'}
-                      </div>
-
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateCartQty(it.id, -1)}
-                            className="flex h-6 w-6 items-center justify-center rounded-md bg-white text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-100"
-                          >
-                            −
-                          </button>
-                          <span className="px-2 text-xs font-extrabold text-slate-900">{it.qty}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateCartQty(it.id, 1)}
-                            className="flex h-6 w-6 items-center justify-center rounded-md bg-white text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-100"
-                          >
-                            +
-                          </button>
-                        </div>
-
-                        <div className="text-right">
-                          <span className="text-xs font-extrabold text-slate-900">
-                            {money(it.qty * it.unitPrice)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveFromCart(it.id)}
-                      className="text-xs font-semibold text-rose-500 hover:text-rose-700 p-1"
-                      title="Quitar"
-                    >
-                      ✕
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-
-          {customerCart.length > 0 && (
-            <div className="border-t border-slate-100 pt-3 space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-semibold text-slate-600">Total acumulado:</span>
-                <span className="text-xl font-extrabold text-slate-900">{money(cartTotalPrice)}</span>
-              </div>
-
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCartModalOpen(false);
-                    goToStep(0);
-                  }}
-                  className="flex-1 rounded-full border border-slate-200 bg-slate-50 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
-                >
-                  + Agregar otra prenda
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCartModalOpen(false);
-                    if (isDeliveryReady) {
-                      void handleSendOrderWhatsApp();
-                    } else {
-                      goToStep(WIZARD_LAST);
-                    }
-                  }}
-                  className="flex-1 rounded-full bg-slate-900 py-2.5 text-xs font-bold text-white shadow-md hover:bg-slate-800"
-                >
-                  {isDeliveryReady ? 'Confirmar por WhatsApp' : 'Ir a finalizar →'}
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setConfirmClearCart(true)}
-                className="w-full text-center text-[11px] font-semibold text-slate-400 hover:text-rose-600"
-              >
-                Vaciar lista de pedido
-              </button>
-            </div>
-          )}
-        </div>
-      </Modal>
-
       {/* MODAL DE FICHA VISUAL / PDF CON FOTITO DEL DISEÑO */}
-      <Confirm
-        open={confirmClearCart}
-        onClose={() => setConfirmClearCart(false)}
-        title="Vaciar lista de pedido"
-        text="¿Deseas quitar todas las prendas agregadas a tu pedido?"
-        confirmLabel="Sí, vaciar lista"
-        danger
-        onConfirm={() => {
-          setCustomerCart([]);
-          setIsCartModalOpen(false);
-          setConfirmClearCart(false);
-        }}
-      />
-
       <Modal
         open={!!orderSheetModal}
         onClose={() => setOrderSheetModal(null)}
