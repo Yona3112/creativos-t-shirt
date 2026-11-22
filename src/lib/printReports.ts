@@ -1,5 +1,5 @@
 import type { AppState, Order, Settings, StockEntry } from './types';
-import { activeBrands, brandColors, computeStock, lowColorStockList, parseVKey, vkey } from './inventory';
+import { activeBrands, brandColors, computeStock, lowColorStockList, negativeStockList, parseVKey, vkey } from './inventory';
 import { money } from './money';
 import { folioLabel } from './ids';
 import { dayKey, fmtDateTime } from './time';
@@ -304,6 +304,8 @@ export function printInventoryReport(
   const threshold = settings.lowStock || 10;
 
   let grandTotal = 0;
+  let grandAvailable = 0;
+  let grandNegative = 0;
   const sizeTotals = new Map<string, number>();
   sizes.forEach((sz) => sizeTotals.set(sz, 0));
 
@@ -319,17 +321,27 @@ export function printInventoryReport(
       for (const sz of sizes) {
         const val = stock.get(vkey(brand.id, color.id, sz)) || 0;
         rowTotal += val;
+        if (val > 0) grandAvailable += val;
+        else if (val < 0) grandNegative += Math.abs(val);
         sizeTotals.set(sz, (sizeTotals.get(sz) || 0) + val);
+        const cellStyle =
+          val < 0
+            ? 'background:#fef2f2;color:#b91c1c;font-weight:800;'
+            : val === 0
+            ? 'color:#94a3b8;'
+            : val <= threshold
+            ? 'background:#fffbeb;color:#92400e;'
+            : '';
         sizeCells.push(
-          `<td class="center ${val > 0 ? 'bold' : ''}" style="${
-            val === 0 ? 'color:#94a3b8;' : val <= threshold ? 'background:#fffbeb;color:#92400e;' : ''
-          }">${val}</td>`
+          `<td class="center ${val > 0 ? 'bold' : ''}" style="${cellStyle}">${val}</td>`
         );
       }
       grandTotal += rowTotal;
 
       const statusBadge =
-        rowTotal >= 1 && rowTotal <= threshold
+        rowTotal < 0
+          ? `<span class="badge badge-unpaid">Por cubrir: −${Math.abs(rowTotal)}</span>`
+          : rowTotal >= 1 && rowTotal <= threshold
           ? `<span class="badge badge-low">⚠️ Quedan ${rowTotal} uds (1–${threshold})</span>`
           : rowTotal > threshold
           ? `<span class="badge badge-paid">✓ En stock (${rowTotal})</span>`
@@ -344,7 +356,7 @@ export function printInventoryReport(
             <span style="color:#64748b;font-family:monospace;font-size:10px;"> (${esc(color.code)})</span>
           </td>
           ${sizeCells.join('')}
-          <td class="right bold" style="font-size:13px;">${rowTotal}</td>
+          <td class="right bold" style="font-size:13px;${rowTotal < 0 ? 'color:#b91c1c;' : ''}">${rowTotal}</td>
           <td class="center">${statusBadge}</td>
         </tr>
       `);
@@ -352,8 +364,45 @@ export function printInventoryReport(
   }
 
   const lowColors = lowColorStockList(state, info);
+  const negativeVariants = negativeStockList(state, info);
   const readyMade = (state.readyMadeStock || []).filter((r) => !r.deleted && r.qty > 0);
   const readyMadeTotal = readyMade.reduce((s, r) => s + r.qty, 0);
+
+  const negativeHtml =
+    negativeVariants.length > 0
+      ? `
+    <h2 style="color:#b91c1c;">📦 Camisas Facturadas por Pedido (Por Cubrir: −${grandNegative} uds)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Marca</th>
+          <th>Color</th>
+          <th class="center">Talla</th>
+          <th class="right">Saldo en Negativo</th>
+          <th class="right">Por Cubrir al Ingresar</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${negativeVariants
+          .map(
+            (nv) => `
+          <tr>
+            <td class="bold">${esc(nv.brand.name)}</td>
+            <td>
+              <span class="swatch" style="background:${esc(nv.color.hex)}"></span>
+              <span class="bold">${esc(nv.color.name)}</span>
+            </td>
+            <td class="center"><span class="badge-size">${esc(nv.size)}</span></td>
+            <td class="right bold" style="color:#b91c1c;">${nv.stock}</td>
+            <td class="right bold"><span class="badge badge-unpaid">Faltan ${nv.needed} uds</span></td>
+          </tr>
+        `
+          )
+          .join('')}
+      </tbody>
+    </table>
+  `
+      : '';
 
   const lowColorsHtml =
     lowColors.length > 0
@@ -441,8 +490,9 @@ export function printInventoryReport(
 
     <div class="kpi-grid">
       <div class="kpi">
-        <div class="lbl">Total Camisas en Blanco</div>
-        <div class="val">${grandTotal} uds</div>
+        <div class="lbl">Disponibles en Estante</div>
+        <div class="val">${grandAvailable} uds</div>
+        ${grandNegative > 0 ? `<div class="sub" style="color:#b91c1c;font-weight:800;">Por cubrir: −${grandNegative} uds</div>` : ''}
       </div>
       <div class="kpi">
         <div class="lbl">Colores en Alerta (1–${threshold} uds)</div>
@@ -458,6 +508,7 @@ export function printInventoryReport(
       </div>
     </div>
 
+    ${negativeHtml}
     ${lowColorsHtml}
 
     <h2>👕 Matriz de Inventario por Marca, Color y Talla</h2>
@@ -1168,7 +1219,7 @@ export function printStockEntryReport(state: AppState, entry: StockEntry): void 
       </div>
       <div class="kpi">
         <div class="lbl">${isCuadre ? 'Diferencia Neta' : 'Unidades Ingresadas'}</div>
-        <div class="val" style="color:#15803d;">${totalUnits > 0 ? `+${totalUnits}` : totalUnits} uds</div>
+        <div class="val" style="color:${totalUnits >= 0 ? '#15803d' : '#dc2626'};">${totalUnits > 0 ? `+${totalUnits}` : totalUnits} uds</div>
       </div>
       <div class="kpi">
         <div class="lbl">Tallas / Variantes</div>

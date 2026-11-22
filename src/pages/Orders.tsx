@@ -53,9 +53,16 @@ export default function Orders({ navigate }: { navigate?: (s: Section) => void }
   const [visibleCount, setVisibleCount] = useState(25);
   const [viewer, setViewer] = useState<string | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
+  const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
+  const [settleMethod, setSettleMethod] = useState('');
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<Order | null>(null);
   const [pdfModal, setPdfModal] = useState<{ orders: Order[]; title: string } | null>(null);
+
+  const settleableMethods = useMemo(() => {
+    const list = settings.paymentMethods.filter((m) => !m.toLowerCase().includes('pendiente'));
+    return list.length > 0 ? list : ['Efectivo', 'Transferencia Bancaria'];
+  }, [settings.paymentMethods]);
 
   useEffect(() => {
     setVisibleCount(25);
@@ -244,7 +251,24 @@ export default function Orders({ navigate }: { navigate?: (s: Section) => void }
               order={o}
               settings={settings}
               onZoom={setViewer}
-              onAskCancel={() => setCancelOrder(o)}
+              onAskCancel={() => {
+                if (o.status === 'borrador') {
+                  const err = setOrderStatus(o.id, 'cancelado', { returnAsReadyMade: false });
+                  if (err) toast(err, 'error');
+                  else toast(`Borrador ${folioLabel(o.folio)} cancelado`);
+                  return;
+                }
+                setCancelOrder(o);
+              }}
+              onAskSettle={() => {
+                if ((o.paymentMethod || '').toLowerCase().includes('pendiente')) {
+                  setSettleMethod(settleableMethods[0] || 'Efectivo');
+                  setSettlingOrder(o);
+                  return;
+                }
+                markPaid(o.id);
+                toast('Pago completo registrado');
+              }}
               onEdit={() => setEditingOrder(o)}
               onRepeat={
                 navigate
@@ -406,6 +430,58 @@ export default function Orders({ navigate }: { navigate?: (s: Section) => void }
         </div>
       )}
 
+      <Modal
+        open={Boolean(settlingOrder)}
+        onClose={() => setSettlingOrder(null)}
+        title={settlingOrder ? `Liquidar ${folioLabel(settlingOrder.folio)}` : ''}
+        footer={
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-ghost" onClick={() => setSettlingOrder(null)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-primary bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => {
+                if (!settlingOrder) return;
+                markPaid(settlingOrder.id, settleMethod || settleableMethods[0] || 'Efectivo');
+                toast(`Pago completo registrado (${settleMethod || settleableMethods[0] || 'Efectivo'})`);
+                setSettlingOrder(null);
+              }}
+            >
+              ✓ Confirmar Liquidación
+            </button>
+          </div>
+        }
+      >
+        {settlingOrder && (
+          <div className="space-y-3">
+            <div className="rounded-xl bg-emerald-50 px-3.5 py-2.5 text-sm font-bold text-emerald-950">
+              Saldo a liquidar: {money(settlingOrder.balance)} · Total: {money(settlingOrder.total)}
+            </div>
+            <div>
+              <label className="label">¿Con qué método pagó el cliente?</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {settleableMethods.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setSettleMethod(m)}
+                    className={`rounded-xl border px-3 py-2 text-xs font-bold transition ${
+                      settleMethod === m
+                        ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {pdfModal && (
         <WorkshopPdfModal
           open
@@ -424,6 +500,7 @@ function OrderCard({
   settings,
   onZoom,
   onAskCancel,
+  onAskSettle,
   onEdit,
   onRepeat,
   onAskDelete,
@@ -433,6 +510,7 @@ function OrderCard({
   settings: Settings;
   onZoom: (src: string) => void;
   onAskCancel: () => void;
+  onAskSettle: () => void;
   onEdit: () => void;
   onRepeat?: () => void;
   onAskDelete: () => void;
@@ -653,10 +731,7 @@ function OrderCard({
             </span>
             <button
               className="btn-ghost min-h-[44px] px-3 text-xs font-bold text-emerald-700"
-              onClick={() => {
-                markPaid(order.id);
-                toast('Pago completo registrado');
-              }}
+              onClick={onAskSettle}
             >
               ✓ Liquidar
             </button>

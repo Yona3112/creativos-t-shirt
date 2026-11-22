@@ -374,10 +374,26 @@ export default function Reports() {
           {summary.byPaymentMethod.length > 0 && (
             <section className="card space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="section-title mb-0">💳 Arqueo de Caja por Método de Pago</h2>
-                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-extrabold text-emerald-900">
-                  Cobrado: {money(summary.collected)}
-                </span>
+                <div>
+                  <h2 className="section-title mb-0">💳 Arqueo de Caja por Método de Pago</h2>
+                  <p className="mt-0.5 text-[11px] font-medium text-slate-500">
+                    Cuadre: Vendido ({money(summary.total)}) = Cobrado ({money(summary.collected)}) + Por cobrar ({money(summary.pending)})
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {Math.abs(summary.collected + summary.pending - summary.total) <= 1 ? (
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800 ring-1 ring-emerald-200">
+                      ✓ Caja cuadrada
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-900">
+                      ⚠️ Revisar descuadre ({money(summary.total - (summary.collected + summary.pending))})
+                    </span>
+                  )}
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-extrabold text-emerald-900">
+                    Cobrado: {money(summary.collected)}
+                  </span>
+                </div>
               </div>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3">
                 {summary.byPaymentMethod.map((pm) => (

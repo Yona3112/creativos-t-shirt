@@ -1,5 +1,6 @@
 import type { AppState, CatalogDesign, Color, Entity, Movement, Order, ReadyMadeShirt, Settings, StockEntry } from './types';
 import { DEFAULT_SETTINGS, LEGACY_COLOR_HEX, createInitialState } from './seed';
+import { dayKey } from './time';
 
 function newer<T extends Entity>(a: T, b: T): T {
   const ua = a.updatedAt || 0;
@@ -73,12 +74,17 @@ const ORPHAN_DESIGN_IDS = new Set([
 export const isLedgerMovement = (m: Movement) => Boolean(m.orderId || m.entryId);
 
 /**
- * Compacta movimientos manuales (sin pedido ni ingreso) por variante `key` en un único registro neto `adj-${key}`.
- * Elimina decenas de registros redundantes (+1 / -1) y descarta ajustes cuyo neto sea 0.
+ * Compacta movimientos manuales (sin pedido ni ingreso) por variante + día (`key@@YYYY-MM-DD`)
+ * en un único registro neto `adj-${key}-${day}`.
+ * Preserva cierres históricos (`Había (Antes)`) por día y conserva lápidas recientes con `delta === 0`
+ * para evitar resurrecciones al sincronizar con otros dispositivos.
  */
 export function compactMovements(movements: Movement[], validBrandIds?: Set<string>): Movement[] {
   const orderMovements: Movement[] = [];
-  const adjByKey = new Map<string, { delta: number; at: number }>();
+  const adjByBucket = new Map<
+    string,
+    { id: string; key: string; day: string; delta: number; at: number; hasConsolidated: boolean }
+  >();
 
   for (const m of movements) {
     if (!m || !m.key) continue;
@@ -88,28 +94,54 @@ export function compactMovements(movements: Movement[], validBrandIds?: Set<stri
     if (isLedgerMovement(m)) {
       orderMovements.push(m);
     } else {
-      const prev = adjByKey.get(m.key);
-      // Si es un registro ya consolidado (`adj-...`) más reciente que los fragmentos viejos, o si sumamos fragmentos
-      if (m.id === `adj-${m.key}` && prev && m.at > prev.at) {
-        adjByKey.set(m.key, { delta: m.delta, at: m.at });
-      } else if (prev && prev.at > m.at && m.id !== `adj-${m.key}`) {
-        // Ignorar fragmento viejo anterior a una consolidación
+      const mAt = Number(m.at) || 0;
+      const day = dayKey(mAt || Date.now());
+      const bucketKey = `${m.key}@@${day}`;
+      const isConsolidated = m.id.startsWith('adj-');
+      const prev = adjByBucket.get(bucketKey);
+
+      if (!prev) {
+        adjByBucket.set(bucketKey, {
+          id: isConsolidated ? `adj-${m.key}-${day}` : `adj-${m.key}-${day}`,
+          key: m.key,
+          day,
+          delta: Number(m.delta) || 0,
+          at: mAt,
+          hasConsolidated: isConsolidated
+        });
+      } else if (isConsolidated && (mAt > prev.at || (mAt === prev.at && !prev.hasConsolidated))) {
+        adjByBucket.set(bucketKey, {
+          id: `adj-${m.key}-${day}`,
+          key: m.key,
+          day,
+          delta: Number(m.delta) || 0,
+          at: mAt,
+          hasConsolidated: true
+        });
+      } else if (prev.hasConsolidated && prev.at > mAt) {
+        // Ignorar fragmento viejo anterior a una consolidación del mismo día
         continue;
       } else {
-        adjByKey.set(m.key, {
-          delta: (prev?.delta || 0) + (Number(m.delta) || 0),
-          at: Math.max(prev?.at || 0, m.at || 0)
+        adjByBucket.set(bucketKey, {
+          id: `adj-${m.key}-${day}`,
+          key: m.key,
+          day,
+          delta: prev.delta + (Number(m.delta) || 0),
+          at: Math.max(prev.at, mAt),
+          hasConsolidated: prev.hasConsolidated || isConsolidated
         });
       }
     }
   }
 
+  const tombstoneCutoff = Date.now() - 30 * 86400000;
   const compactedAdj: Movement[] = [];
-  for (const [key, info] of adjByKey.entries()) {
-    if (info.delta !== 0) {
+  for (const info of adjByBucket.values()) {
+    const keepTombstone = info.hasConsolidated && info.delta === 0 && info.at >= tombstoneCutoff;
+    if (info.delta !== 0 || keepTombstone) {
       compactedAdj.push({
-        id: `adj-${key}`,
-        key,
+        id: info.id,
+        key: info.key,
         delta: info.delta,
         reason: 'ajuste',
         at: info.at || Date.now()
@@ -125,15 +157,28 @@ function mergeMovements(a: Movement[], b: Movement[]): Movement[] {
   for (const m of a) if (isLedgerMovement(m)) orderMap.set(m.id, m);
   for (const m of b) if (isLedgerMovement(m) && !orderMap.has(m.id)) orderMap.set(m.id, m);
 
-  // Para ajustes manuales sueltos, consolidar por key priorizando el registro consolidado más reciente
+  // Para ajustes manuales sueltos, fusionar por variante + día priorizando el registro consolidado más reciente
   const adjA = compactMovements(a.filter((m) => !isLedgerMovement(m)));
   const adjB = compactMovements(b.filter((m) => !isLedgerMovement(m)));
   const adjMap = new Map<string, Movement>();
-  for (const m of adjA) adjMap.set(m.key, m);
+  for (const m of adjA) {
+    const bucketKey = `${m.key}@@${dayKey(m.at || Date.now())}`;
+    adjMap.set(bucketKey, m);
+  }
   for (const m of adjB) {
-    const prev = adjMap.get(m.key);
-    if (!prev || (m.at || 0) >= (prev.at || 0)) {
-      adjMap.set(m.key, m);
+    const bucketKey = `${m.key}@@${dayKey(m.at || Date.now())}`;
+    const prev = adjMap.get(bucketKey);
+    if (!prev) {
+      adjMap.set(bucketKey, m);
+      continue;
+    }
+    const ma = m.at || 0;
+    const pa = prev.at || 0;
+    if (
+      ma > pa ||
+      (ma === pa && (m.id > prev.id || (m.id === prev.id && m.delta < prev.delta)))
+    ) {
+      adjMap.set(bucketKey, m);
     }
   }
 
@@ -465,7 +510,7 @@ function dropDeletedOrderMovements(
   readyMadeStock: ReadyMadeShirt[]
 ): Movement[] {
   const readyOrderIds = new Set(
-    readyMadeStock.filter((r) => !r.deleted && r.qty > 0 && r.orderId).map((r) => r.orderId as string)
+    readyMadeStock.filter((r) => Boolean(r.orderId)).map((r) => r.orderId as string)
   );
   const dead = new Set(
     orders.filter((o) => o.deleted && !readyOrderIds.has(o.id)).map((o) => o.id)

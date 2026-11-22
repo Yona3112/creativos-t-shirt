@@ -362,6 +362,8 @@ export default function Inventory() {
     [entryDraft]
   );
 
+  const isCuadreToday = entryDay === dayKey();
+
   const handleSaveStockEntry = () => {
     const items = Object.entries(entryDraft)
       .filter(([, qty]) => qty > 0)
@@ -370,9 +372,11 @@ export default function Inventory() {
       toast('Ingresa al menos 1 camisa nueva en alguna talla', 'error');
       return;
     }
+    const entryTs = isCuadreToday ? undefined : startOfDayTs(entryDay) + 12 * 3600000;
     const created = createStockEntry(
       items,
-      entryNote.trim() || `Ingreso del día ${entryDay}`
+      entryNote.trim() || `Ingreso del día ${entryDay}`,
+      entryTs
     );
     if (created) {
       const addedUnits = created.lines.reduce((s, l) => s + l.qty, 0);
@@ -387,6 +391,10 @@ export default function Inventory() {
   };
 
   const handleSavePhysicalCount = () => {
+    if (!isCuadreToday) {
+      toast(`Para aplicar el cuadre físico cambia la fecha a hoy (${dayKey()})`, 'info');
+      return;
+    }
     const counts: { key: string; counted: number }[] = [];
     for (const [key, raw] of Object.entries(countDraft)) {
       if (raw.trim() === '') continue;
@@ -893,13 +901,34 @@ export default function Inventory() {
               </div>
             )}
 
-            {ingresoTab === 'cuadre' && (
+            {ingresoTab === 'cuadre' && (() => {
+              let sumBefore = 0;
+              let sumIn = 0;
+              let sumOut = 0;
+              let sumEnd = 0;
+              const cuadreRows = rows.flatMap(({ brand, color }) =>
+                visibleSizes.map((sz) => {
+                  const k = vkey(brand.id, color.id, sz);
+                  const currentVal = stock.get(k) || 0;
+                  const hadBefore = dailyComparison.beforeByKey.get(k) || 0;
+                  const inToday = dailyComparison.inByKey.get(k) || 0;
+                  const outToday = dailyComparison.outByKey.get(k) || 0;
+                  const endOfDayVal = hadBefore + inToday - outToday;
+                  sumBefore += hadBefore;
+                  sumIn += inToday;
+                  sumOut += outToday;
+                  sumEnd += isCuadreToday ? currentVal : endOfDayVal;
+                  return { k, color, sz, currentVal, hadBefore, inToday, outToday, endOfDayVal };
+                })
+              );
+
+              return (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3.5 py-2.5">
                   <div className="text-xs font-semibold text-slate-700">
-                    Comparación del día <strong>{entryDay}</strong>: verifica lo que había antes, lo que ingresó ese día, ventas y que cuadre con tu conteo físico.
+                    Comparación del día <strong>{entryDay}</strong>: verifica lo que había antes, lo que ingresó ese día, ventas y que cuadre con tu conteo físico (preserva pedidos en negativo).
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => printInventoryReport(state, { brandFilter, colorFilter })}
@@ -907,10 +936,20 @@ export default function Inventory() {
                     >
                       🖨️ Imprimir
                     </button>
+                    {!isCuadreToday && (
+                      <button
+                        type="button"
+                        onClick={() => setEntryDay(dayKey())}
+                        className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100"
+                      >
+                        Ir a Hoy
+                      </button>
+                    )}
                     <button
                       type="button"
+                      disabled={!isCuadreToday}
                       onClick={handleSavePhysicalCount}
-                      className="btn-primary px-4 py-1.5 text-xs"
+                      className="btn-primary px-4 py-1.5 text-xs disabled:opacity-40"
                     >
                       Aplicar Cuadre Físico
                     </button>
@@ -927,110 +966,136 @@ export default function Inventory() {
                         <th className="px-3 py-2.5 text-right">+ Ingresó ({entryDay})</th>
                         <th className="px-3 py-2.5 text-right">− Salidas</th>
                         <th className="px-3 py-2.5 text-right">
-                          {entryDay === dayKey() ? '= Hay en Sistema' : `= Cierre (${entryDay})`}
+                          {isCuadreToday ? '= Hay en Sistema' : `= Cierre (${entryDay})`}
                         </th>
                         <th className="px-3 py-2.5 text-center">Conteo Físico</th>
                         <th className="px-3 py-2.5 text-center">Cuadre</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {rows.flatMap(({ brand, color }) =>
-                        visibleSizes.map((sz) => {
-                          const k = vkey(brand.id, color.id, sz);
-                          const currentVal = stock.get(k) || 0;
-                          const hadBefore = dailyComparison.beforeByKey.get(k) || 0;
-                          const inToday = dailyComparison.inByKey.get(k) || 0;
-                          const outToday = dailyComparison.outByKey.get(k) || 0;
-                          const endOfDayVal = hadBefore + inToday - outToday;
+                      {cuadreRows.map(({ k, color, sz, currentVal, hadBefore, inToday, outToday, endOfDayVal }) => {
+                        const expectedPhysical = Math.max(0, currentVal);
+                        const backorderQty = currentVal < 0 ? Math.abs(currentVal) : 0;
+                        const rawCount = countDraft[k];
+                        const countedVal =
+                          rawCount !== undefined && rawCount.trim() !== ''
+                            ? Math.max(0, Math.floor(Number(rawCount) || 0))
+                            : expectedPhysical;
+                        const diff = countedVal - expectedPhysical;
 
-                          const rawCount = countDraft[k];
-                          const countedVal =
-                            rawCount !== undefined && rawCount.trim() !== ''
-                              ? Math.floor(Number(rawCount) || 0)
-                              : currentVal;
-                          const diff = countedVal - currentVal;
-
-                          return (
-                            <tr key={`cua-${k}`} className="hover:bg-slate-50/70">
-                              <td className="px-3 py-2">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/20"
-                                    style={{ backgroundColor: color.hex }}
-                                  />
-                                  <span className="font-semibold text-slate-900">{color.name}</span>
-                                </div>
-                              </td>
-                              <td className="px-2 py-2 text-center">
-                                <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-bold text-white">
-                                  {sz}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right font-medium text-slate-600">
-                                {hadBefore}
-                              </td>
-                              <td className="px-3 py-2 text-right font-bold text-emerald-700">
-                                {inToday > 0 ? `+${inToday}` : '0'}
-                              </td>
-                              <td className="px-3 py-2 text-right font-medium text-rose-600">
-                                {outToday > 0 ? `−${outToday}` : '0'}
-                              </td>
-                              <td className="px-3 py-2 text-right font-extrabold text-slate-900">
-                                {entryDay === dayKey() ? (
-                                  currentVal
-                                ) : (
-                                  <span>
-                                    {endOfDayVal}
-                                    {endOfDayVal !== currentVal && (
-                                      <span className="ml-1 text-[10px] font-medium text-slate-400">
-                                        (hoy {currentVal})
-                                      </span>
-                                    )}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                <input
-                                  type="number"
-                                  min={0}
-                                  inputMode="numeric"
-                                  placeholder={String(currentVal)}
-                                  value={rawCount !== undefined ? rawCount : ''}
-                                  onChange={(e) =>
-                                    setCountDraft((prev) => ({
-                                      ...prev,
-                                      [k]: e.target.value
-                                    }))
-                                  }
-                                  className="h-8 w-20 rounded-xl border border-slate-200 bg-white text-center text-sm font-bold text-slate-900 outline-none focus:border-slate-900"
+                        return (
+                          <tr key={`cua-${k}`} className="hover:bg-slate-50/70">
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/20"
+                                  style={{ backgroundColor: color.hex }}
                                 />
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {diff === 0 ? (
-                                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
-                                    ✓ Cuadra
-                                  </span>
-                                ) : (
-                                  <span
-                                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                                      diff > 0
-                                        ? 'bg-sky-100 text-sky-900'
-                                        : 'bg-rose-100 text-rose-900'
-                                    }`}
-                                  >
-                                    {diff > 0 ? `+${diff} sobrante` : `${diff} faltante`}
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
+                                <span className="font-semibold text-slate-900">{color.name}</span>
+                              </div>
+                            </td>
+                            <td className="px-2 py-2 text-center">
+                              <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-bold text-white">
+                                {sz}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium text-slate-600">
+                              {hadBefore}
+                            </td>
+                            <td className="px-3 py-2 text-right font-bold text-emerald-700">
+                              {inToday > 0 ? `+${inToday}` : '0'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium text-rose-600">
+                              {outToday > 0 ? `−${outToday}` : '0'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-extrabold">
+                              {isCuadreToday ? (
+                                <span className={currentVal < 0 ? 'text-rose-600' : 'text-slate-900'}>
+                                  {currentVal}
+                                  {backorderQty > 0 && (
+                                    <span className="block text-[10px] font-semibold text-rose-600">
+                                      0 estante · {backorderQty} pedido
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className={endOfDayVal < 0 ? 'text-rose-600' : 'text-slate-900'}>
+                                  {endOfDayVal}
+                                  {endOfDayVal !== currentVal && (
+                                    <span className="ml-1 text-[10px] font-medium text-slate-400">
+                                      (hoy {currentVal})
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <input
+                                type="number"
+                                min={0}
+                                inputMode="numeric"
+                                disabled={!isCuadreToday}
+                                placeholder={String(expectedPhysical)}
+                                value={rawCount !== undefined ? rawCount : ''}
+                                onChange={(e) =>
+                                  setCountDraft((prev) => ({
+                                    ...prev,
+                                    [k]: e.target.value
+                                  }))
+                                }
+                                className="h-8 w-20 rounded-xl border border-slate-200 bg-white text-center text-sm font-bold text-slate-900 outline-none focus:border-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {!isCuadreToday ? (
+                                <span className="text-[11px] font-medium text-slate-400">Histórico</span>
+                              ) : diff === 0 ? (
+                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
+                                  {backorderQty > 0 ? `✓ Cuadra (−${backorderQty} ped.)` : '✓ Cuadra'}
+                                </span>
+                              ) : (
+                                <span
+                                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                                    diff > 0
+                                      ? 'bg-sky-100 text-sky-900'
+                                      : 'bg-rose-100 text-rose-900'
+                                  }`}
+                                >
+                                  {diff > 0
+                                    ? `+${diff} sobrante → ${currentVal + diff}`
+                                    : `${diff} faltante → ${currentVal + diff}`}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50 text-xs font-extrabold text-slate-900">
+                        <td colSpan={2} className="px-3 py-2.5 uppercase">
+                          Total ({cuadreRows.length} variantes)
+                        </td>
+                        <td className="px-3 py-2.5 text-right">{sumBefore}</td>
+                        <td className="px-3 py-2.5 text-right text-emerald-700">
+                          {sumIn > 0 ? `+${sumIn}` : '0'}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-rose-600">
+                          {sumOut > 0 ? `−${sumOut}` : '0'}
+                        </td>
+                        <td className={`px-3 py-2.5 text-right ${sumEnd < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+                          {sumEnd}
+                        </td>
+                        <td colSpan={2} className="px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500">
+                          Había ({sumBefore}) + Ingresó ({sumIn}) − Salidas ({sumOut}) = {sumBefore + sumIn - sumOut}
+                        </td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             {ingresoTab === 'historial' && (
               <div className="space-y-3">
@@ -1246,15 +1311,25 @@ export default function Inventory() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {rows.map(({ brand, color }) => {
-                const rowTotal = visibleSizes.reduce(
-                  (s, sz) => s + (stock.get(vkey(brand.id, color.id, sz)) || 0),
-                  0
-                );
-                const isLowColor = rowTotal >= 1 && rowTotal <= lowThreshold;
+                let rowPos = 0;
+                let rowNeg = 0;
+                for (const sz of visibleSizes) {
+                  const v = stock.get(vkey(brand.id, color.id, sz)) || 0;
+                  if (v > 0) rowPos += v;
+                  else if (v < 0) rowNeg += Math.abs(v);
+                }
+                const rowTotal = rowPos - rowNeg;
+                const isLowColor = rowPos >= 1 && rowPos <= lowThreshold;
                 return (
                   <tr
                     key={`${brand.id}-${color.id}`}
-                    className={isLowColor ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50/70'}
+                    className={
+                      rowNeg > 0
+                        ? 'bg-rose-50/35 hover:bg-rose-50/60'
+                        : isLowColor
+                        ? 'bg-amber-50/40 hover:bg-amber-50/70'
+                        : 'hover:bg-slate-50/70'
+                    }
                   >
                     <td className="sticky left-0 z-10 bg-white px-3 py-2.5">
                       <div className="flex items-center gap-2.5">
@@ -1278,7 +1353,12 @@ export default function Inventory() {
                             </span>
                             {isLowColor && (
                               <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-black text-amber-900 ring-1 ring-amber-300">
-                                ⚠️ Quedan {rowTotal} uds
+                                ⚠️ Quedan {rowPos} uds
+                              </span>
+                            )}
+                            {rowNeg > 0 && (
+                              <span className="rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-black text-rose-800 ring-1 ring-rose-300">
+                                Por cubrir: −{rowNeg}
                               </span>
                             )}
                           </div>
@@ -1312,7 +1392,9 @@ export default function Inventory() {
                     <td className="px-3 py-2.5 text-right font-extrabold text-slate-900">
                       <span
                         className={
-                          isLowColor
+                          rowTotal < 0
+                            ? 'rounded-lg bg-rose-100 px-2 py-1 text-rose-800'
+                            : isLowColor
                             ? 'rounded-lg bg-amber-100 px-2 py-1 text-amber-900'
                             : rowTotal === 0
                             ? 'text-slate-400'
@@ -1351,15 +1433,25 @@ export default function Inventory() {
       ) : (
         <div className="space-y-3">
           {rows.map(({ brand, color, sizes }) => {
-            const colorTotal = sizes.reduce(
-              (s, sz) => s + (stock.get(vkey(brand.id, color.id, sz)) || 0),
-              0
-            );
-            const isLowColor = colorTotal >= 1 && colorTotal <= lowThreshold;
+            let colorPos = 0;
+            let colorNeg = 0;
+            for (const sz of sizes) {
+              const v = stock.get(vkey(brand.id, color.id, sz)) || 0;
+              if (v > 0) colorPos += v;
+              else if (v < 0) colorNeg += Math.abs(v);
+            }
+            const colorTotal = colorPos - colorNeg;
+            const isLowColor = colorPos >= 1 && colorPos <= lowThreshold;
             return (
               <div
                 key={`${brand.id}-${color.id}`}
-                className={`card space-y-3 ${isLowColor ? 'border-amber-300 bg-amber-50/30' : ''}`}
+                className={`card space-y-3 ${
+                  colorNeg > 0
+                    ? 'border-rose-300 bg-rose-50/20'
+                    : isLowColor
+                    ? 'border-amber-300 bg-amber-50/30'
+                    : ''
+                }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
@@ -1376,19 +1468,26 @@ export default function Inventory() {
                         </span>
                         {isLowColor && (
                           <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-black text-amber-900 ring-1 ring-amber-300">
-                            ⚠️ Stock bajo: quedan {colorTotal} uds
+                            ⚠️ Stock bajo: quedan {colorPos} uds
+                          </span>
+                        )}
+                        {colorNeg > 0 && (
+                          <span className="rounded-md bg-rose-100 px-2 py-0.5 text-xs font-black text-rose-800 ring-1 ring-rose-300">
+                            Por cubrir: −{colorNeg}
                           </span>
                         )}
                       </div>
                       <div className="text-xs font-semibold text-slate-500">
-                        Base lisa: {money(normalPrice(settings, brand))} · Estampada: {money(settings.priceCustom || 35000)}
+                        {money(settings.priceCustom || 35000)}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span
                       className={`rounded-xl px-3 py-1.5 text-sm font-extrabold ${
-                        isLowColor
+                        colorTotal < 0
+                          ? 'bg-rose-100 text-rose-800'
+                          : isLowColor
                           ? 'bg-amber-100 text-amber-900'
                           : colorTotal === 0
                           ? 'bg-slate-100 text-slate-400'
@@ -1422,14 +1521,24 @@ export default function Inventory() {
                     return (
                       <div
                         key={sz}
-                        className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2"
+                        className={`flex items-center justify-between rounded-xl border px-3 py-2 ${
+                          val < 0 ? 'border-rose-200 bg-rose-50/50' : 'border-slate-200 bg-slate-50/60'
+                        }`}
                       >
                         <div>
-                          <div className="text-base font-extrabold text-slate-900">{sz}</div>
+                          <div className={`text-base font-extrabold ${val < 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                            {sz}
+                          </div>
                           <div className="font-mono text-xs text-slate-400">{sku}</div>
+                          {val < 0 && (
+                            <div className="mt-0.5 text-[10px] font-bold text-rose-600">
+                              Por cubrir: {Math.abs(val)}
+                            </div>
+                          )}
                         </div>
                         <Stepper
                           size="sm"
+                          min={-999}
                           value={val}
                           onCommit={(n) => setStockAbsolute(k, n)}
                           ariaLabel={`Stock ${sku}`}

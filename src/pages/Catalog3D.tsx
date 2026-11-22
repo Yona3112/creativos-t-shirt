@@ -1209,7 +1209,7 @@ export function CustomerCatalogView({
   };
 
   const getColorTotalStock = (c: SharedCatalogColor): number => {
-    return payload.sizes.reduce((sum, sz) => sum + getSizeStock(c, sz), 0);
+    return payload.sizes.reduce((sum, sz) => sum + Math.max(0, getSizeStock(c, sz)), 0);
   };
 
   const handleSelectColor = (c: SharedCatalogColor) => {

@@ -3,7 +3,7 @@ import type { Order, Section } from '../lib/types';
 import { useAppState, useStock } from '../lib/store';
 import { dayKey, fmtDateTime } from '../lib/time';
 import { money } from '../lib/money';
-import { lowColorStockList, orderUnits } from '../lib/inventory';
+import { lowColorStockList, negativeStockList, orderUnits } from '../lib/inventory';
 import { printInventoryReport } from '../lib/printReports';
 import { folioLabel } from '../lib/ids';
 import { ColorDot, Empty, StatusBadge, toast } from '../components/ui';
@@ -41,6 +41,8 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
     [state.orders]
   );
   const lowColors = useMemo(() => lowColorStockList(state, info), [state, info]);
+  const negativeVariants = useMemo(() => negativeStockList(state, info), [state, info]);
+  const negativeUnits = useMemo(() => negativeVariants.reduce((s, v) => s + v.needed, 0), [negativeVariants]);
   const lowThreshold = Math.max(1, state.settings.lowStock || 10);
 
   return (
@@ -119,6 +121,24 @@ export default function Home({ navigate }: { navigate: (s: Section) => void }) {
             <span className="text-lg font-black text-rose-700">{money(kpi.receivableTotal)}</span>
             <span className="text-xs font-bold text-rose-600">Ver →</span>
           </div>
+        </button>
+      )}
+
+      {negativeUnits > 0 && (
+        <button
+          type="button"
+          onClick={() => navigate('inventario')}
+          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50/75 px-4 py-3 text-left shadow-sm transition hover:bg-rose-100/75"
+        >
+          <div>
+            <div className="text-xs font-extrabold uppercase tracking-wide text-rose-900">
+              📦 Camisas por Cubrir (−{negativeUnits} ud{negativeUnits === 1 ? '' : 's'} en negativo)
+            </div>
+            <div className="text-xs font-semibold text-rose-700">
+              Pedidos facturados sin existencia · se descontarán solos al ingresar inventario
+            </div>
+          </div>
+          <span className="shrink-0 text-xs font-extrabold text-rose-700">Ingresar →</span>
         </button>
       )}
 

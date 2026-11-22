@@ -67,6 +67,9 @@ export interface OrderItem {
   photoId?: string | null;
   photoUrl?: string | null;
   placement?: 'center' | 'pocket' | 'full' | 'back' | null;
+  /** True si proviene de Prendas Ya Estampadas (no descuenta camisas en blanco). */
+  isReadyMade?: boolean;
+  readyMadeId?: string | null;
 }
 
 export interface ShipTo {

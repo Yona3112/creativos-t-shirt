@@ -4,6 +4,7 @@ import { uid, colorCode, slug } from './ids';
 import { activeBrands, brandColors, computeStock, skuOf, vkey } from './inventory';
 import { normalize } from './merge';
 import { BASE_COLORS } from './seed';
+import { dayKey } from './time';
 
 const now = () => Date.now();
 
@@ -12,29 +13,34 @@ const now = () => Date.now();
 export function setStockAbsolute(key: string, target: number, reason: MovementReason = 'ajuste'): void {
   const t = Math.floor(Number(target) || 0);
   update((s) => {
+    const ts = now();
+    const today = dayKey(ts);
     const current = computeStock(s).stock.get(key) || 0;
     const delta = t - current;
     if (!delta) return s;
 
-    // Calcular cuánto proviene de pedidos (`orderId`) y consolidar el ajuste manual en 1 solo registro por variante
-    let orderSum = 0;
+    // Preservar pedidos, lotes y ajustes de días anteriores; consolidar únicamente el neto de hoy
+    let otherSum = 0;
+    let hadManualToday = false;
     const otherMovements: Movement[] = [];
     for (const m of s.movements) {
       if (m.key !== key) {
         otherMovements.push(m);
-      } else if (m.orderId || m.entryId) {
-        orderSum += m.delta;
+      } else if (m.orderId || m.entryId || dayKey(m.at || 0) !== today) {
+        otherSum += m.delta;
         otherMovements.push(m);
+      } else {
+        hadManualToday = true;
       }
     }
-    const neededAdj = t - orderSum;
-    if (neededAdj !== 0) {
+    const neededToday = t - otherSum;
+    if (neededToday !== 0 || hadManualToday) {
       otherMovements.push({
-        id: `adj-${key}`,
+        id: `adj-${key}-${today}`,
         key,
-        delta: neededAdj,
+        delta: neededToday,
         reason,
-        at: now()
+        at: ts
       });
     }
     return { ...s, movements: otherMovements };
@@ -45,28 +51,40 @@ export function setStockAbsolute(key: string, target: number, reason: MovementRe
 
 function nextEntryFolio(s: AppState, kind: StockEntry['kind']): string {
   const prefix = kind === 'ingreso' ? 'ING' : 'CUA';
-  const n = (s.stockEntries || []).filter((e) => e.kind === kind).length + 1;
-  return `${prefix}-${String(n).padStart(4, '0')}`;
+  const re = new RegExp(`^${prefix}-(\\d+)$`, 'i');
+  let maxN = 0;
+  for (const e of s.stockEntries || []) {
+    if (e.kind !== kind) continue;
+    const m = re.exec(e.folio || '');
+    if (m) maxN = Math.max(maxN, Number(m[1]) || 0);
+  }
+  const count = (s.stockEntries || []).filter((e) => e.kind === kind).length;
+  return `${prefix}-${String(Math.max(maxN, count) + 1).padStart(4, '0')}`;
 }
 
 /**
  * Registra un ingreso de mercadería como lote aparte (folio ING-0001).
  * Guarda cuánto había antes de cada variante y cuánto quedó, para poder comparar y cuadrar.
  */
-export function createStockEntry(lines: { key: string; qty: number }[], note = ''): StockEntry | null {
+export function createStockEntry(
+  lines: { key: string; qty: number }[],
+  note = '',
+  createdAt?: number
+): StockEntry | null {
   const clean = lines.filter((l) => l.key && Math.floor(l.qty) > 0).map((l) => ({ key: l.key, qty: Math.floor(l.qty) }));
   if (!clean.length) return null;
   let created: StockEntry | null = null;
   update((s) => {
     const { stock } = computeStock(s);
-    const t = now();
+    const upd = now();
+    const t = createdAt && Number.isFinite(createdAt) ? createdAt : upd;
     const id = uid();
     const entry: StockEntry = {
       id,
       folio: nextEntryFolio(s, 'ingreso'),
       kind: 'ingreso',
       createdAt: t,
-      updatedAt: t,
+      updatedAt: Math.max(upd, t),
       note: note.trim(),
       lines: clean.map((l) => {
         const before = stock.get(l.key) || 0;
@@ -89,21 +107,29 @@ export function createStockEntry(lines: { key: string; qty: number }[], note = '
 }
 
 /**
- * Cuadre de inventario: se ingresa lo contado físicamente y el sistema ajusta las diferencias.
- * Queda guardado como lote CUA-0001 con lo que decía el sistema vs lo contado.
+ * Cuadre de inventario: compara el conteo físico en estante sin borrar pedidos en negativo ("bajo pedido"),
+ * a menos que `preserveBackorders` sea false. Guarda el lote CUA-0001 con antes/diferencia/después.
  */
-export function createStockCount(counts: { key: string; counted: number }[], note = ''): StockEntry | null {
+export function createStockCount(
+  counts: { key: string; counted: number }[],
+  note = '',
+  opts?: { preserveBackorders?: boolean; at?: number }
+): StockEntry | null {
   const clean = counts.filter((c) => c.key && Number.isFinite(c.counted) && c.counted >= 0);
   if (!clean.length) return null;
+  const preserveBackorders = opts?.preserveBackorders ?? true;
   let created: StockEntry | null = null;
   update((s) => {
     const { stock } = computeStock(s);
-    const t = now();
+    const upd = now();
+    const t = opts?.at && Number.isFinite(opts.at) ? opts.at : upd;
     const id = uid();
     const lines = clean.map((c) => {
       const before = stock.get(c.key) || 0;
-      const after = Math.floor(c.counted);
-      return { key: c.key, qty: after - before, before, after };
+      const counted = Math.floor(c.counted);
+      const expectedPhysical = preserveBackorders ? Math.max(0, before) : before;
+      const qty = counted - expectedPhysical;
+      return { key: c.key, qty, before, after: before + qty };
     });
     if (lines.every((l) => l.qty === 0)) {
       return s;
@@ -113,7 +139,7 @@ export function createStockCount(counts: { key: string; counted: number }[], not
       folio: nextEntryFolio(s, 'cuadre'),
       kind: 'cuadre',
       createdAt: t,
-      updatedAt: t,
+      updatedAt: Math.max(upd, t),
       note: note.trim(),
       lines
     };
@@ -524,6 +550,60 @@ export function patchOrder(id: string, patch: Partial<Order>): void {
   }));
 }
 
+function isReadyMadeOrderItem(it: Order['items'][number], orderNotes?: string): boolean {
+  return Boolean(
+    it.isReadyMade ||
+      it.readyMadeId ||
+      (orderNotes || '').startsWith('Venta de Prenda Ya Estampada')
+  );
+}
+
+function restoreReadyMadeItems(
+  readyMadeStock: ReadyMadeShirt[],
+  order: Order,
+  t: number
+): ReadyMadeShirt[] {
+  let next = [...readyMadeStock];
+  for (const it of order.items) {
+    if (!isReadyMadeOrderItem(it, order.notes)) continue;
+    const qtyToRestore = Math.max(1, it.qty || 1);
+    if (it.readyMadeId && next.some((r) => r.id === it.readyMadeId)) {
+      next = next.map((r) =>
+        r.id === it.readyMadeId
+          ? {
+              ...r,
+              qty: Math.max(0, r.qty || 0) + qtyToRestore,
+              deleted: false,
+              updatedAt: Math.max(t, (r.updatedAt || r.createdAt || 0) + 1)
+            }
+          : r
+      );
+    } else {
+      next.unshift({
+        id: `rms_${t}_${uid().slice(0, 4)}`,
+        orderId: order.id,
+        brandId: it.brandId,
+        brandName: it.brandName,
+        colorId: it.colorId,
+        colorName: it.colorName,
+        colorHex: it.colorHex,
+        size: it.size,
+        designName: it.designName || order.designName || `${it.brandName} ${it.colorName}`,
+        designCode: it.designCode || order.designCode || null,
+        photoId: it.photoId || order.photoId || null,
+        placement: it.placement || order.placement || 'back',
+        price: it.unitPrice,
+        qty: qtyToRestore,
+        createdAt: t,
+        updatedAt: t,
+        deleted: false,
+        notes: `Reingreso Prenda Estampada (Folio #${order.folio})`
+      });
+    }
+  }
+  return next;
+}
+
 export function updateOrderDetails(
   id: string,
   patch: Partial<Order> & { items: Order['items'] }
@@ -540,6 +620,7 @@ export function updateOrderDetails(
       // Devolver stock de prendas que fueron eliminadas al editar el pedido
       const nextIds = new Set(patch.items.map((x) => x.id));
       for (const removedIt of existing.items) {
+        if (isReadyMadeOrderItem(removedIt, existing.notes)) continue;
         if (!nextIds.has(removedIt.id) && (removedIt.fromStock || 0) > 0) {
           movements.push({
             id: `edit-rem-${id}-${removedIt.id}-${t}`,
@@ -554,6 +635,9 @@ export function updateOrderDetails(
       }
 
       reconciledItems = patch.items.map((nextIt, idx) => {
+        if (isReadyMadeOrderItem(nextIt, existing.notes)) {
+          return { ...nextIt, fromStock: 0 };
+        }
         const prevIt = existing.items.find((x) => x.id === nextIt.id);
         const prevFrom = Math.max(0, prevIt?.fromStock || 0);
         const key = vkey(nextIt.brandId, nextIt.colorId, nextIt.size);
@@ -636,11 +720,15 @@ export function updateOrderDetails(
 export function deleteOrder(id: string): void {
   const t = now();
   update((s) => {
-    const hasReadyMadeFromOrder = (s.readyMadeStock || []).some(
-      (r) => !r.deleted && r.qty > 0 && r.orderId === id
-    );
+    const target = s.orders.find((o) => o.id === id);
+    const hasReadyMadeFromOrder = (s.readyMadeStock || []).some((r) => r.orderId === id);
+    const readyMadeStock =
+      target && target.status !== 'cancelado' && target.status !== 'borrador'
+        ? restoreReadyMadeItems(s.readyMadeStock || [], target, t)
+        : s.readyMadeStock || [];
     return {
       ...s,
+      readyMadeStock,
       movements: hasReadyMadeFromOrder ? s.movements : s.movements.filter((m) => m.orderId !== id),
       orders: s.orders.map((o) =>
         o.id === id ? { ...o, deleted: true, updatedAt: Math.max(t, (o.updatedAt || 0) + 1) } : o
@@ -651,7 +739,10 @@ export function deleteOrder(id: string): void {
 
 export function orderStockReturnCount(order: Order): number {
   if (order.status === 'cancelado' || order.status === 'borrador') return 0;
-  return order.items.reduce((sum, it) => sum + Math.max(0, it.fromStock || 0), 0);
+  return order.items.reduce(
+    (sum, it) => (isReadyMadeOrderItem(it, order.notes) ? sum : sum + Math.max(0, it.fromStock || 0)),
+    0
+  );
 }
 
 export const STATUS_FLOW: OrderStatus[] = ['borrador', 'en_produccion', 'enviado', 'entregado'];
@@ -691,14 +782,23 @@ export function setOrderStatus(
     let readyMadeStock = [...(s.readyMadeStock || [])];
     let items = currentOrder.items;
     if (status === 'cancelado') {
-      if (options?.returnAsReadyMade) {
+      // Restaurar ítems que venían de Prendas Ya Estampadas (no tocan camisas en blanco)
+      if (currentOrder.status !== 'borrador') {
+        readyMadeStock = restoreReadyMadeItems(readyMadeStock, currentOrder, t);
+      }
+
+      const regularItems = currentOrder.items.filter(
+        (it) => !isReadyMadeOrderItem(it, currentOrder.notes)
+      );
+
+      if (options?.returnAsReadyMade && currentOrder.status !== 'borrador') {
         // La camisa ya fue estampada (ej. devolución contra entrega).
         // NO regresa a camisas en blanco para evitar falsas existencias de camisas lisas.
         // Se añade como Prenda Ya Estampada lista para entrega inmediata.
-        const anyItemHasDesign = currentOrder.items.some((x) =>
+        const anyItemHasDesign = regularItems.some((x) =>
           Boolean(x.designName || x.photoId || x.designId)
         );
-        for (const it of currentOrder.items) {
+        for (const it of regularItems) {
           const isPlainMixedItem = anyItemHasDesign && !it.designName && !it.photoId && !it.designId;
           const dName = isPlainMixedItem
             ? `${it.brandName} ${it.colorName} (Lisa)`
@@ -729,8 +829,8 @@ export function setOrderStatus(
           });
         }
       } else {
-        // Camisa lisa o sin estampar: regresa a inventario regular de camisas en blanco
-        for (const it of currentOrder.items) {
+        // Camisa sin estampar (o pedido en borrador): regresa a inventario regular de camisas en blanco
+        for (const it of regularItems) {
           if (it.fromStock > 0) {
             movements.push({
               id: `cancel-${currentOrder.id}-${it.id}`,
@@ -746,6 +846,7 @@ export function setOrderStatus(
     } else if (status === 'borrador' && currentOrder.status !== 'borrador') {
       // Si un pedido activo se regresa a borrador, devolvemos las camisas reservadas en blanco al inventario
       for (const it of currentOrder.items) {
+        if (isReadyMadeOrderItem(it, currentOrder.notes)) continue;
         if (it.fromStock > 0) {
           movements.push({
             id: `draft-ret-${currentOrder.id}-${it.id}-${t}`,
@@ -763,6 +864,7 @@ export function setOrderStatus(
       // Unidades pendientes de descontar (ej. al pasar de borrador a producción o pedidos previos bajo pedido):
       // se descuentan completas (aunque quede en negativo) para cuadrar automáticamente al ingresar inventario.
       items = currentOrder.items.map((it) => {
+        if (isReadyMadeOrderItem(it, currentOrder.notes)) return it;
         const pending = it.qty - (it.fromStock || 0);
         if (pending <= 0) return it;
         const key = vkey(it.brandId, it.colorId, it.size);
@@ -808,6 +910,7 @@ export function reconcileBackorderStock(): number {
       if (o.deleted || o.status !== 'en_produccion') return o;
       let orderChanged = false;
       const items = o.items.map((it) => {
+        if (isReadyMadeOrderItem(it, o.notes)) return it;
         const pending = it.qty - (it.fromStock || 0);
         if (pending <= 0) return it;
         const movId = `venta-${o.id}-${it.id}-bo`;
@@ -944,7 +1047,9 @@ export function sellReadyMadeShirt(input: {
           designCode: isPlain ? null : target.designCode || null,
           photoId: target.photoId || null,
           photoUrl: null,
-          placement: resolvedPlacement
+          placement: resolvedPlacement,
+          isReadyMade: true,
+          readyMadeId: target.id
         }
       ],
       subtotal: total,
@@ -989,10 +1094,17 @@ export function sellReadyMadeShirt(input: {
   return created;
 }
 
-export function markPaid(id: string): void {
-  const o = getState().orders.find((x) => x.id === id);
+export function markPaid(id: string, paymentMethod?: string): void {
+  const s = getState();
+  const o = s.orders.find((x) => x.id === id);
   if (!o) return;
-  patchOrder(id, { deposit: o.total, balance: 0 });
+  const cleanMethod = paymentMethod?.trim();
+  const nextMethod = cleanMethod
+    ? cleanMethod
+    : (o.paymentMethod || '').toLowerCase().includes('pendiente')
+    ? s.settings.paymentMethods.find((p) => !p.toLowerCase().includes('pendiente')) || 'Efectivo'
+    : o.paymentMethod;
+  patchOrder(id, { deposit: o.total, balance: 0, paymentMethod: nextMethod });
 }
 
 /* --------------------------- Utilidades UI --------------------------- */
