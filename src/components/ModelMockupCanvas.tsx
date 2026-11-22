@@ -33,14 +33,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🤠 Rancho',
     tint: [1.02, 0.99, 0.95],
     back: {
-      photoUrl: '/mockups/ranchero-back.jpg?v=2',
-      maskUrl: '/mockups/ranchero-back-mask.png?v=2',
-      printBox: { x: 0.3238, y: 0.3718, w: 0.3785, h: 0.3755 }
+      photoUrl: '/mockups/ranchero-back.jpg?v=3',
+      maskUrl: '/mockups/ranchero-back-mask.png?v=3',
+      printBox: { x: 0.3238, y: 0.4252, w: 0.3785, h: 0.3755 }
     },
     front: {
-      photoUrl: '/mockups/ranchero-front.jpg?v=2',
-      maskUrl: '/mockups/ranchero-front-mask.png?v=2',
-      printBox: { x: 0.3343, y: 0.4204, w: 0.3406, h: 0.327 }
+      photoUrl: '/mockups/ranchero-front.jpg?v=3',
+      maskUrl: '/mockups/ranchero-front-mask.png?v=3',
+      printBox: { x: 0.3254, y: 0.447, w: 0.3635, h: 0.349 }
     }
   },
   cristiana: {
@@ -50,14 +50,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '✝️ Cristiana',
     tint: [1.01, 1.0, 0.98],
     back: {
-      photoUrl: '/mockups/cristiana-back.jpg?v=2',
-      maskUrl: '/mockups/cristiana-back-mask.png?v=2',
-      printBox: { x: 0.3373, y: 0.3806, w: 0.3214, h: 0.3188 }
+      photoUrl: '/mockups/cristiana-back.jpg?v=3',
+      maskUrl: '/mockups/cristiana-back-mask.png?v=3',
+      printBox: { x: 0.3373, y: 0.43, w: 0.3214, h: 0.3188 }
     },
     front: {
-      photoUrl: '/mockups/cristiana-front.jpg?v=2',
-      maskUrl: '/mockups/cristiana-front-mask.png?v=2',
-      printBox: { x: 0.353, y: 0.425, w: 0.324, h: 0.311 }
+      photoUrl: '/mockups/cristiana-front.jpg?v=3',
+      maskUrl: '/mockups/cristiana-front-mask.png?v=3',
+      printBox: { x: 0.353, y: 0.4645, w: 0.324, h: 0.311 }
     }
   },
   turistico: {
@@ -67,14 +67,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🇭🇳 Honduras',
     tint: [0.99, 1.0, 1.02],
     back: {
-      photoUrl: '/mockups/turistico-back.jpg?v=2',
-      maskUrl: '/mockups/turistico-back-mask.png?v=2',
-      printBox: { x: 0.3252, y: 0.3596, w: 0.3483, h: 0.3455 }
+      photoUrl: '/mockups/turistico-back.jpg?v=3',
+      maskUrl: '/mockups/turistico-back-mask.png?v=3',
+      printBox: { x: 0.3252, y: 0.415, w: 0.3483, h: 0.3455 }
     },
     front: {
-      photoUrl: '/mockups/turistico-front.jpg?v=2',
-      maskUrl: '/mockups/turistico-front-mask.png?v=2',
-      printBox: { x: 0.3362, y: 0.4145, w: 0.3458, h: 0.332 }
+      photoUrl: '/mockups/turistico-front.jpg?v=3',
+      maskUrl: '/mockups/turistico-front-mask.png?v=3',
+      printBox: { x: 0.3362, y: 0.456, w: 0.3458, h: 0.332 }
     }
   }
 };
@@ -428,7 +428,7 @@ export function ModelMockupCanvas({
   const sceneCfg = MOCKUP_SCENES[sceneId] || MOCKUP_SCENES.ranchero;
   const viewKey = placement === 'back' ? 'back' : 'front';
   const viewAsset = sceneCfg[viewKey];
-  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v2`;
+  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v3`;
 
   useEffect(() => {
     let cancelled = false;
