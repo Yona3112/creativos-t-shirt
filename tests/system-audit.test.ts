@@ -659,18 +659,26 @@ test('19. purgeGarbageData y normalize deduplican marcas/colores/tallas/diseños
 
   // Verificar normalize directamente
   const normDirect = normalize(dirty);
+  const normBrand = normDirect.brands[0];
+  const normBlack = normDirect.colors.find(
+    (c) => !c.deleted && c.brandId === normBrand.id && c.name.toLowerCase() === 'negro'
+  )!;
   assert.equal(normDirect.brands.length, 1);
-  assert.equal(computeStock(normDirect).stock.get(KEY_M) || 0, 7);
+  assert.equal(computeStock(normDirect).stock.get(vkey(normBrand.id, normBlack.id, 'M')) || 0, 7);
 
   // Inyectar estado sucio directo para probar purgeGarbageData end-to-end
   update(() => dirty);
   const stats = purgeGarbageData();
   const clean = getState();
+  const cleanBrand = clean.brands[0];
+  const cleanBlack = clean.colors.find(
+    (c) => !c.deleted && c.brandId === cleanBrand.id && c.name.toLowerCase() === 'negro'
+  )!;
   assert.equal(stats.removedBrands, 1);
   assert.equal(clean.brands.length, 1);
   assert.deepEqual(clean.settings.sizes, ['M', 'XL']);
   // Ambos movimientos (4 y 3) debieron sumarse bajo la clave canónica
-  assert.equal(stockOf(KEY_M), 7);
+  assert.equal(stockOf(vkey(cleanBrand.id, cleanBlack.id, 'M')), 7);
   // Sólo queda 1 diseño activo 'RANCHO' y 1 cliente fusionado con 2 direcciones
   assert.equal((clean.catalogDesigns || []).filter((d) => !d.deleted).length, 1);
   assert.equal(clean.customers.length, 1);
