@@ -61,9 +61,9 @@ export default function Inventory() {
 
   const activeEntries = useMemo(
     () =>
-      [...(state.stockEntries || [])]
+      (state.stockEntries || [])
         .filter((e) => !e.deleted)
-        .sort((a, b) => b.createdAt - a.createdAt),
+        .toSorted((a, b) => b.createdAt - a.createdAt),
     [state.stockEntries]
   );
 
@@ -2030,7 +2030,9 @@ function CompactStockCell({
             commit(e.target.value);
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+              (e.target as HTMLInputElement).blur();
+            }
           }}
         />
         <button

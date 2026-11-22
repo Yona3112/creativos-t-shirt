@@ -931,7 +931,11 @@ export default function Catalog3D() {
             className="input"
             value={newCampaignName}
             onChange={(e) => setNewCampaignName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && confirmAddCampaign()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                confirmAddCampaign();
+              }
+            }}
             placeholder="Ej. Ranchero, Turístico, Cristiana, Deportiva..."
           />
         </div>

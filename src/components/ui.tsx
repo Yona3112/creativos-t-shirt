@@ -260,7 +260,9 @@ export function Stepper({
           commit(e.target.value);
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+            (e.target as HTMLInputElement).blur();
+          }
         }}
       />
       <button

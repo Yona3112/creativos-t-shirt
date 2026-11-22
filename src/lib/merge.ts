@@ -144,7 +144,7 @@ function mergeMovements(a: Movement[], b: Movement[]): Movement[] {
 
 /** Si dos dispositivos crearon el mismo folio sin conexión, reasigna el más reciente. */
 function fixFolios(orders: Order[]): Order[] {
-  const sorted = [...orders].sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1));
+  const sorted = orders.toSorted((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1));
   const seen = new Set<number>();
   let max = sorted.reduce((m, o) => Math.max(m, o.folio), 0);
   return sorted.map((o) => {
@@ -539,7 +539,7 @@ function assignDesignCodes(list: CatalogDesign[]): CatalogDesign[] {
     used.add(code);
     return code;
   };
-  const order = [...list].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+  const order = list.toSorted((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
   const codes = new Map<string, string>();
   for (const d of order) {
     const cleanCode = (d.code || '').trim().toUpperCase();
@@ -579,7 +579,7 @@ export function mergeStates(local: AppState, remote: AppState): AppState {
 
 /** Firma de contenido (ignora metadatos de escritura y orden de arrays). */
 export function contentSignature(s: AppState): string {
-  const byId = <T extends { id: string }>(arr: T[]) => [...arr].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const byId = <T extends { id: string }>(arr: T[]) => arr.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return JSON.stringify({
     settings: s.settings,
     brands: byId(s.brands),

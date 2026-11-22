@@ -5,7 +5,14 @@ interface DomElementProps {
   onChange?: (e: { target: HTMLInputElement & HTMLSelectElement & HTMLTextAreaElement; currentTarget: HTMLInputElement }) => void;
   onFocus?: (e: { target: HTMLInputElement; currentTarget: HTMLInputElement }) => void;
   onBlur?: (e: { target: HTMLInputElement; currentTarget: HTMLInputElement }) => void;
-  onKeyDown?: (e: { key: string; target: EventTarget | null; preventDefault: () => void }) => void;
+  onKeyDown?: (e: {
+    key: string;
+    keyCode?: number;
+    isComposing?: boolean;
+    nativeEvent: { isComposing?: boolean; keyCode?: number };
+    target: EventTarget | null;
+    preventDefault: () => void;
+  }) => void;
   onClick?: (e: { stopPropagation: () => void; preventDefault: () => void }) => void;
   onDoubleClick?: (e: { stopPropagation: () => void }) => void;
   [prop: string]: any;

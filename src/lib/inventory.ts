@@ -26,7 +26,7 @@ export function computeStock(state: AppState): StockInfo {
 export function activeBrands(state: AppState): Brand[] {
   const seen = new Set<string>();
   const out: Brand[] = [];
-  for (const b of [...state.brands].filter((x) => !x.deleted).sort((a, b) => a.order - b.order)) {
+  for (const b of state.brands.filter((x) => !x.deleted).toSorted((a, b) => a.order - b.order)) {
     const key = (b.name || '').trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -38,9 +38,9 @@ export function activeBrands(state: AppState): Brand[] {
 export function brandColors(state: AppState, brandId: string): Color[] {
   const seen = new Set<string>();
   const out: Color[] = [];
-  for (const c of [...state.colors]
+  for (const c of state.colors
     .filter((x) => x.brandId === brandId && !x.deleted)
-    .sort((a, b) => a.order - b.order)) {
+    .toSorted((a, b) => a.order - b.order)) {
     const key = (c.name || '').trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
