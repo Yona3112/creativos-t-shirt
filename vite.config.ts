@@ -36,9 +36,9 @@ export default defineConfig({
             urlPattern: /\/mockups\//,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'mockup-assets-v3',
+              cacheName: 'mockup-assets-v4',
               expiration: {
-                maxEntries: 20,
+                maxEntries: 28,
                 maxAgeSeconds: 60 * 60 * 24 * 30
               }
             }

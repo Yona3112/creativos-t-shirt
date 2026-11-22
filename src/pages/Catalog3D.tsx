@@ -1999,6 +1999,7 @@ export function CustomerCatalogView({
               setSelectedDesignName(d.name);
               setSelectedDesignCode(d.code || null);
               setSelectedDesignPhotoId(d.photoId);
+              setPlacement(d.placement || 'back');
               setJustAddedToCart(false);
 
               setOffsetX(0);

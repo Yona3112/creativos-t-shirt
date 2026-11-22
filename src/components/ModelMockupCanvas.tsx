@@ -9,9 +9,12 @@ export interface MockupPrintBox {
   h: number;
 }
 
-export interface MockupViewAsset {
+export interface MockupSideAsset {
   photoUrl: string;
   maskUrl: string;
+}
+
+export interface MockupViewAsset extends MockupSideAsset {
   printBox: MockupPrintBox;
 }
 
@@ -23,6 +26,7 @@ export interface MockupSceneConfig {
   tint: [number, number, number];
   back: MockupViewAsset;
   front: MockupViewAsset;
+  side?: MockupSideAsset;
 }
 
 export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
@@ -33,14 +37,18 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🤠 Rancho',
     tint: [1.02, 0.99, 0.95],
     back: {
-      photoUrl: '/mockups/ranchero-back.jpg?v=3',
-      maskUrl: '/mockups/ranchero-back-mask.png?v=3',
-      printBox: { x: 0.3238, y: 0.4252, w: 0.3785, h: 0.3755 }
+      photoUrl: '/mockups/ranchero-back.jpg?v=4',
+      maskUrl: '/mockups/ranchero-back-mask.png?v=4',
+      printBox: { x: 0.2911, y: 0.3782, w: 0.4308, h: 0.4411 }
     },
     front: {
-      photoUrl: '/mockups/ranchero-front.jpg?v=3',
-      maskUrl: '/mockups/ranchero-front-mask.png?v=3',
-      printBox: { x: 0.3254, y: 0.447, w: 0.3635, h: 0.349 }
+      photoUrl: '/mockups/ranchero-front.jpg?v=4',
+      maskUrl: '/mockups/ranchero-front-mask.png?v=4',
+      printBox: { x: 0.3072, y: 0.4189, w: 0.3999, h: 0.3903 }
+    },
+    side: {
+      photoUrl: '/mockups/ranchero-side.jpg?v=4',
+      maskUrl: '/mockups/ranchero-side-mask.png?v=4'
     }
   },
   cristiana: {
@@ -50,14 +58,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '✝️ Cristiana',
     tint: [1.01, 1.0, 0.98],
     back: {
-      photoUrl: '/mockups/cristiana-back.jpg?v=3',
-      maskUrl: '/mockups/cristiana-back-mask.png?v=3',
-      printBox: { x: 0.3373, y: 0.43, w: 0.3214, h: 0.3188 }
+      photoUrl: '/mockups/cristiana-back.jpg?v=4',
+      maskUrl: '/mockups/cristiana-back-mask.png?v=4',
+      printBox: { x: 0.3224, y: 0.4022, w: 0.3513, h: 0.3597 }
     },
     front: {
-      photoUrl: '/mockups/cristiana-front.jpg?v=3',
-      maskUrl: '/mockups/cristiana-front-mask.png?v=3',
-      printBox: { x: 0.353, y: 0.4645, w: 0.324, h: 0.311 }
+      photoUrl: '/mockups/cristiana-front.jpg?v=4',
+      maskUrl: '/mockups/cristiana-front-mask.png?v=4',
+      printBox: { x: 0.3368, y: 0.4381, w: 0.3564, h: 0.3478 }
     }
   },
   turistico: {
@@ -67,14 +75,14 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🇭🇳 Honduras',
     tint: [0.99, 1.0, 1.02],
     back: {
-      photoUrl: '/mockups/turistico-back.jpg?v=3',
-      maskUrl: '/mockups/turistico-back-mask.png?v=3',
-      printBox: { x: 0.3252, y: 0.415, w: 0.3483, h: 0.3455 }
+      photoUrl: '/mockups/turistico-back.jpg?v=4',
+      maskUrl: '/mockups/turistico-back-mask.png?v=4',
+      printBox: { x: 0.309, y: 0.3838, w: 0.3807, h: 0.3898 }
     },
     front: {
-      photoUrl: '/mockups/turistico-front.jpg?v=3',
-      maskUrl: '/mockups/turistico-front-mask.png?v=3',
-      printBox: { x: 0.3362, y: 0.456, w: 0.3458, h: 0.332 }
+      photoUrl: '/mockups/turistico-front.jpg?v=4',
+      maskUrl: '/mockups/turistico-front-mask.png?v=4',
+      printBox: { x: 0.3189, y: 0.4283, w: 0.3804, h: 0.3713 }
     }
   }
 };
@@ -207,7 +215,7 @@ function loadPreparedDesign(url: string): Promise<PreparedDesign> {
   return p;
 }
 
-function loadPreparedScene(asset: MockupViewAsset): Promise<PreparedScene> {
+function loadPreparedScene(asset: MockupSideAsset): Promise<PreparedScene> {
   const key = `${asset.photoUrl}|${asset.maskUrl}`;
   const hit = sceneCache.get(key);
   if (hit) return hit;
@@ -407,6 +415,16 @@ function getRecoloredBaseCanvas(
   return canvas;
 }
 
+function easeOutQuart(t: number): number {
+  const inv = 1 - clamp(t, 0, 1);
+  return 1 - inv * inv * inv * inv;
+}
+
+function easeInOutCubic(t: number): number {
+  const x = clamp(t, 0, 1);
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
 export function ModelMockupCanvas({
   sceneId,
   placement,
@@ -431,34 +449,316 @@ export function ModelMockupCanvas({
   onError?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const outCanvasRef = useRef<HTMLCanvasElement>(null);
+  const midCanvasRef = useRef<HTMLCanvasElement>(null);
+  const sheenRef = useRef<HTMLDivElement>(null);
   const workArtCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const workFoldCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const lastRenderedRef = useRef<{ sceneId: MockupSceneId; viewKey: 'back' | 'front' } | null>(null);
+  const turnRafRef = useRef<number | null>(null);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
   const [readyKey, setReadyKey] = useState<string>('');
   const sceneCfg = MOCKUP_SCENES[sceneId] || MOCKUP_SCENES.ranchero;
-  const viewKey = placement === 'back' ? 'back' : 'front';
+  const viewKey: 'back' | 'front' = placement === 'back' ? 'back' : 'front';
   const viewAsset = sceneCfg[viewKey];
-  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v3`;
+  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v4`;
+
+  // Precalentar en segundo plano la cara opuesta y el ángulo lateral (3/4) para girar al instante sin espera de red
+  useEffect(() => {
+    if (!readyKey) return;
+    const oppositeKey = viewKey === 'back' ? 'front' : 'back';
+    const oppositeAsset = sceneCfg[oppositeKey];
+    const sideAsset = sceneCfg.side;
+    const timer = window.setTimeout(() => {
+      void loadPreparedScene(oppositeAsset).catch(() => {});
+      if (sideAsset) {
+        void loadPreparedScene(sideAsset).catch(() => {});
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [readyKey, sceneCfg, viewKey]);
 
   useEffect(() => {
     let cancelled = false;
 
+    const resetTurnLayers = () => {
+      if (turnRafRef.current !== null) {
+        cancelAnimationFrame(turnRafRef.current);
+        turnRafRef.current = null;
+      }
+      if (outCanvasRef.current) {
+        outCanvasRef.current.style.opacity = '0';
+        outCanvasRef.current.style.transform = 'none';
+      }
+      if (midCanvasRef.current) {
+        midCanvasRef.current.style.opacity = '0';
+        midCanvasRef.current.style.transform = 'none';
+      }
+      if (sheenRef.current) {
+        sheenRef.current.style.opacity = '0';
+        sheenRef.current.style.transform = 'translateX(-100%)';
+      }
+      if (canvasRef.current) {
+        canvasRef.current.style.opacity = '1';
+        canvasRef.current.style.transform = 'none';
+      }
+    };
+
+    const startTurnaroundAnimation = (dir: 1 | -1, hasMidFrame: boolean) => {
+      const inEl = canvasRef.current;
+      const outEl = outCanvasRef.current;
+      const midEl = midCanvasRef.current;
+      const sheenEl = sheenRef.current;
+      if (!inEl || !outEl) return;
+
+      const reducedMotion =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      const duration = reducedMotion ? 190 : hasMidFrame ? 640 : 520;
+      const startTime = performance.now();
+
+      const step = (now: number) => {
+        if (cancelled) return;
+        const rawT = clamp((now - startTime) / duration, 0, 1);
+
+        if (reducedMotion) {
+          const a = easeOutQuart(rawT);
+          outEl.style.opacity = String(1 - a);
+          outEl.style.transform = 'none';
+          if (midEl) {
+            midEl.style.opacity = '0';
+            midEl.style.transform = 'none';
+          }
+          inEl.style.opacity = String(a);
+          inEl.style.transform = 'none';
+        } else if (hasMidFrame && midEl) {
+          const p = easeInOutCubic(rawT);
+          // 3 fases continuas (Frente -> Perfil 3/4 con mismo color -> Espalda con estampado)
+          const outAngle = dir * (p / 0.44) * 56;
+          const outOpacity = p < 0.2 ? 1 : clamp(1 - (p - 0.2) / 0.24, 0, 1);
+          const outScale = 1 - Math.sin(clamp(p / 0.44, 0, 1) * Math.PI * 0.5) * 0.045;
+          outEl.style.opacity = String(outOpacity);
+          outEl.style.transform = `perspective(1100px) translateX(${(-dir * clamp(p / 0.44, 0, 1) * 3.5).toFixed(2)}%) rotateY(${clamp(outAngle, -62, 62).toFixed(2)}deg) scale(${outScale.toFixed(4)})`;
+
+          const midNorm = clamp((p - 0.2) / 0.6, 0, 1);
+          const midFadeIn = clamp((p - 0.18) / 0.2, 0, 1);
+          const midFadeOut = clamp(1 - (p - 0.62) / 0.2, 0, 1);
+          const midOpacity = Math.min(midFadeIn, midFadeOut);
+          const midAngle = dir * (-30 + midNorm * 60);
+          const midScale = 0.96 + Math.sin(midNorm * Math.PI) * 0.03;
+          midEl.style.opacity = String(midOpacity);
+          midEl.style.transform = `perspective(1100px) translateX(${(dir * (1 - midNorm * 2) * 2.2).toFixed(2)}%) rotateY(${midAngle.toFixed(2)}deg) scale(${midScale.toFixed(4)})`;
+
+          const inNorm = clamp((p - 0.56) / 0.44, 0, 1);
+          const inEase = easeOutQuart(inNorm);
+          const inAngle = -dir * (1 - inEase) * 54;
+          const inOpacity = p < 0.56 ? 0 : clamp((p - 0.56) / 0.22, 0, 1);
+          const inScale = 0.955 + inEase * 0.045;
+          inEl.style.opacity = String(inOpacity);
+          inEl.style.transform = `perspective(1100px) translateX(${(dir * (1 - inEase) * 3.5).toFixed(2)}%) rotateY(${inAngle.toFixed(2)}deg) scale(${inScale.toFixed(4)})`;
+
+          if (sheenEl) {
+            sheenEl.style.opacity = String(Math.sin(p * Math.PI) * 0.18);
+            sheenEl.style.transform = `translateX(${((dir > 0 ? -70 : 70) + dir * p * 140).toFixed(1)}%)`;
+          }
+        } else {
+          // Giro 3D suave de 2 fases para escenas sin ángulo lateral dedicado
+          const p = easeInOutCubic(rawT);
+          const outNorm = clamp(p / 0.5, 0, 1);
+          const inNorm = clamp((p - 0.5) / 0.5, 0, 1);
+          outEl.style.opacity = String(p < 0.5 ? 1 - outNorm * 0.35 : 0);
+          outEl.style.transform = `perspective(1100px) rotateY(${(dir * outNorm * 82).toFixed(2)}deg) scale(${(1 - outNorm * 0.05).toFixed(4)})`;
+
+          const inEase = easeOutQuart(inNorm);
+          inEl.style.opacity = String(p >= 0.5 ? 0.65 + inEase * 0.35 : 0);
+          inEl.style.transform = `perspective(1100px) rotateY(${(-dir * (1 - inEase) * 82).toFixed(2)}deg) scale(${(0.95 + inEase * 0.05).toFixed(4)})`;
+
+          if (midEl) midEl.style.opacity = '0';
+          if (sheenEl) {
+            sheenEl.style.opacity = String(Math.sin(p * Math.PI) * 0.16);
+            sheenEl.style.transform = `translateX(${((dir > 0 ? -70 : 70) + dir * p * 140).toFixed(1)}%)`;
+          }
+        }
+
+        if (rawT < 1) {
+          turnRafRef.current = requestAnimationFrame(step);
+        } else {
+          resetTurnLayers();
+        }
+      };
+
+      turnRafRef.current = requestAnimationFrame(step);
+    };
+
+    const drawDesignOverlay = (
+      ctx: CanvasRenderingContext2D,
+      scene: PreparedScene,
+      design: PreparedDesign | null
+    ) => {
+      if (!design || design.trimW <= 0 || design.trimH <= 0) return;
+      const W = scene.width;
+      const H = scene.height;
+      const box = viewAsset.printBox;
+      const bx = box.x * W;
+      const by = box.y * H;
+      const bw = box.w * W;
+      const bh = box.h * H;
+
+      const scaleFactor = clamp((designScale || 2.0) / 2.0, 0.45, 1.2);
+      const fitRatio = Math.min(bw / design.trimW, bh / design.trimH);
+      const drawW = design.trimW * fitRatio * scaleFactor;
+      const drawH = design.trimH * fitRatio * scaleFactor;
+
+      const dxShift = (clamp(designOffsetX || 0, -24, 24) / 20) * bw * 0.24;
+      const dyShift = (clamp(designOffsetY || 0, -24, 24) / 22) * bh * 0.28;
+      const dx = bx + (bw - drawW) * 0.5 + dxShift;
+      const dy = by + (bh - drawH) * 0.28 + dyShift;
+
+      let artCanvas = workArtCanvasRef.current;
+      if (!artCanvas || artCanvas.width !== W || artCanvas.height !== H) {
+        artCanvas = document.createElement('canvas');
+        artCanvas.width = W;
+        artCanvas.height = H;
+        workArtCanvasRef.current = artCanvas;
+      }
+      const artCtx = artCanvas.getContext('2d');
+
+      let foldCanvas = workFoldCanvasRef.current;
+      if (!foldCanvas || foldCanvas.width !== W || foldCanvas.height !== H) {
+        foldCanvas = document.createElement('canvas');
+        foldCanvas.width = W;
+        foldCanvas.height = H;
+        workFoldCanvasRef.current = foldCanvas;
+      }
+      const foldCtx = foldCanvas.getContext('2d');
+
+      if (artCtx && foldCtx) {
+        artCtx.globalCompositeOperation = 'source-over';
+        artCtx.clearRect(0, 0, W, H);
+        artCtx.drawImage(
+          design.img,
+          design.trimX,
+          design.trimY,
+          design.trimW,
+          design.trimH,
+          dx,
+          dy,
+          drawW,
+          drawH
+        );
+        artCtx.globalCompositeOperation = 'destination-in';
+        artCtx.drawImage(scene.maskCanvas, 0, 0);
+        artCtx.globalCompositeOperation = 'source-over';
+
+        ctx.save();
+        ctx.globalAlpha = 0.97;
+        ctx.drawImage(artCanvas, 0, 0);
+        ctx.restore();
+
+        foldCtx.globalCompositeOperation = 'source-over';
+        foldCtx.clearRect(0, 0, W, H);
+        foldCtx.drawImage(scene.shadowOverlayCanvas, 0, 0);
+        foldCtx.globalCompositeOperation = 'destination-in';
+        foldCtx.drawImage(artCanvas, 0, 0);
+        foldCtx.globalCompositeOperation = 'source-over';
+
+        ctx.drawImage(foldCanvas, 0, 0);
+      }
+    };
+
     const renderAll = async () => {
       try {
+        const prev = lastRenderedRef.current;
+        const isSideFlip = Boolean(prev && prev.sceneId === sceneCfg.id && prev.viewKey !== viewKey);
+        const turnDir: 1 | -1 = viewKey === 'back' ? 1 : -1;
+
         const scenePromise = loadPreparedScene(viewAsset);
-        const designPromise = designUrl ? loadPreparedDesign(designUrl) : Promise.resolve(null);
+        const designPromise = designUrl
+          ? loadPreparedDesign(designUrl).catch(() => null)
+          : Promise.resolve(null);
+        const sidePromise =
+          isSideFlip && sceneCfg.side
+            ? loadPreparedScene(sceneCfg.side).catch(() => null)
+            : Promise.resolve(null);
 
         const scene = await scenePromise;
         if (cancelled) return;
 
         const canvas = canvasRef.current;
         if (!canvas) return;
+
+        // Si cambió entre Frente y Espalda, capturar la vista actual y esperar el estampado + perfil 3/4 para girar en una sola toma continua
+        let flipCaptured = false;
+        let hasMidFrame = false;
+        if (isSideFlip && outCanvasRef.current && canvas.width > 0 && canvas.height > 0) {
+          const [designReady, sideScene] = await Promise.all([designPromise, sidePromise]);
+          if (cancelled) return;
+
+          const outCanvas = outCanvasRef.current;
+          if (outCanvas.width !== canvas.width || outCanvas.height !== canvas.height) {
+            outCanvas.width = canvas.width;
+            outCanvas.height = canvas.height;
+          }
+          const outCtx = outCanvas.getContext('2d');
+          if (outCtx) {
+            outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+            outCtx.drawImage(canvas, 0, 0);
+            flipCaptured = true;
+          }
+
+          if (sideScene && midCanvasRef.current) {
+            const midCanvas = midCanvasRef.current;
+            if (midCanvas.width !== sideScene.width || midCanvas.height !== sideScene.height) {
+              midCanvas.width = sideScene.width;
+              midCanvas.height = sideScene.height;
+            }
+            const midCtx = midCanvas.getContext('2d');
+            if (midCtx) {
+              const midRecolored = getRecoloredBaseCanvas(
+                `${sceneCfg.id}-side-v4`,
+                sideScene,
+                hex,
+                sceneCfg.tint
+              );
+              midCtx.clearRect(0, 0, midCanvas.width, midCanvas.height);
+              midCtx.drawImage(midRecolored, 0, 0);
+              hasMidFrame = true;
+            }
+          }
+
+          if (canvas.width !== scene.width || canvas.height !== scene.height) {
+            canvas.width = scene.width;
+            canvas.height = scene.height;
+          }
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+
+          const recolored = getRecoloredBaseCanvas(fullSceneKey, scene, hex, sceneCfg.tint);
+          ctx.clearRect(0, 0, scene.width, scene.height);
+          ctx.drawImage(recolored, 0, 0);
+          drawDesignOverlay(ctx, scene, designReady);
+
+          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey };
+          if (!cancelled) {
+            setReadyKey(fullSceneKey);
+            if (flipCaptured) {
+              if (turnRafRef.current !== null) cancelAnimationFrame(turnRafRef.current);
+              startTurnaroundAnimation(turnDir, hasMidFrame);
+            }
+          }
+          return;
+        }
+
+        // Render normal (primera carga, cambio de color o cambio de diseño en la misma cara)
         if (canvas.width !== scene.width || canvas.height !== scene.height) {
           canvas.width = scene.width;
           canvas.height = scene.height;
         }
-
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
@@ -468,8 +768,8 @@ export function ModelMockupCanvas({
           ctx.drawImage(recolored, 0, 0);
         };
 
-        // Mostrar primero la camiseta en el modelo sin esperar a que decodifique el estampado
         drawBaseShirt();
+        lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey };
         if (!cancelled) {
           setReadyKey(fullSceneKey);
         }
@@ -477,81 +777,13 @@ export function ModelMockupCanvas({
         if (!designUrl) return;
         const design = await designPromise;
         if (cancelled) return;
-
-        if (design && design.trimW > 0 && design.trimH > 0) {
+        if (design) {
           drawBaseShirt();
-          const W = scene.width;
-          const H = scene.height;
-          const box = viewAsset.printBox;
-          const bx = box.x * W;
-          const by = box.y * H;
-          const bw = box.w * W;
-          const bh = box.h * H;
-
-          const scaleFactor = clamp((designScale || 2.0) / 2.0, 0.45, 1.2);
-          const fitRatio = Math.min(bw / design.trimW, bh / design.trimH);
-          const drawW = design.trimW * fitRatio * scaleFactor;
-          const drawH = design.trimH * fitRatio * scaleFactor;
-
-          const dxShift = (clamp(designOffsetX || 0, -24, 24) / 20) * bw * 0.24;
-          const dyShift = (clamp(designOffsetY || 0, -24, 24) / 22) * bh * 0.28;
-          const dx = bx + (bw - drawW) * 0.5 + dxShift;
-          const dy = by + (bh - drawH) * 0.28 + dyShift;
-
-          let artCanvas = workArtCanvasRef.current;
-          if (!artCanvas || artCanvas.width !== W || artCanvas.height !== H) {
-            artCanvas = document.createElement('canvas');
-            artCanvas.width = W;
-            artCanvas.height = H;
-            workArtCanvasRef.current = artCanvas;
-          }
-          const artCtx = artCanvas.getContext('2d');
-
-          let foldCanvas = workFoldCanvasRef.current;
-          if (!foldCanvas || foldCanvas.width !== W || foldCanvas.height !== H) {
-            foldCanvas = document.createElement('canvas');
-            foldCanvas.width = W;
-            foldCanvas.height = H;
-            workFoldCanvasRef.current = foldCanvas;
-          }
-          const foldCtx = foldCanvas.getContext('2d');
-
-          if (artCtx && foldCtx) {
-            artCtx.globalCompositeOperation = 'source-over';
-            artCtx.clearRect(0, 0, W, H);
-            artCtx.drawImage(
-              design.img,
-              design.trimX,
-              design.trimY,
-              design.trimW,
-              design.trimH,
-              dx,
-              dy,
-              drawW,
-              drawH
-            );
-            artCtx.globalCompositeOperation = 'destination-in';
-            artCtx.drawImage(scene.maskCanvas, 0, 0);
-            artCtx.globalCompositeOperation = 'source-over';
-
-            ctx.save();
-            ctx.globalAlpha = 0.97;
-            ctx.drawImage(artCanvas, 0, 0);
-            ctx.restore();
-
-            foldCtx.globalCompositeOperation = 'source-over';
-            foldCtx.clearRect(0, 0, W, H);
-            foldCtx.drawImage(scene.shadowOverlayCanvas, 0, 0);
-            foldCtx.globalCompositeOperation = 'destination-in';
-            foldCtx.drawImage(artCanvas, 0, 0);
-            foldCtx.globalCompositeOperation = 'source-over';
-
-            ctx.drawImage(foldCanvas, 0, 0);
-          }
+          drawDesignOverlay(ctx, scene, design);
         }
       } catch {
         if (!cancelled) {
-          onError?.();
+          onErrorRef.current?.();
         }
       }
     };
@@ -559,13 +791,14 @@ export function ModelMockupCanvas({
     void renderAll();
     return () => {
       cancelled = true;
+      resetTurnLayers();
     };
-  }, [fullSceneKey, viewAsset, sceneCfg.tint, hex, designUrl, designScale, designOffsetX, designOffsetY, onError]);
+  }, [fullSceneKey, sceneCfg, viewKey, viewAsset, hex, designUrl, designScale, designOffsetX, designOffsetY]);
 
   const zoomed = zoom > 1.35;
   const originX = Math.round((viewAsset.printBox.x + viewAsset.printBox.w * 0.5) * 100);
   const originY = Math.round((viewAsset.printBox.y + viewAsset.printBox.h * 0.45) * 100);
-  const loaded = readyKey === fullSceneKey;
+  const hasRenderedOnce = readyKey !== '';
 
   return (
     <div
@@ -588,31 +821,53 @@ export function ModelMockupCanvas({
         pointerStartRef.current = null;
       }}
     >
-      {!loaded && (
-        <img
-          src={viewAsset.photoUrl}
-          alt={sceneCfg.badge}
-          width={768}
-          height={960}
-          fetchPriority="high"
-          decoding="async"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out"
-          style={{
-            transform: zoomed ? 'scale(1.65)' : 'scale(1)',
-            transformOrigin: `${originX}% ${originY}%`
-          }}
-        />
-      )}
-      <canvas
-        ref={canvasRef}
-        className={`relative h-full w-full object-cover transition-opacity duration-200 transition-transform duration-300 ease-out ${
-          loaded ? 'opacity-100' : 'opacity-0'
-        }`}
+      <div
+        className="relative h-full w-full transition-transform duration-300 ease-out"
         style={{
           transform: zoomed ? 'scale(1.65)' : 'scale(1)',
           transformOrigin: `${originX}% ${originY}%`
         }}
-      />
+      >
+        {!hasRenderedOnce && (
+          <img
+            src={viewAsset.photoUrl}
+            alt={sceneCfg.badge}
+            width={768}
+            height={960}
+            fetchPriority="high"
+            decoding="async"
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          />
+        )}
+        <canvas
+          ref={outCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          style={{ opacity: 0 }}
+        />
+        <canvas
+          ref={midCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          style={{ opacity: 0 }}
+        />
+        <canvas
+          ref={canvasRef}
+          className={`relative h-full w-full object-cover ${
+            hasRenderedOnce ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+        <div
+          ref={sheenRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            opacity: 0,
+            background:
+              'linear-gradient(90deg, rgba(15,23,42,0) 0%, rgba(15,23,42,0.42) 38%, rgba(255,255,255,0.28) 54%, rgba(15,23,42,0) 100%)'
+          }}
+        />
+      </div>
     </div>
   );
 }

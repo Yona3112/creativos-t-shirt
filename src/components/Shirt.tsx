@@ -1223,7 +1223,7 @@ export function InteractiveShirt3D({
                 />
               </div>
 
-              {!lockedCampaign && (
+              {isStoreOwner && !lockedCampaign && (
                 <div className="flex flex-wrap items-center justify-center gap-1.5">
                   {(['ranchero', 'cristiana', 'turistico'] as const).map((scId) => (
                     <button
@@ -1310,22 +1310,26 @@ export function InteractiveShirt3D({
             </div>
           )}
 
-          {/* Barra flotante Jiro de 1 línea para ajustar o quitar diseño */}
-          {designUrl && (!wizardStep || wizardStep === 'design' || wizardStep === 'studio') && (
+          {/* Barra flotante Jiro de 1 línea para ajustar (solo admin) o quitar diseño */}
+          {designUrl &&
+            (!wizardStep || wizardStep === 'design' || wizardStep === 'studio') &&
+            (isStoreOwner || Boolean(onClearDesign)) && (
             <div className="mt-1 space-y-2">
               <div className="flex justify-center">
                 <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-slate-200/90 bg-white/95 p-1 shadow-sm backdrop-blur-md">
-                  <button
-                    type="button"
-                    onClick={() => setShowPositionSliders((v) => !v)}
-                    className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
-                      showPositionSliders
-                        ? 'bg-slate-900 text-white shadow-sm'
-                        : 'text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    ⌖ Ajustar
-                  </button>
+                  {isStoreOwner && (
+                    <button
+                      type="button"
+                      onClick={() => setShowPositionSliders((v) => !v)}
+                      className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                        showPositionSliders
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      ⌖ Ajustar
+                    </button>
+                  )}
                   {isStoreOwner && onToggleRemoveBg && (
                     <button
                       type="button"
@@ -1358,14 +1362,14 @@ export function InteractiveShirt3D({
                       }}
                       className="whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-50"
                     >
-                      ✕ Quitar
+                      {isStoreOwner ? '✕ Quitar' : '✕ Quitar diseño'}
                     </button>
                   )}
                 </div>
               </div>
 
               <AnimatePresence>
-                {showPositionSliders && onDesignChange && (
+                {isStoreOwner && showPositionSliders && onDesignChange && (
                   <motion.div
                     initial={{ opacity: 0, height: 0, y: -6 }}
                     animate={{ opacity: 1, height: 'auto', y: 0 }}
