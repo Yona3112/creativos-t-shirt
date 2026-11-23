@@ -18,6 +18,13 @@ export interface MockupViewAsset extends MockupSideAsset {
   printBox: MockupPrintBox;
 }
 
+export interface MockupTurnFrame extends MockupSideAsset {
+  id: string;
+  angle: number;
+  printSide?: 'front' | 'back';
+  printBox?: MockupPrintBox;
+}
+
 export interface MockupSceneConfig {
   id: MockupSceneId;
   label: string;
@@ -26,7 +33,8 @@ export interface MockupSceneConfig {
   tint: [number, number, number];
   back: MockupViewAsset;
   front: MockupViewAsset;
-  side?: MockupSideAsset;
+  /** Secuencia ordenada de ángulos intermedios desde Frente (0°) hacia Espalda (180°) */
+  turnFrames?: MockupTurnFrame[];
 }
 
 export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
@@ -37,19 +45,39 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🤠 Rancho',
     tint: [1.02, 0.99, 0.95],
     back: {
-      photoUrl: '/mockups/ranchero-back.jpg?v=4',
-      maskUrl: '/mockups/ranchero-back-mask.png?v=4',
+      photoUrl: '/mockups/ranchero-back.jpg?v=5',
+      maskUrl: '/mockups/ranchero-back-mask.png?v=5',
       printBox: { x: 0.2911, y: 0.3782, w: 0.4308, h: 0.4411 }
     },
     front: {
-      photoUrl: '/mockups/ranchero-front.jpg?v=4',
-      maskUrl: '/mockups/ranchero-front-mask.png?v=4',
+      photoUrl: '/mockups/ranchero-front.jpg?v=5',
+      maskUrl: '/mockups/ranchero-front-mask.png?v=5',
       printBox: { x: 0.3072, y: 0.4189, w: 0.3999, h: 0.3903 }
     },
-    side: {
-      photoUrl: '/mockups/ranchero-side.jpg?v=4',
-      maskUrl: '/mockups/ranchero-side-mask.png?v=4'
-    }
+    turnFrames: [
+      {
+        id: 'turn45',
+        angle: 45,
+        photoUrl: '/mockups/ranchero-turn45.jpg?v=5',
+        maskUrl: '/mockups/ranchero-turn45-mask.png?v=5',
+        printSide: 'front',
+        printBox: { x: 0.405, y: 0.415, w: 0.3, h: 0.385 }
+      },
+      {
+        id: 'side',
+        angle: 90,
+        photoUrl: '/mockups/ranchero-side.jpg?v=5',
+        maskUrl: '/mockups/ranchero-side-mask.png?v=5'
+      },
+      {
+        id: 'turn135',
+        angle: 135,
+        photoUrl: '/mockups/ranchero-turn135.jpg?v=5',
+        maskUrl: '/mockups/ranchero-turn135-mask.png?v=5',
+        printSide: 'back',
+        printBox: { x: 0.285, y: 0.382, w: 0.32, h: 0.432 }
+      }
+    ]
   },
   cristiana: {
     id: 'cristiana',
@@ -58,13 +86,13 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '✝️ Cristiana',
     tint: [1.01, 1.0, 0.98],
     back: {
-      photoUrl: '/mockups/cristiana-back.jpg?v=4',
-      maskUrl: '/mockups/cristiana-back-mask.png?v=4',
+      photoUrl: '/mockups/cristiana-back.jpg?v=5',
+      maskUrl: '/mockups/cristiana-back-mask.png?v=5',
       printBox: { x: 0.3224, y: 0.4022, w: 0.3513, h: 0.3597 }
     },
     front: {
-      photoUrl: '/mockups/cristiana-front.jpg?v=4',
-      maskUrl: '/mockups/cristiana-front-mask.png?v=4',
+      photoUrl: '/mockups/cristiana-front.jpg?v=5',
+      maskUrl: '/mockups/cristiana-front-mask.png?v=5',
       printBox: { x: 0.3368, y: 0.4381, w: 0.3564, h: 0.3478 }
     }
   },
@@ -75,13 +103,13 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
     chipLabel: '🇭🇳 Honduras',
     tint: [0.99, 1.0, 1.02],
     back: {
-      photoUrl: '/mockups/turistico-back.jpg?v=4',
-      maskUrl: '/mockups/turistico-back-mask.png?v=4',
+      photoUrl: '/mockups/turistico-back.jpg?v=5',
+      maskUrl: '/mockups/turistico-back-mask.png?v=5',
       printBox: { x: 0.309, y: 0.3838, w: 0.3807, h: 0.3898 }
     },
     front: {
-      photoUrl: '/mockups/turistico-front.jpg?v=4',
-      maskUrl: '/mockups/turistico-front-mask.png?v=4',
+      photoUrl: '/mockups/turistico-front.jpg?v=5',
+      maskUrl: '/mockups/turistico-front-mask.png?v=5',
       printBox: { x: 0.3189, y: 0.4283, w: 0.3804, h: 0.3713 }
     }
   }
@@ -407,7 +435,7 @@ function getRecoloredBaseCanvas(
 
   ctx.putImageData(img, 0, 0);
 
-  if (recolorCache.size >= 18) {
+  if (recolorCache.size >= 30) {
     const first = recolorCache.keys().next().value;
     if (first) recolorCache.delete(first);
   }
@@ -415,14 +443,233 @@ function getRecoloredBaseCanvas(
   return canvas;
 }
 
+// Shader WebGL 1.0 inspirado en gl-transitions (DirectionalWarp/CrossWarp) y akella/webGLImageTransitions:
+// Mantiene el fondo del rancho/paisaje 100% fijo en trípode y aplica advección rotacional + desenfoque
+// direccional únicamente sobre el torso/modelo central para un giro 180° cinematográfico a 60fps.
+const TURN_VERT_SHADER = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`;
+
+const TURN_FRAG_SHADER = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D u_from;
+uniform sampler2D u_to;
+uniform float u_progress;
+uniform float u_dir;
+uniform float u_strength;
+uniform float u_velocity;
+uniform float u_blur;
+varying vec2 v_uv;
+
+float subjectMask(vec2 uv) {
+  float xDist = abs(uv.x - 0.50);
+  float mx = smoothstep(0.47, 0.23, xDist);
+  float my = smoothstep(0.01, 0.14, uv.y) * smoothstep(1.00, 0.91, uv.y);
+  return mx * my;
+}
+
+vec4 sampleDirectional(sampler2D tex, vec2 uv, float blurOffset) {
+  vec2 uv0 = clamp(uv, 0.001, 0.999);
+  if (blurOffset < 0.0004) {
+    return texture2D(tex, uv0);
+  }
+  vec2 uvL = clamp(uv - vec2(blurOffset, 0.0), 0.001, 0.999);
+  vec2 uvR = clamp(uv + vec2(blurOffset, 0.0), 0.001, 0.999);
+  return texture2D(tex, uvL) * 0.23 + texture2D(tex, uv0) * 0.54 + texture2D(tex, uvR) * 0.23;
+}
+
+void main() {
+  float p = clamp(u_progress, 0.0, 1.0);
+  float mask = subjectMask(v_uv);
+  float cylinder = 0.65 + 0.35 * cos((v_uv.x - 0.50) * 3.14159265);
+  float advect = u_dir * u_strength * mask * cylinder;
+
+  vec2 fromUv = vec2(v_uv.x - advect * p, v_uv.y);
+  vec2 toUv   = vec2(v_uv.x + advect * (1.0 - p), v_uv.y);
+
+  float yArch = u_velocity * 0.0035 * mask;
+  fromUv.y += yArch;
+  toUv.y   += yArch;
+
+  float blurAmt = u_blur * u_velocity * mask;
+  vec4 colFrom = sampleDirectional(u_from, fromUv, blurAmt);
+  vec4 colTo   = sampleDirectional(u_to,   toUv,   blurAmt);
+
+  gl_FragColor = mix(colFrom, colTo, p);
+}
+`;
+
+interface WebGLTurnMorpher {
+  setPair: (fromCanvas: HTMLCanvasElement, toCanvas: HTMLCanvasElement) => boolean;
+  draw: (progress: number, dir: number, strength: number, velocity: number, blur: number) => boolean;
+  dispose: () => void;
+}
+
+function createWebGLTurnMorpher(canvas: HTMLCanvasElement): WebGLTurnMorpher | null {
+  try {
+    const gl = canvas.getContext('webgl', {
+      alpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: false,
+      powerPreference: 'high-performance'
+    });
+    if (!gl) return null;
+
+    const compile = (type: number, source: string): WebGLShader | null => {
+      const sh = gl.createShader(type);
+      if (!sh) return null;
+      gl.shaderSource(sh, source);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        gl.deleteShader(sh);
+        return null;
+      }
+      return sh;
+    };
+
+    const vs = compile(gl.VERTEX_SHADER, TURN_VERT_SHADER);
+    const fs = compile(gl.FRAGMENT_SHADER, TURN_FRAG_SHADER);
+    if (!vs || !fs) {
+      if (vs) gl.deleteShader(vs);
+      if (fs) gl.deleteShader(fs);
+      return null;
+    }
+
+    const program = gl.createProgram();
+    if (!program) {
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      return null;
+    }
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      gl.deleteProgram(program);
+      return null;
+    }
+
+    const quadBuf = gl.createBuffer();
+    if (!quadBuf) {
+      gl.deleteProgram(program);
+      return null;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW
+    );
+
+    const aPos = gl.getAttribLocation(program, 'a_pos');
+    const uFrom = gl.getUniformLocation(program, 'u_from');
+    const uTo = gl.getUniformLocation(program, 'u_to');
+    const uProgress = gl.getUniformLocation(program, 'u_progress');
+    const uDir = gl.getUniformLocation(program, 'u_dir');
+    const uStrength = gl.getUniformLocation(program, 'u_strength');
+    const uVelocity = gl.getUniformLocation(program, 'u_velocity');
+    const uBlur = gl.getUniformLocation(program, 'u_blur');
+
+    const initTex = (unit: number): WebGLTexture | null => {
+      const tex = gl.createTexture();
+      if (!tex) return null;
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      // Regla NPOT WebGL 1.0: CLAMP_TO_EDGE + LINEAR sin mipmaps para texturas 768x960
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      return tex;
+    };
+
+    const texFrom = initTex(0);
+    const texTo = initTex(1);
+    if (!texFrom || !texTo) {
+      if (texFrom) gl.deleteTexture(texFrom);
+      if (texTo) gl.deleteTexture(texTo);
+      gl.deleteBuffer(quadBuf);
+      gl.deleteProgram(program);
+      return null;
+    }
+
+    gl.useProgram(program);
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform1i(uFrom, 0);
+    gl.uniform1i(uTo, 1);
+
+    const upload = (unit: number, tex: WebGLTexture, src: HTMLCanvasElement) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    };
+
+    return {
+      setPair(fromCanvas, toCanvas) {
+        if (gl.isContextLost()) return false;
+        const w = toCanvas.width || 768;
+        const h = toCanvas.height || 960;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        upload(0, texFrom, fromCanvas);
+        upload(1, texTo, toCanvas);
+        return true;
+      },
+      draw(progress, dir, strength, velocity, blur) {
+        if (gl.isContextLost()) return false;
+        gl.useProgram(program);
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+        gl.uniform1f(uProgress, clamp(progress, 0, 1));
+        gl.uniform1f(uDir, dir);
+        gl.uniform1f(uStrength, strength);
+        gl.uniform1f(uVelocity, velocity);
+        gl.uniform1f(uBlur, blur);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        return true;
+      },
+      dispose() {
+        if (!gl.isContextLost()) {
+          gl.deleteTexture(texFrom);
+          gl.deleteTexture(texTo);
+          gl.deleteBuffer(quadBuf);
+          gl.deleteProgram(program);
+        }
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
+function easeInOutSine(t: number): number {
+  const x = clamp(t, 0, 1);
+  return -(Math.cos(Math.PI * x) - 1) * 0.5;
+}
+
 function easeOutQuart(t: number): number {
   const inv = 1 - clamp(t, 0, 1);
   return 1 - inv * inv * inv * inv;
-}
-
-function easeInOutCubic(t: number): number {
-  const x = clamp(t, 0, 1);
-  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
 export function ModelMockupCanvas({
@@ -449,37 +696,51 @@ export function ModelMockupCanvas({
   onError?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const outCanvasRef = useRef<HTMLCanvasElement>(null);
-  const midCanvasRef = useRef<HTMLCanvasElement>(null);
-  const sheenRef = useRef<HTMLDivElement>(null);
+  const glCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fallbackOutCanvasRef = useRef<HTMLCanvasElement>(null);
+  const glMorpherRef = useRef<WebGLTurnMorpher | null>(null);
   const workArtCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const workFoldCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
-  const lastRenderedRef = useRef<{ sceneId: MockupSceneId; viewKey: 'back' | 'front' } | null>(null);
+  const lastRenderedRef = useRef<{
+    sceneId: MockupSceneId;
+    viewKey: 'back' | 'front';
+    design: PreparedDesign | null;
+  } | null>(null);
   const turnRafRef = useRef<number | null>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  const [readyKey, setReadyKey] = useState<string>('');
+  const [hasRenderedOnce, setHasRenderedOnce] = useState(false);
   const sceneCfg = MOCKUP_SCENES[sceneId] || MOCKUP_SCENES.ranchero;
   const viewKey: 'back' | 'front' = placement === 'back' ? 'back' : 'front';
   const viewAsset = sceneCfg[viewKey];
-  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v4`;
+  const fullSceneKey = `${sceneCfg.id}-${viewKey}-v5`;
 
-  // Precalentar en segundo plano la cara opuesta y el ángulo lateral (3/4) para girar al instante sin espera de red
+  // Liberar recursos WebGL al desmontar el componente
   useEffect(() => {
-    if (!readyKey) return;
+    return () => {
+      if (glMorpherRef.current) {
+        glMorpherRef.current.dispose();
+        glMorpherRef.current = null;
+      }
+    };
+  }, []);
+
+  // Precalentar en segundo plano la cara opuesta y todos los ángulos de giro (45°, 90°, 135°)
+  useEffect(() => {
+    if (!hasRenderedOnce) return;
     const oppositeKey = viewKey === 'back' ? 'front' : 'back';
     const oppositeAsset = sceneCfg[oppositeKey];
-    const sideAsset = sceneCfg.side;
+    const turnFrames = sceneCfg.turnFrames || [];
     const timer = window.setTimeout(() => {
       void loadPreparedScene(oppositeAsset).catch(() => {});
-      if (sideAsset) {
-        void loadPreparedScene(sideAsset).catch(() => {});
+      for (const frame of turnFrames) {
+        void loadPreparedScene(frame).catch(() => {});
       }
-    }, 350);
+    }, 280);
     return () => window.clearTimeout(timer);
-  }, [readyKey, sceneCfg, viewKey]);
+  }, [hasRenderedOnce, sceneCfg, viewKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -489,129 +750,32 @@ export function ModelMockupCanvas({
         cancelAnimationFrame(turnRafRef.current);
         turnRafRef.current = null;
       }
-      if (outCanvasRef.current) {
-        outCanvasRef.current.style.opacity = '0';
-        outCanvasRef.current.style.transform = 'none';
+      if (glCanvasRef.current) {
+        glCanvasRef.current.style.opacity = '';
       }
-      if (midCanvasRef.current) {
-        midCanvasRef.current.style.opacity = '0';
-        midCanvasRef.current.style.transform = 'none';
+      if (fallbackOutCanvasRef.current) {
+        fallbackOutCanvasRef.current.style.opacity = '';
       }
-      if (sheenRef.current) {
-        sheenRef.current.style.opacity = '0';
-        sheenRef.current.style.transform = 'translateX(-100%)';
-      }
-      if (canvasRef.current) {
-        canvasRef.current.style.opacity = '1';
-        canvasRef.current.style.transform = 'none';
-      }
-    };
-
-    const startTurnaroundAnimation = (dir: 1 | -1, hasMidFrame: boolean) => {
-      const inEl = canvasRef.current;
-      const outEl = outCanvasRef.current;
-      const midEl = midCanvasRef.current;
-      const sheenEl = sheenRef.current;
-      if (!inEl || !outEl) return;
-
-      const reducedMotion =
-        typeof window !== 'undefined' &&
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-      const duration = reducedMotion ? 190 : hasMidFrame ? 640 : 520;
-      const startTime = performance.now();
-
-      const step = (now: number) => {
-        if (cancelled) return;
-        const rawT = clamp((now - startTime) / duration, 0, 1);
-
-        if (reducedMotion) {
-          const a = easeOutQuart(rawT);
-          outEl.style.opacity = String(1 - a);
-          outEl.style.transform = 'none';
-          if (midEl) {
-            midEl.style.opacity = '0';
-            midEl.style.transform = 'none';
-          }
-          inEl.style.opacity = String(a);
-          inEl.style.transform = 'none';
-        } else if (hasMidFrame && midEl) {
-          const p = easeInOutCubic(rawT);
-          // 3 fases continuas (Frente -> Perfil 3/4 con mismo color -> Espalda con estampado)
-          const outAngle = dir * (p / 0.44) * 56;
-          const outOpacity = p < 0.2 ? 1 : clamp(1 - (p - 0.2) / 0.24, 0, 1);
-          const outScale = 1 - Math.sin(clamp(p / 0.44, 0, 1) * Math.PI * 0.5) * 0.045;
-          outEl.style.opacity = String(outOpacity);
-          outEl.style.transform = `perspective(1100px) translateX(${(-dir * clamp(p / 0.44, 0, 1) * 3.5).toFixed(2)}%) rotateY(${clamp(outAngle, -62, 62).toFixed(2)}deg) scale(${outScale.toFixed(4)})`;
-
-          const midNorm = clamp((p - 0.2) / 0.6, 0, 1);
-          const midFadeIn = clamp((p - 0.18) / 0.2, 0, 1);
-          const midFadeOut = clamp(1 - (p - 0.62) / 0.2, 0, 1);
-          const midOpacity = Math.min(midFadeIn, midFadeOut);
-          const midAngle = dir * (-30 + midNorm * 60);
-          const midScale = 0.96 + Math.sin(midNorm * Math.PI) * 0.03;
-          midEl.style.opacity = String(midOpacity);
-          midEl.style.transform = `perspective(1100px) translateX(${(dir * (1 - midNorm * 2) * 2.2).toFixed(2)}%) rotateY(${midAngle.toFixed(2)}deg) scale(${midScale.toFixed(4)})`;
-
-          const inNorm = clamp((p - 0.56) / 0.44, 0, 1);
-          const inEase = easeOutQuart(inNorm);
-          const inAngle = -dir * (1 - inEase) * 54;
-          const inOpacity = p < 0.56 ? 0 : clamp((p - 0.56) / 0.22, 0, 1);
-          const inScale = 0.955 + inEase * 0.045;
-          inEl.style.opacity = String(inOpacity);
-          inEl.style.transform = `perspective(1100px) translateX(${(dir * (1 - inEase) * 3.5).toFixed(2)}%) rotateY(${inAngle.toFixed(2)}deg) scale(${inScale.toFixed(4)})`;
-
-          if (sheenEl) {
-            sheenEl.style.opacity = String(Math.sin(p * Math.PI) * 0.18);
-            sheenEl.style.transform = `translateX(${((dir > 0 ? -70 : 70) + dir * p * 140).toFixed(1)}%)`;
-          }
-        } else {
-          // Giro 3D suave de 2 fases para escenas sin ángulo lateral dedicado
-          const p = easeInOutCubic(rawT);
-          const outNorm = clamp(p / 0.5, 0, 1);
-          const inNorm = clamp((p - 0.5) / 0.5, 0, 1);
-          outEl.style.opacity = String(p < 0.5 ? 1 - outNorm * 0.35 : 0);
-          outEl.style.transform = `perspective(1100px) rotateY(${(dir * outNorm * 82).toFixed(2)}deg) scale(${(1 - outNorm * 0.05).toFixed(4)})`;
-
-          const inEase = easeOutQuart(inNorm);
-          inEl.style.opacity = String(p >= 0.5 ? 0.65 + inEase * 0.35 : 0);
-          inEl.style.transform = `perspective(1100px) rotateY(${(-dir * (1 - inEase) * 82).toFixed(2)}deg) scale(${(0.95 + inEase * 0.05).toFixed(4)})`;
-
-          if (midEl) midEl.style.opacity = '0';
-          if (sheenEl) {
-            sheenEl.style.opacity = String(Math.sin(p * Math.PI) * 0.16);
-            sheenEl.style.transform = `translateX(${((dir > 0 ? -70 : 70) + dir * p * 140).toFixed(1)}%)`;
-          }
-        }
-
-        if (rawT < 1) {
-          turnRafRef.current = requestAnimationFrame(step);
-        } else {
-          resetTurnLayers();
-        }
-      };
-
-      turnRafRef.current = requestAnimationFrame(step);
     };
 
     const drawDesignOverlay = (
       ctx: CanvasRenderingContext2D,
       scene: PreparedScene,
-      design: PreparedDesign | null
+      box: MockupPrintBox,
+      design: PreparedDesign | null,
+      horizontalSquash = 1
     ) => {
       if (!design || design.trimW <= 0 || design.trimH <= 0) return;
       const W = scene.width;
       const H = scene.height;
-      const box = viewAsset.printBox;
       const bx = box.x * W;
       const by = box.y * H;
       const bw = box.w * W;
       const bh = box.h * H;
 
       const scaleFactor = clamp((designScale || 2.0) / 2.0, 0.45, 1.2);
-      const fitRatio = Math.min(bw / design.trimW, bh / design.trimH);
-      const drawW = design.trimW * fitRatio * scaleFactor;
+      const fitRatio = Math.min((bw / Math.max(0.5, horizontalSquash)) / design.trimW, bh / design.trimH);
+      const drawW = design.trimW * fitRatio * scaleFactor * horizontalSquash;
       const drawH = design.trimH * fitRatio * scaleFactor;
 
       const dxShift = (clamp(designOffsetX || 0, -24, 24) / 20) * bw * 0.24;
@@ -671,6 +835,105 @@ export function ModelMockupCanvas({
       }
     };
 
+    const startTurnSequence = (frames: HTMLCanvasElement[], dir: 1 | -1) => {
+      if (frames.length < 2) {
+        resetTurnLayers();
+        return;
+      }
+
+      const reducedMotion =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      const glCanvas = glCanvasRef.current;
+      const fallbackOut = fallbackOutCanvasRef.current;
+      const segCount = frames.length - 1;
+
+      if (!reducedMotion && glCanvas) {
+        if (!glMorpherRef.current) {
+          glMorpherRef.current = createWebGLTurnMorpher(glCanvas);
+        }
+        const morpher = glMorpherRef.current;
+        if (morpher) {
+          const duration = segCount >= 4 ? 700 : 480;
+          const strength = segCount >= 4 ? 0.052 : 0.085;
+          const blurMax = segCount >= 4 ? 0.0085 : 0.011;
+          let activeSeg = 0;
+
+          if (morpher.setPair(frames[0], frames[1]) && morpher.draw(0, dir, strength, 0, blurMax)) {
+            glCanvas.style.opacity = '1';
+            const startTime = performance.now();
+
+            const tick = (now: number) => {
+              if (cancelled) return;
+              const rawT = clamp((now - startTime) / duration, 0, 1);
+              const globalT = easeInOutSine(rawT);
+              const scaled = globalT * segCount;
+              const segIdx = Math.min(segCount - 1, Math.floor(scaled));
+              const localP = rawT >= 1 ? 1 : clamp(scaled - segIdx, 0, 1);
+              const velocity = Math.sin(globalT * Math.PI);
+
+              if (segIdx !== activeSeg) {
+                activeSeg = segIdx;
+                if (!morpher.setPair(frames[segIdx], frames[segIdx + 1])) {
+                  resetTurnLayers();
+                  return;
+                }
+              }
+
+              if (!morpher.draw(localP, dir, strength, velocity, blurMax)) {
+                resetTurnLayers();
+                return;
+              }
+
+              if (rawT < 1) {
+                turnRafRef.current = requestAnimationFrame(tick);
+              } else {
+                resetTurnLayers();
+              }
+            };
+
+            turnRafRef.current = requestAnimationFrame(tick);
+            return;
+          }
+        }
+      }
+
+      // Respaldo 2D suave (o para prefers-reduced-motion: reduce): fundido limpio sin deformación espacial
+      if (!fallbackOut) {
+        resetTurnLayers();
+        return;
+      }
+      const firstFrame = frames[0];
+      if (fallbackOut.width !== firstFrame.width || fallbackOut.height !== firstFrame.height) {
+        fallbackOut.width = firstFrame.width;
+        fallbackOut.height = firstFrame.height;
+      }
+      const fCtx = fallbackOut.getContext('2d');
+      if (!fCtx) {
+        resetTurnLayers();
+        return;
+      }
+      fCtx.clearRect(0, 0, fallbackOut.width, fallbackOut.height);
+      fCtx.drawImage(firstFrame, 0, 0);
+      fallbackOut.style.opacity = '1';
+
+      const duration = reducedMotion ? 180 : 320;
+      const startTime = performance.now();
+      const tickFallback = (now: number) => {
+        if (cancelled) return;
+        const rawT = clamp((now - startTime) / duration, 0, 1);
+        fallbackOut.style.opacity = String(1 - easeOutQuart(rawT));
+        if (rawT < 1) {
+          turnRafRef.current = requestAnimationFrame(tickFallback);
+        } else {
+          resetTurnLayers();
+        }
+      };
+      turnRafRef.current = requestAnimationFrame(tickFallback);
+    };
+
     const renderAll = async () => {
       try {
         const prev = lastRenderedRef.current;
@@ -681,10 +944,13 @@ export function ModelMockupCanvas({
         const designPromise = designUrl
           ? loadPreparedDesign(designUrl).catch(() => null)
           : Promise.resolve(null);
-        const sidePromise =
-          isSideFlip && sceneCfg.side
-            ? loadPreparedScene(sceneCfg.side).catch(() => null)
-            : Promise.resolve(null);
+
+        const rawTurnFrames = sceneCfg.turnFrames || [];
+        const orderedTurnFrames =
+          turnDir === 1 ? rawTurnFrames : [...rawTurnFrames].reverse();
+        const turnPromises = isSideFlip
+          ? orderedTurnFrames.map((tf) => loadPreparedScene(tf).catch(() => null))
+          : [];
 
         const scene = await scenePromise;
         if (cancelled) return;
@@ -692,64 +958,93 @@ export function ModelMockupCanvas({
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        // Si cambió entre Frente y Espalda, capturar la vista actual y esperar el estampado + perfil 3/4 para girar en una sola toma continua
-        let flipCaptured = false;
-        let hasMidFrame = false;
-        if (isSideFlip && outCanvasRef.current && canvas.width > 0 && canvas.height > 0) {
-          const [designReady, sideScene] = await Promise.all([designPromise, sidePromise]);
+        // Giro 180° multi-ángulo con fondo fijo en trípode y shader WebGL de advección
+        if (isSideFlip && canvas.width > 0 && canvas.height > 0) {
+          const [designReady, ...loadedTurnScenes] = await Promise.all([
+            designPromise,
+            ...turnPromises
+          ]);
           if (cancelled) return;
 
-          const outCanvas = outCanvasRef.current;
-          if (outCanvas.width !== canvas.width || outCanvas.height !== canvas.height) {
-            outCanvas.width = canvas.width;
-            outCanvas.height = canvas.height;
-          }
-          const outCtx = outCanvas.getContext('2d');
-          if (outCtx) {
-            outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
-            outCtx.drawImage(canvas, 0, 0);
-            flipCaptured = true;
+          // 1. Capturar fotograma de salida exacto (tal como está en pantalla)
+          const fromFrame = document.createElement('canvas');
+          fromFrame.width = canvas.width;
+          fromFrame.height = canvas.height;
+          const fromCtx = fromFrame.getContext('2d');
+          if (fromCtx) {
+            fromCtx.drawImage(canvas, 0, 0);
           }
 
-          if (sideScene && midCanvasRef.current) {
-            const midCanvas = midCanvasRef.current;
-            if (midCanvas.width !== sideScene.width || midCanvas.height !== sideScene.height) {
-              midCanvas.width = sideScene.width;
-              midCanvas.height = sideScene.height;
-            }
-            const midCtx = midCanvas.getContext('2d');
-            if (midCtx) {
-              const midRecolored = getRecoloredBaseCanvas(
-                `${sceneCfg.id}-side-v4`,
-                sideScene,
-                hex,
-                sceneCfg.tint
-              );
-              midCtx.clearRect(0, 0, midCanvas.width, midCanvas.height);
-              midCtx.drawImage(midRecolored, 0, 0);
-              hasMidFrame = true;
-            }
+          // 2. Componer fotograma final de llegada en un lienzo temporal
+          const toFrame = document.createElement('canvas');
+          toFrame.width = scene.width;
+          toFrame.height = scene.height;
+          const toCtx = toFrame.getContext('2d');
+          if (toCtx) {
+            const recolored = getRecoloredBaseCanvas(fullSceneKey, scene, hex, sceneCfg.tint);
+            toCtx.drawImage(recolored, 0, 0);
+            drawDesignOverlay(toCtx, scene, viewAsset.printBox, designReady, 1);
           }
 
+          // 3. Componer fotogramas intermedios (45°, 90°, 135°) con el mismo color de prenda + arte en perspectiva
+          const sequence: HTMLCanvasElement[] = [fromFrame];
+          for (let i = 0; i < orderedTurnFrames.length; i++) {
+            const tf = orderedTurnFrames[i];
+            const tScene = loadedTurnScenes[i];
+            if (!tScene) continue;
+
+            const baseRecolored = getRecoloredBaseCanvas(
+              `${sceneCfg.id}-${tf.id}-v5`,
+              tScene,
+              hex,
+              sceneCfg.tint
+            );
+
+            // Elegir si el arte visible en 45° (frente) o 135° (espalda) corresponde al diseño entrante o saliente
+            let frameDesign: PreparedDesign | null = null;
+            if (tf.printSide && tf.printBox) {
+              if (tf.printSide === viewKey) {
+                frameDesign = designReady;
+              } else if (prev && tf.printSide === prev.viewKey) {
+                frameDesign = prev.design;
+              }
+            }
+
+            if (frameDesign && tf.printBox) {
+              const comp = document.createElement('canvas');
+              comp.width = tScene.width;
+              comp.height = tScene.height;
+              const cCtx = comp.getContext('2d');
+              if (cCtx) {
+                cCtx.drawImage(baseRecolored, 0, 0);
+                // Perspectiva 3/4 (~cos 42° ≈ 0.74) para que el estampado gire envolviendo la tela
+                drawDesignOverlay(cCtx, tScene, tf.printBox, frameDesign, 0.74);
+                sequence.push(comp);
+                continue;
+              }
+            }
+            sequence.push(baseRecolored);
+          }
+          sequence.push(toFrame);
+
+          // 4. Arrancar la capa WebGL en t=0 ANTES de sustituir el lienzo 2D inferior (cero parpadeo)
+          if (turnRafRef.current !== null) cancelAnimationFrame(turnRafRef.current);
+          startTurnSequence(sequence, turnDir);
+
+          // 5. Escribir el fotograma final nítido en el lienzo principal debajo de la animación
           if (canvas.width !== scene.width || canvas.height !== scene.height) {
             canvas.width = scene.width;
             canvas.height = scene.height;
           }
           const ctx = canvas.getContext('2d');
-          if (!ctx) return;
+          if (ctx) {
+            ctx.clearRect(0, 0, scene.width, scene.height);
+            ctx.drawImage(toFrame, 0, 0);
+          }
 
-          const recolored = getRecoloredBaseCanvas(fullSceneKey, scene, hex, sceneCfg.tint);
-          ctx.clearRect(0, 0, scene.width, scene.height);
-          ctx.drawImage(recolored, 0, 0);
-          drawDesignOverlay(ctx, scene, designReady);
-
-          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey };
+          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey, design: designReady };
           if (!cancelled) {
-            setReadyKey(fullSceneKey);
-            if (flipCaptured) {
-              if (turnRafRef.current !== null) cancelAnimationFrame(turnRafRef.current);
-              startTurnaroundAnimation(turnDir, hasMidFrame);
-            }
+            setHasRenderedOnce(true);
           }
           return;
         }
@@ -769,9 +1064,9 @@ export function ModelMockupCanvas({
         };
 
         drawBaseShirt();
-        lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey };
+        lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey, design: null };
         if (!cancelled) {
-          setReadyKey(fullSceneKey);
+          setHasRenderedOnce(true);
         }
 
         if (!designUrl) return;
@@ -779,7 +1074,8 @@ export function ModelMockupCanvas({
         if (cancelled) return;
         if (design) {
           drawBaseShirt();
-          drawDesignOverlay(ctx, scene, design);
+          drawDesignOverlay(ctx, scene, viewAsset.printBox, design, 1);
+          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey, design };
         }
       } catch {
         if (!cancelled) {
@@ -798,7 +1094,6 @@ export function ModelMockupCanvas({
   const zoomed = zoom > 1.35;
   const originX = Math.round((viewAsset.printBox.x + viewAsset.printBox.w * 0.5) * 100);
   const originY = Math.round((viewAsset.printBox.y + viewAsset.printBox.h * 0.45) * 100);
-  const hasRenderedOnce = readyKey !== '';
 
   return (
     <div
@@ -840,32 +1135,20 @@ export function ModelMockupCanvas({
           />
         )}
         <canvas
-          ref={outCanvasRef}
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-          style={{ opacity: 0 }}
-        />
-        <canvas
-          ref={midCanvasRef}
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-          style={{ opacity: 0 }}
-        />
-        <canvas
           ref={canvasRef}
           className={`relative h-full w-full object-cover ${
             hasRenderedOnce ? 'opacity-100' : 'opacity-0'
           }`}
         />
-        <div
-          ref={sheenRef}
+        <canvas
+          ref={fallbackOutCanvasRef}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0"
-          style={{
-            opacity: 0,
-            background:
-              'linear-gradient(90deg, rgba(15,23,42,0) 0%, rgba(15,23,42,0.42) 38%, rgba(255,255,255,0.28) 54%, rgba(15,23,42,0) 100%)'
-          }}
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
+        />
+        <canvas
+          ref={glCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
         />
       </div>
     </div>
