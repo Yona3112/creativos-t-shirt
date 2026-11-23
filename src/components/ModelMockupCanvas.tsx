@@ -18,13 +18,6 @@ export interface MockupViewAsset extends MockupSideAsset {
   printBox: MockupPrintBox;
 }
 
-export interface MockupTurnFrame extends MockupSideAsset {
-  id: string;
-  angle: number;
-  printSide?: 'front' | 'back';
-  printBox?: MockupPrintBox;
-}
-
 export interface MockupSceneConfig {
   id: MockupSceneId;
   label: string;
@@ -33,8 +26,6 @@ export interface MockupSceneConfig {
   tint: [number, number, number];
   back: MockupViewAsset;
   front: MockupViewAsset;
-  /** Secuencia ordenada de ángulos intermedios desde Frente (0°) hacia Espalda (180°) */
-  turnFrames?: MockupTurnFrame[];
 }
 
 export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
@@ -53,31 +44,7 @@ export const MOCKUP_SCENES: Record<MockupSceneId, MockupSceneConfig> = {
       photoUrl: '/mockups/ranchero-front.jpg?v=5',
       maskUrl: '/mockups/ranchero-front-mask.png?v=5',
       printBox: { x: 0.3072, y: 0.4189, w: 0.3999, h: 0.3903 }
-    },
-    turnFrames: [
-      {
-        id: 'turn45',
-        angle: 45,
-        photoUrl: '/mockups/ranchero-turn45.jpg?v=5',
-        maskUrl: '/mockups/ranchero-turn45-mask.png?v=5',
-        printSide: 'front',
-        printBox: { x: 0.405, y: 0.415, w: 0.3, h: 0.385 }
-      },
-      {
-        id: 'side',
-        angle: 90,
-        photoUrl: '/mockups/ranchero-side.jpg?v=5',
-        maskUrl: '/mockups/ranchero-side-mask.png?v=5'
-      },
-      {
-        id: 'turn135',
-        angle: 135,
-        photoUrl: '/mockups/ranchero-turn135.jpg?v=5',
-        maskUrl: '/mockups/ranchero-turn135-mask.png?v=5',
-        printSide: 'back',
-        printBox: { x: 0.285, y: 0.382, w: 0.32, h: 0.432 }
-      }
-    ]
+    }
   },
   cristiana: {
     id: 'cristiana',
@@ -435,241 +402,12 @@ function getRecoloredBaseCanvas(
 
   ctx.putImageData(img, 0, 0);
 
-  if (recolorCache.size >= 30) {
+  if (recolorCache.size >= 18) {
     const first = recolorCache.keys().next().value;
     if (first) recolorCache.delete(first);
   }
   recolorCache.set(fullKey, canvas);
   return canvas;
-}
-
-// Shader WebGL 1.0 inspirado en gl-transitions (DirectionalWarp/CrossWarp) y akella/webGLImageTransitions:
-// Mantiene el fondo del rancho/paisaje 100% fijo en trípode y aplica advección rotacional + desenfoque
-// direccional únicamente sobre el torso/modelo central para un giro 180° cinematográfico a 60fps.
-const TURN_VERT_SHADER = `
-attribute vec2 a_pos;
-varying vec2 v_uv;
-void main() {
-  v_uv = a_pos * 0.5 + 0.5;
-  gl_Position = vec4(a_pos, 0.0, 1.0);
-}
-`;
-
-const TURN_FRAG_SHADER = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-uniform sampler2D u_from;
-uniform sampler2D u_to;
-uniform float u_progress;
-uniform float u_dir;
-uniform float u_strength;
-uniform float u_velocity;
-uniform float u_blur;
-varying vec2 v_uv;
-
-float subjectMask(vec2 uv) {
-  float xDist = abs(uv.x - 0.50);
-  float mx = smoothstep(0.47, 0.23, xDist);
-  float my = smoothstep(0.01, 0.14, uv.y) * smoothstep(1.00, 0.91, uv.y);
-  return mx * my;
-}
-
-vec4 sampleDirectional(sampler2D tex, vec2 uv, float blurOffset) {
-  vec2 uv0 = clamp(uv, 0.001, 0.999);
-  if (blurOffset < 0.0004) {
-    return texture2D(tex, uv0);
-  }
-  vec2 uvL = clamp(uv - vec2(blurOffset, 0.0), 0.001, 0.999);
-  vec2 uvR = clamp(uv + vec2(blurOffset, 0.0), 0.001, 0.999);
-  return texture2D(tex, uvL) * 0.23 + texture2D(tex, uv0) * 0.54 + texture2D(tex, uvR) * 0.23;
-}
-
-void main() {
-  float p = clamp(u_progress, 0.0, 1.0);
-  float mask = subjectMask(v_uv);
-  float cylinder = 0.65 + 0.35 * cos((v_uv.x - 0.50) * 3.14159265);
-  float advect = u_dir * u_strength * mask * cylinder;
-
-  vec2 fromUv = vec2(v_uv.x - advect * p, v_uv.y);
-  vec2 toUv   = vec2(v_uv.x + advect * (1.0 - p), v_uv.y);
-
-  float yArch = u_velocity * 0.0035 * mask;
-  fromUv.y += yArch;
-  toUv.y   += yArch;
-
-  float blurAmt = u_blur * u_velocity * mask;
-  vec4 colFrom = sampleDirectional(u_from, fromUv, blurAmt);
-  vec4 colTo   = sampleDirectional(u_to,   toUv,   blurAmt);
-
-  gl_FragColor = mix(colFrom, colTo, p);
-}
-`;
-
-interface WebGLTurnMorpher {
-  setPair: (fromCanvas: HTMLCanvasElement, toCanvas: HTMLCanvasElement) => boolean;
-  draw: (progress: number, dir: number, strength: number, velocity: number, blur: number) => boolean;
-  dispose: () => void;
-}
-
-function createWebGLTurnMorpher(canvas: HTMLCanvasElement): WebGLTurnMorpher | null {
-  try {
-    const gl = canvas.getContext('webgl', {
-      alpha: false,
-      antialias: false,
-      depth: false,
-      stencil: false,
-      premultipliedAlpha: false,
-      preserveDrawingBuffer: false,
-      powerPreference: 'high-performance'
-    });
-    if (!gl) return null;
-
-    const compile = (type: number, source: string): WebGLShader | null => {
-      const sh = gl.createShader(type);
-      if (!sh) return null;
-      gl.shaderSource(sh, source);
-      gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        gl.deleteShader(sh);
-        return null;
-      }
-      return sh;
-    };
-
-    const vs = compile(gl.VERTEX_SHADER, TURN_VERT_SHADER);
-    const fs = compile(gl.FRAGMENT_SHADER, TURN_FRAG_SHADER);
-    if (!vs || !fs) {
-      if (vs) gl.deleteShader(vs);
-      if (fs) gl.deleteShader(fs);
-      return null;
-    }
-
-    const program = gl.createProgram();
-    if (!program) {
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-      return null;
-    }
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      gl.deleteProgram(program);
-      return null;
-    }
-
-    const quadBuf = gl.createBuffer();
-    if (!quadBuf) {
-      gl.deleteProgram(program);
-      return null;
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
-      gl.STATIC_DRAW
-    );
-
-    const aPos = gl.getAttribLocation(program, 'a_pos');
-    const uFrom = gl.getUniformLocation(program, 'u_from');
-    const uTo = gl.getUniformLocation(program, 'u_to');
-    const uProgress = gl.getUniformLocation(program, 'u_progress');
-    const uDir = gl.getUniformLocation(program, 'u_dir');
-    const uStrength = gl.getUniformLocation(program, 'u_strength');
-    const uVelocity = gl.getUniformLocation(program, 'u_velocity');
-    const uBlur = gl.getUniformLocation(program, 'u_blur');
-
-    const initTex = (unit: number): WebGLTexture | null => {
-      const tex = gl.createTexture();
-      if (!tex) return null;
-      gl.activeTexture(gl.TEXTURE0 + unit);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      // Regla NPOT WebGL 1.0: CLAMP_TO_EDGE + LINEAR sin mipmaps para texturas 768x960
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      return tex;
-    };
-
-    const texFrom = initTex(0);
-    const texTo = initTex(1);
-    if (!texFrom || !texTo) {
-      if (texFrom) gl.deleteTexture(texFrom);
-      if (texTo) gl.deleteTexture(texTo);
-      gl.deleteBuffer(quadBuf);
-      gl.deleteProgram(program);
-      return null;
-    }
-
-    gl.useProgram(program);
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.uniform1i(uFrom, 0);
-    gl.uniform1i(uTo, 1);
-
-    const upload = (unit: number, tex: WebGLTexture, src: HTMLCanvasElement) => {
-      gl.activeTexture(gl.TEXTURE0 + unit);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
-    };
-
-    return {
-      setPair(fromCanvas, toCanvas) {
-        if (gl.isContextLost()) return false;
-        const w = toCanvas.width || 768;
-        const h = toCanvas.height || 960;
-        if (canvas.width !== w || canvas.height !== h) {
-          canvas.width = w;
-          canvas.height = h;
-        }
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        upload(0, texFrom, fromCanvas);
-        upload(1, texTo, toCanvas);
-        return true;
-      },
-      draw(progress, dir, strength, velocity, blur) {
-        if (gl.isContextLost()) return false;
-        gl.useProgram(program);
-        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-        gl.enableVertexAttribArray(aPos);
-        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-        gl.uniform1f(uProgress, clamp(progress, 0, 1));
-        gl.uniform1f(uDir, dir);
-        gl.uniform1f(uStrength, strength);
-        gl.uniform1f(uVelocity, velocity);
-        gl.uniform1f(uBlur, blur);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        return true;
-      },
-      dispose() {
-        if (!gl.isContextLost()) {
-          gl.deleteTexture(texFrom);
-          gl.deleteTexture(texTo);
-          gl.deleteBuffer(quadBuf);
-          gl.deleteProgram(program);
-        }
-      }
-    };
-  } catch {
-    return null;
-  }
-}
-
-function easeInOutSine(t: number): number {
-  const x = clamp(t, 0, 1);
-  return -(Math.cos(Math.PI * x) - 1) * 0.5;
-}
-
-function easeOutQuart(t: number): number {
-  const inv = 1 - clamp(t, 0, 1);
-  return 1 - inv * inv * inv * inv;
 }
 
 export function ModelMockupCanvas({
@@ -696,18 +434,12 @@ export function ModelMockupCanvas({
   onError?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const glCanvasRef = useRef<HTMLCanvasElement>(null);
-  const fallbackOutCanvasRef = useRef<HTMLCanvasElement>(null);
-  const glMorpherRef = useRef<WebGLTurnMorpher | null>(null);
+  const outCanvasRef = useRef<HTMLCanvasElement>(null);
+  const activeAnimsRef = useRef<Animation[]>([]);
   const workArtCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const workFoldCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
-  const lastRenderedRef = useRef<{
-    sceneId: MockupSceneId;
-    viewKey: 'back' | 'front';
-    design: PreparedDesign | null;
-  } | null>(null);
-  const turnRafRef = useRef<number | null>(null);
+  const lastRenderedRef = useRef<{ sceneId: MockupSceneId; viewKey: 'back' | 'front' } | null>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
@@ -717,27 +449,13 @@ export function ModelMockupCanvas({
   const viewAsset = sceneCfg[viewKey];
   const fullSceneKey = `${sceneCfg.id}-${viewKey}-v5`;
 
-  // Liberar recursos WebGL al desmontar el componente
-  useEffect(() => {
-    return () => {
-      if (glMorpherRef.current) {
-        glMorpherRef.current.dispose();
-        glMorpherRef.current = null;
-      }
-    };
-  }, []);
-
-  // Precalentar en segundo plano la cara opuesta y todos los ángulos de giro (45°, 90°, 135°)
+  // Precalentar en segundo plano la cara opuesta (Frente/Espalda) para que el slide sea instantáneo en cualquier campaña
   useEffect(() => {
     if (!hasRenderedOnce) return;
     const oppositeKey = viewKey === 'back' ? 'front' : 'back';
     const oppositeAsset = sceneCfg[oppositeKey];
-    const turnFrames = sceneCfg.turnFrames || [];
     const timer = window.setTimeout(() => {
       void loadPreparedScene(oppositeAsset).catch(() => {});
-      for (const frame of turnFrames) {
-        void loadPreparedScene(frame).catch(() => {});
-      }
     }, 280);
     return () => window.clearTimeout(timer);
   }, [hasRenderedOnce, sceneCfg, viewKey]);
@@ -745,37 +463,100 @@ export function ModelMockupCanvas({
   useEffect(() => {
     let cancelled = false;
 
-    const resetTurnLayers = () => {
-      if (turnRafRef.current !== null) {
-        cancelAnimationFrame(turnRafRef.current);
-        turnRafRef.current = null;
+    const resetSlideLayers = () => {
+      for (const anim of activeAnimsRef.current) {
+        try {
+          anim.cancel();
+        } catch {
+          // ignore
+        }
       }
-      if (glCanvasRef.current) {
-        glCanvasRef.current.style.opacity = '';
+      activeAnimsRef.current = [];
+      if (outCanvasRef.current) {
+        outCanvasRef.current.style.opacity = '';
+        outCanvasRef.current.style.zIndex = '';
       }
-      if (fallbackOutCanvasRef.current) {
-        fallbackOutCanvasRef.current.style.opacity = '';
+      if (canvasRef.current) {
+        canvasRef.current.style.boxShadow = '';
       }
+    };
+
+    const runParallaxSlide = (dir: 1 | -1) => {
+      const inEl = canvasRef.current;
+      const outEl = outCanvasRef.current;
+      if (!inEl || !outEl || typeof inEl.animate !== 'function' || typeof outEl.animate !== 'function') {
+        resetSlideLayers();
+        return;
+      }
+
+      const reducedMotion =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      resetSlideLayers();
+
+      if (reducedMotion) {
+        outEl.style.zIndex = '20';
+        outEl.style.opacity = '1';
+        const fade = outEl.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 160,
+          easing: 'ease-out'
+        });
+        activeAnimsRef.current = [fade];
+        fade.onfinish = () => {
+          if (!cancelled) resetSlideLayers();
+        };
+        return;
+      }
+
+      // Slide editorial horizontal tipo galería iOS (solo transform + opacity en GPU, sin distorsionar rostros ni fondos)
+      outEl.style.zIndex = '0';
+      outEl.style.opacity = '1';
+      inEl.style.boxShadow =
+        dir === 1 ? '-14px 0 32px rgba(15, 23, 42, 0.24)' : '14px 0 32px rgba(15, 23, 42, 0.24)';
+
+      const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
+      const duration = 340;
+
+      const outAnim = outEl.animate(
+        [
+          { transform: 'translate3d(0%, 0, 0) scale(1)', opacity: 1 },
+          { transform: `translate3d(${-dir * 22}%, 0, 0) scale(0.96)`, opacity: 0.28 }
+        ],
+        { duration, easing }
+      );
+      const inAnim = inEl.animate(
+        [
+          { transform: `translate3d(${dir * 100}%, 0, 0)` },
+          { transform: 'translate3d(0%, 0, 0)' }
+        ],
+        { duration, easing }
+      );
+
+      activeAnimsRef.current = [outAnim, inAnim];
+      inAnim.onfinish = () => {
+        if (!cancelled) resetSlideLayers();
+      };
     };
 
     const drawDesignOverlay = (
       ctx: CanvasRenderingContext2D,
       scene: PreparedScene,
-      box: MockupPrintBox,
-      design: PreparedDesign | null,
-      horizontalSquash = 1
+      design: PreparedDesign | null
     ) => {
       if (!design || design.trimW <= 0 || design.trimH <= 0) return;
       const W = scene.width;
       const H = scene.height;
+      const box = viewAsset.printBox;
       const bx = box.x * W;
       const by = box.y * H;
       const bw = box.w * W;
       const bh = box.h * H;
 
       const scaleFactor = clamp((designScale || 2.0) / 2.0, 0.45, 1.2);
-      const fitRatio = Math.min((bw / Math.max(0.5, horizontalSquash)) / design.trimW, bh / design.trimH);
-      const drawW = design.trimW * fitRatio * scaleFactor * horizontalSquash;
+      const fitRatio = Math.min(bw / design.trimW, bh / design.trimH);
+      const drawW = design.trimW * fitRatio * scaleFactor;
       const drawH = design.trimH * fitRatio * scaleFactor;
 
       const dxShift = (clamp(designOffsetX || 0, -24, 24) / 20) * bw * 0.24;
@@ -835,122 +616,19 @@ export function ModelMockupCanvas({
       }
     };
 
-    const startTurnSequence = (frames: HTMLCanvasElement[], dir: 1 | -1) => {
-      if (frames.length < 2) {
-        resetTurnLayers();
-        return;
-      }
-
-      const reducedMotion =
-        typeof window !== 'undefined' &&
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-      const glCanvas = glCanvasRef.current;
-      const fallbackOut = fallbackOutCanvasRef.current;
-      const segCount = frames.length - 1;
-
-      if (!reducedMotion && glCanvas) {
-        if (!glMorpherRef.current) {
-          glMorpherRef.current = createWebGLTurnMorpher(glCanvas);
-        }
-        const morpher = glMorpherRef.current;
-        if (morpher) {
-          const duration = segCount >= 4 ? 700 : 480;
-          const strength = segCount >= 4 ? 0.052 : 0.085;
-          const blurMax = segCount >= 4 ? 0.0085 : 0.011;
-          let activeSeg = 0;
-
-          if (morpher.setPair(frames[0], frames[1]) && morpher.draw(0, dir, strength, 0, blurMax)) {
-            glCanvas.style.opacity = '1';
-            const startTime = performance.now();
-
-            const tick = (now: number) => {
-              if (cancelled) return;
-              const rawT = clamp((now - startTime) / duration, 0, 1);
-              const globalT = easeInOutSine(rawT);
-              const scaled = globalT * segCount;
-              const segIdx = Math.min(segCount - 1, Math.floor(scaled));
-              const localP = rawT >= 1 ? 1 : clamp(scaled - segIdx, 0, 1);
-              const velocity = Math.sin(globalT * Math.PI);
-
-              if (segIdx !== activeSeg) {
-                activeSeg = segIdx;
-                if (!morpher.setPair(frames[segIdx], frames[segIdx + 1])) {
-                  resetTurnLayers();
-                  return;
-                }
-              }
-
-              if (!morpher.draw(localP, dir, strength, velocity, blurMax)) {
-                resetTurnLayers();
-                return;
-              }
-
-              if (rawT < 1) {
-                turnRafRef.current = requestAnimationFrame(tick);
-              } else {
-                resetTurnLayers();
-              }
-            };
-
-            turnRafRef.current = requestAnimationFrame(tick);
-            return;
-          }
-        }
-      }
-
-      // Respaldo 2D suave (o para prefers-reduced-motion: reduce): fundido limpio sin deformación espacial
-      if (!fallbackOut) {
-        resetTurnLayers();
-        return;
-      }
-      const firstFrame = frames[0];
-      if (fallbackOut.width !== firstFrame.width || fallbackOut.height !== firstFrame.height) {
-        fallbackOut.width = firstFrame.width;
-        fallbackOut.height = firstFrame.height;
-      }
-      const fCtx = fallbackOut.getContext('2d');
-      if (!fCtx) {
-        resetTurnLayers();
-        return;
-      }
-      fCtx.clearRect(0, 0, fallbackOut.width, fallbackOut.height);
-      fCtx.drawImage(firstFrame, 0, 0);
-      fallbackOut.style.opacity = '1';
-
-      const duration = reducedMotion ? 180 : 320;
-      const startTime = performance.now();
-      const tickFallback = (now: number) => {
-        if (cancelled) return;
-        const rawT = clamp((now - startTime) / duration, 0, 1);
-        fallbackOut.style.opacity = String(1 - easeOutQuart(rawT));
-        if (rawT < 1) {
-          turnRafRef.current = requestAnimationFrame(tickFallback);
-        } else {
-          resetTurnLayers();
-        }
-      };
-      turnRafRef.current = requestAnimationFrame(tickFallback);
-    };
-
     const renderAll = async () => {
       try {
         const prev = lastRenderedRef.current;
-        const isSideFlip = Boolean(prev && prev.sceneId === sceneCfg.id && prev.viewKey !== viewKey);
-        const turnDir: 1 | -1 = viewKey === 'back' ? 1 : -1;
+        const shouldSlide = Boolean(
+          prev && (prev.viewKey !== viewKey || prev.sceneId !== sceneCfg.id)
+        );
+        const slideDir: 1 | -1 =
+          prev && prev.viewKey !== viewKey ? (viewKey === 'back' ? 1 : -1) : 1;
 
         const scenePromise = loadPreparedScene(viewAsset);
         const designPromise = designUrl
           ? loadPreparedDesign(designUrl).catch(() => null)
           : Promise.resolve(null);
-
-        const rawTurnFrames = sceneCfg.turnFrames || [];
-        const orderedTurnFrames =
-          turnDir === 1 ? rawTurnFrames : [...rawTurnFrames].reverse();
-        const turnPromises = isSideFlip
-          ? orderedTurnFrames.map((tf) => loadPreparedScene(tf).catch(() => null))
-          : [];
 
         const scene = await scenePromise;
         if (cancelled) return;
@@ -958,98 +636,47 @@ export function ModelMockupCanvas({
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        // Giro 180° multi-ángulo con fondo fijo en trípode y shader WebGL de advección
-        if (isSideFlip && canvas.width > 0 && canvas.height > 0) {
-          const [designReady, ...loadedTurnScenes] = await Promise.all([
-            designPromise,
-            ...turnPromises
-          ]);
+        // Slide limpio al cambiar entre Frente/Espalda o entre campañas (automático en todas)
+        if (shouldSlide && outCanvasRef.current && canvas.width > 0 && canvas.height > 0) {
+          const designReady = await designPromise;
           if (cancelled) return;
 
-          // 1. Capturar fotograma de salida exacto (tal como está en pantalla)
-          const fromFrame = document.createElement('canvas');
-          fromFrame.width = canvas.width;
-          fromFrame.height = canvas.height;
-          const fromCtx = fromFrame.getContext('2d');
-          if (fromCtx) {
-            fromCtx.drawImage(canvas, 0, 0);
+          const outCanvas = outCanvasRef.current;
+          if (outCanvas.width !== canvas.width || outCanvas.height !== canvas.height) {
+            outCanvas.width = canvas.width;
+            outCanvas.height = canvas.height;
+          }
+          const outCtx = outCanvas.getContext('2d');
+          let captured = false;
+          if (outCtx) {
+            outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+            outCtx.drawImage(canvas, 0, 0);
+            captured = true;
           }
 
-          // 2. Componer fotograma final de llegada en un lienzo temporal
-          const toFrame = document.createElement('canvas');
-          toFrame.width = scene.width;
-          toFrame.height = scene.height;
-          const toCtx = toFrame.getContext('2d');
-          if (toCtx) {
-            const recolored = getRecoloredBaseCanvas(fullSceneKey, scene, hex, sceneCfg.tint);
-            toCtx.drawImage(recolored, 0, 0);
-            drawDesignOverlay(toCtx, scene, viewAsset.printBox, designReady, 1);
-          }
-
-          // 3. Componer fotogramas intermedios (45°, 90°, 135°) con el mismo color de prenda + arte en perspectiva
-          const sequence: HTMLCanvasElement[] = [fromFrame];
-          for (let i = 0; i < orderedTurnFrames.length; i++) {
-            const tf = orderedTurnFrames[i];
-            const tScene = loadedTurnScenes[i];
-            if (!tScene) continue;
-
-            const baseRecolored = getRecoloredBaseCanvas(
-              `${sceneCfg.id}-${tf.id}-v5`,
-              tScene,
-              hex,
-              sceneCfg.tint
-            );
-
-            // Elegir si el arte visible en 45° (frente) o 135° (espalda) corresponde al diseño entrante o saliente
-            let frameDesign: PreparedDesign | null = null;
-            if (tf.printSide && tf.printBox) {
-              if (tf.printSide === viewKey) {
-                frameDesign = designReady;
-              } else if (prev && tf.printSide === prev.viewKey) {
-                frameDesign = prev.design;
-              }
-            }
-
-            if (frameDesign && tf.printBox) {
-              const comp = document.createElement('canvas');
-              comp.width = tScene.width;
-              comp.height = tScene.height;
-              const cCtx = comp.getContext('2d');
-              if (cCtx) {
-                cCtx.drawImage(baseRecolored, 0, 0);
-                // Perspectiva 3/4 (~cos 42° ≈ 0.74) para que el estampado gire envolviendo la tela
-                drawDesignOverlay(cCtx, tScene, tf.printBox, frameDesign, 0.74);
-                sequence.push(comp);
-                continue;
-              }
-            }
-            sequence.push(baseRecolored);
-          }
-          sequence.push(toFrame);
-
-          // 4. Arrancar la capa WebGL en t=0 ANTES de sustituir el lienzo 2D inferior (cero parpadeo)
-          if (turnRafRef.current !== null) cancelAnimationFrame(turnRafRef.current);
-          startTurnSequence(sequence, turnDir);
-
-          // 5. Escribir el fotograma final nítido en el lienzo principal debajo de la animación
           if (canvas.width !== scene.width || canvas.height !== scene.height) {
             canvas.width = scene.width;
             canvas.height = scene.height;
           }
           const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.clearRect(0, 0, scene.width, scene.height);
-            ctx.drawImage(toFrame, 0, 0);
-          }
+          if (!ctx) return;
 
-          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey, design: designReady };
+          const recolored = getRecoloredBaseCanvas(fullSceneKey, scene, hex, sceneCfg.tint);
+          ctx.clearRect(0, 0, scene.width, scene.height);
+          ctx.drawImage(recolored, 0, 0);
+          drawDesignOverlay(ctx, scene, designReady);
+
+          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey };
           if (!cancelled) {
             setHasRenderedOnce(true);
+            if (captured) {
+              runParallaxSlide(slideDir);
+            }
           }
           return;
         }
 
-        // Render normal (primera carga, cambio de color o cambio de diseño en la misma cara)
+        // Render directo (primera carga, cambio de color o diseño en la misma cara)
         if (canvas.width !== scene.width || canvas.height !== scene.height) {
           canvas.width = scene.width;
           canvas.height = scene.height;
@@ -1064,7 +691,7 @@ export function ModelMockupCanvas({
         };
 
         drawBaseShirt();
-        lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey, design: null };
+        lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey };
         if (!cancelled) {
           setHasRenderedOnce(true);
         }
@@ -1074,8 +701,7 @@ export function ModelMockupCanvas({
         if (cancelled) return;
         if (design) {
           drawBaseShirt();
-          drawDesignOverlay(ctx, scene, viewAsset.printBox, design, 1);
-          lastRenderedRef.current = { sceneId: sceneCfg.id, viewKey, design };
+          drawDesignOverlay(ctx, scene, design);
         }
       } catch {
         if (!cancelled) {
@@ -1087,7 +713,7 @@ export function ModelMockupCanvas({
     void renderAll();
     return () => {
       cancelled = true;
-      resetTurnLayers();
+      resetSlideLayers();
     };
   }, [fullSceneKey, sceneCfg, viewKey, viewAsset, hex, designUrl, designScale, designOffsetX, designOffsetY]);
 
@@ -1135,20 +761,15 @@ export function ModelMockupCanvas({
           />
         )}
         <canvas
+          ref={outCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
+        />
+        <canvas
           ref={canvasRef}
-          className={`relative h-full w-full object-cover ${
+          className={`relative z-10 h-full w-full object-cover ${
             hasRenderedOnce ? 'opacity-100' : 'opacity-0'
           }`}
-        />
-        <canvas
-          ref={fallbackOutCanvasRef}
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
-        />
-        <canvas
-          ref={glCanvasRef}
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0"
         />
       </div>
     </div>
